@@ -37,6 +37,8 @@ type mergeSubscription interface {
 	ResolvedEndpoint() string
 	AddDestination(endpointChannel string) error
 	RemoveDestination(endpointChannel string) error
+	AsyncAddDestination(endpointChannel string) (int64, error)
+	AsyncRemoveDestination(endpointChannel string) (int64, error)
 }
 
 // mergeArchive is the subset of archive client operations used by ReplayMerge. The send methods are non-blocking

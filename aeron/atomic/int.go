@@ -19,19 +19,19 @@ package atomic
 import "sync/atomic"
 
 type Int struct {
-	value int32
+	value atomic.Int32
 }
 
 func (i *Int) Get() int32 {
-	return atomic.LoadInt32(&i.value)
+	return i.value.Load()
 }
 
 func (i *Int) Set(v int32) {
-	atomic.StoreInt32(&i.value, v)
+	i.value.Store(v)
 }
 
 func (i *Int) Add(delta int32) int32 {
-	return atomic.AddInt32(&i.value, delta)
+	return i.value.Add(delta)
 }
 
 func (i *Int) Inc() int32 {

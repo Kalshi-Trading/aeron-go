@@ -26,7 +26,10 @@ func (pub *publicationBase) ChannelStatus() int64 {
 	if pub.IsClosed() {
 		return int64(ChannelStatusNoIdAllocated)
 	}
-	if pub.channelStatusIndicatorID == status.NoIDAllocated {
+	switch pub.channelStatusIndicatorID {
+	case 0:
+		return status.Initializing
+	case status.NoIDAllocated:
 		return status.Active
 	}
 	return pub.conductor.CounterReader().GetCounterValue(pub.channelStatusIndicatorID)

@@ -70,7 +70,7 @@ func decodePublicationErrorFrame(buffer *atomic.Buffer, offset int32, length int
 	frame.StreamID = fly.StreamID()
 	frame.ReceiverID = fly.ReceiverID()
 	frame.GroupTag = fly.GroupTag()
-	frame.ErrorCode = fly.ErrorCode()
+	frame.ErrorCode = ErrorCodeFromValue(fly.ErrorCode()).Value()
 	frame.SourceAddress, _ = fly.SourceAddress()
 	frame.ErrorMessage = fly.ErrorMessage()
 	return nil
