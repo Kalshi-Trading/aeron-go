@@ -513,10 +513,8 @@ func TestListRecordings(t *testing.T) {
 func TestStartStopReplay(t *testing.T) {
 	requireArchive(t)
 
-	// Use a channel no other test records or publishes on: earlier tests leave recordings and publications on
-	// the shared sample channel, and a UDP recording must be remote (isLocal=false) to see this publication.
-	channel := "aeron:udp?endpoint=localhost:21141"
-	subscriptionID, err := archive.StartRecording(channel, testCases[0].sampleStream, false, true)
+	// Add a recording to make sure there is one
+	subscriptionID, err := archive.StartRecording(testCases[0].sampleChannel, testCases[0].sampleStream, true, true)
 	if err != nil {
 		t.Log(err)
 		t.FailNow()
@@ -524,7 +522,7 @@ func TestStartStopReplay(t *testing.T) {
 	t.Logf("SubscriptionID is %d", subscriptionID)
 
 	// Add a publication on that
-	publication, err := archive.AddPublication(channel, testCases[0].sampleStream)
+	publication, err := archive.AddPublication(testCases[0].sampleChannel, testCases[0].sampleStream)
 	if err != nil {
 		t.Log(err)
 		t.FailNow()
@@ -532,38 +530,69 @@ func TestStartStopReplay(t *testing.T) {
 	defer publication.Close()
 	t.Logf("Publication found %v", publication)
 
-	// Find this publication's recording and record some data: Java 1.53.3 rejects a replay whose start
-	// position is not below the recording's limit, so an empty (or another run's stale) recording won't do.
-	recordingID := int64(-1)
-	msg := atomic.MakeBuffer([]byte("replay me"))
-	var lastOffer int64
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		// The shared archive can hold more recordings than one page, so page through all of them
-		for from := int64(0); recordingID < 0; {
-			recordings, err := archive.ListRecordingsForUri(from, 100, "aeron", testCases[0].sampleStream)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(recordings) == 0 {
-				break
-			}
-			for _, r := range recordings {
-				if r.SessionId == publication.SessionID() {
-					recordingID = r.RecordingId
-				}
-			}
-			from = recordings[len(recordings)-1].RecordingId + 1
+	// The recording is created asynchronously once the archive sees the publication's image.
+	var recordings []*codecs.RecordingDescriptor
+	for deadline := time.Now().Add(5 * time.Second); len(recordings) == 0 && time.Now().Before(deadline); {
+		recordings, err = archive.ListRecordingsForUri(0, 100, "aeron", testCases[0].sampleStream)
+		if err != nil {
+			t.Log(err)
+			t.FailNow()
 		}
-		if recordingID >= 0 {
-			if pos, err := archive.GetRecordingPosition(recordingID); err == nil && pos > 0 {
-				break
+		if len(recordings) == 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if len(recordings) == 0 {
+		t.Log("No recordings!")
+		t.FailNow()
+	}
+
+	// Pick this publication's recording: the catalog persists empty recordings from earlier runs.
+	recordingID := int64(-1)
+	for deadline := time.Now().Add(5 * time.Second); recordingID < 0 && time.Now().Before(deadline); {
+		recordings, err = archive.ListRecordingsForUri(0, 100, "aeron", testCases[0].sampleStream)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range recordings {
+			if r.SessionId == publication.SessionID() {
+				recordingID = r.RecordingId
 			}
+		}
+		if recordingID < 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if recordingID < 0 {
+		t.Fatalf("no recording for publication session %d", publication.SessionID())
+	}
+
+	// Java rejects a replay whose start position is not below the recorded position, so record some data first.
+	// The archive's recording subscription is a spy, so a network subscriber is needed for the publication to connect.
+	sub, err := archive.AddSubscription(testCases[0].sampleChannel, testCases[0].sampleStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	msg := []byte("start-stop-replay")
+	buf := atomic.MakeBuffer(msg)
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if publication.Offer(buf, 0, int32(len(msg)), nil) > 0 {
+			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no recorded data for session %d (recordingID %d, last offer %d)", publication.SessionID(), recordingID, lastOffer)
+			t.Fatal("offer timed out")
 		}
-		lastOffer = publication.Offer(msg, 0, msg.Capacity(), nil)
+		time.Sleep(time.Millisecond)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		pos, err := archive.GetRecordingPosition(recordingID)
+		if err == nil && pos > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("recording %d never advanced: pos=%d err=%v", recordingID, pos, err)
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
@@ -577,7 +606,7 @@ func TestStartStopReplay(t *testing.T) {
 	}
 
 	// So ListRecordingsForUri should find something
-	recordings, err := archive.ListRecordingsForUri(0, 100, testCases[0].sampleChannel, testCases[0].sampleStream)
+	recordings, err = archive.ListRecordingsForUri(0, 100, testCases[0].sampleChannel, testCases[0].sampleStream)
 	if err != nil {
 		t.Log(err)
 		t.FailNow()
@@ -635,8 +664,13 @@ func TestStartStopReplay(t *testing.T) {
 	t.Logf("ListRecordingSubscriptions() returned %d descriptor(s)", len(descriptors))
 
 	// Cleanup
-	if err := archive.StopRecordingBySubscriptionId(subscriptionID); err != nil {
-		t.Fatalf("StopRecordingBySubscriptionId(%d) failed: %s", subscriptionID, err)
+	res, err := archive.StopRecordingByIdentity(recordingID)
+	if err != nil {
+		t.Logf("StopRecordingByIdentity(%d) failed: %s", recordingID, err.Error())
+		t.FailNow()
+	}
+	if !res {
+		t.Logf("StopRecordingByIdentity(%d) failed", recordingID)
 	}
 }
 
