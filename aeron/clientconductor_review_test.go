@@ -240,3 +240,37 @@ func TestCloseFromConductorCallback(t *testing.T) {
 type idleFunc func()
 
 func (f idleFunc) Idle(int) { f() }
+
+// closeObservingImage records, when the conductor force-closes it, whether the client already reported IsClosed.
+type closeObservingImage struct {
+	*testImage
+	onClose func()
+}
+
+func (i *closeObservingImage) markClosed() {
+	i.onClose()
+	i.testImage.markClosed()
+}
+
+// Java sets Aeron.isClosed only in ClientConductor.onClose, after terminateConductor has force-closed every resource,
+// so a caller that sees isClosed() never finds a publication still accepting offers. IsClosed must not report true
+// while a fatal timeout is still force-closing resources.
+func TestTerminateForceClosesResourcesBeforeReportingClosed(t *testing.T) {
+	tc := newTestConductor(t)
+	sub := addReadySubscription(t, tc, nil, nil)
+	ti := newTestImage(t)
+	closedDuringForceClose := true
+	img := &closeObservingImage{testImage: ti, onClose: func() { closedDuringForceClose = tc.IsClosed() }}
+	tc.imageFactory = func(int32, int64, string, int64, string, *atomic.Buffer, int32) Image { return img }
+	tc.OnAvailableImage(StreamId1, SessionId1, "log", "src", 1, sub.RegistrationID(), ti.CorrelationID())
+	tc.flush()
+
+	tc.proxy.keepaliveMs = func() int64 { return time.Now().UnixMilli() - 10_000 }
+	tc.timeOfLastServiceNs -= int64(time.Second)
+	tc.timeOfLastKeepaliveNs -= int64(time.Second)
+	_, terminated := tc.doWork()
+	require.True(t, terminated)
+	require.True(t, ti.IsClosed())
+	require.False(t, closedDuringForceClose, "IsClosed reported true before resources were force closed")
+	require.True(t, tc.IsClosed())
+}

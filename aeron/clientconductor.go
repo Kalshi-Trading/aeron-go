@@ -500,8 +500,10 @@ func (cc *ClientConductor) terminate(err error) error {
 	if cc.terminalErr == nil {
 		cc.terminalErr = err
 	}
-	cc.isTerminating.Set(true)
+	// Force close before publishing isTerminating (which IsClosed reports): like Java, where Aeron.isClosed is set only
+	// after terminateConductor, a caller that sees IsClosed must find every publication already CLOSED.
 	cc.forceCloseResources()
+	cc.isTerminating.Set(true)
 	return err
 }
 
