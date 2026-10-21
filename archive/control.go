@@ -93,6 +93,7 @@ type CodecIds struct {
 	recordingStarted                uint16
 	recordingProgress               uint16
 	recordingStopped                uint16
+	ping                            uint16
 }
 
 var codecIds CodecIds
@@ -115,6 +116,7 @@ func init() {
 	codecIds.recordingStarted = recordingStarted.SbeTemplateId()
 	codecIds.recordingProgress = recordingProgress.SbeTemplateId()
 	codecIds.recordingStopped = recordingStopped.SbeTemplateId()
+	codecIds.ping = new(codecs.Ping).SbeTemplateId()
 }
 
 func controlFragmentHandler(context interface{}, buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) (action term.ControlledPollAction) {
@@ -205,6 +207,9 @@ func controlFragmentHandler(context interface{}, buffer *atomic.Buffer, offset i
 		logger.Debugf("controlFragmentHandler: ignoring RecordingDescriptor type %d", hdr.TemplateId)
 	case codecIds.recordingSubscriptionDescriptor:
 		logger.Debugf("controlFragmentHandler: ignoring RecordingSubscriptionDescriptor type %d", hdr.TemplateId)
+
+	// The archive pings control sessions to check liveness; nothing to do on receipt
+	case codecIds.ping:
 
 	default:
 		// This can happen when testing/adding new functionality
@@ -338,6 +343,9 @@ func ConnectionControlFragmentHandler(context *PollContext, buffer *atomic.Buffe
 	case codecIds.recordingSignalEvent:
 		logger.Debugf("connectionControlFragmentHandler: ignoring recordingSignalEvent type %d", hdr.TemplateId)
 
+	// The archive pings control sessions to check liveness; nothing to do on receipt
+	case codecIds.ping:
+
 	default:
 		fmt.Printf("ConnectionControlFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
 	}
@@ -379,8 +387,6 @@ func (control *Control) PollForErrorResponse() (int, error) {
 			return received, nil
 		}
 	}
-
-	return 0, nil // Should not happen
 }
 
 // errorResponseFragmentHandler is used to check for errors and async events on an idle control
@@ -511,6 +517,9 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 				pollContext.control.archive.Listeners.RecordingSignalListener(rse)
 			}
 		}
+
+	// The archive pings control sessions to check liveness; nothing to do on receipt
+	case codecIds.ping:
 
 	default:
 		fmt.Printf("errorResponseFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
@@ -654,8 +663,6 @@ func (control *Control) PollForResponse(correlationID int64, sessionID int64) (i
 			control.archive.Options.IdleStrategy.Idle(0)
 		}
 	}
-
-	return 0, fmt.Errorf("PollForResponse out of loop") // can't happen
 }
 
 // DescriptorFragmentHandler is used to poll for descriptors (both recording and subscription)
