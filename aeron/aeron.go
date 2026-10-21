@@ -152,7 +152,7 @@ func (aeron *Aeron) connectToDriver() error {
 	ctx := aeron.context
 	cnc, err := awaitCncFile(ctx.CncFileName(), ctx.mediaDriverTo)
 	if err != nil {
-		return NewDriverTimeoutError(err.Error())
+		return &DriverTimeoutError{TimeoutError{AeronError{Category: CategoryFatal, Cause: err}}}
 	}
 	aeron.counters = cnc.meta
 	aeron.cncFile = cnc.file
