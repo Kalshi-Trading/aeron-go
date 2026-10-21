@@ -143,7 +143,7 @@ func TestArchiveException(t *testing.T) {
 	assert.False(t, errors.Is(err, &ArchiveException{ErrorCode: ErrorCodeGeneric}))
 	var ex *ArchiveException
 	require.True(t, errors.As(err, &ex))
-	assert.EqualValues(t, 5, ex.CorrelationId)
+	assert.EqualValues(t, 5, ex.CorrelationID)
 	_, ok = ArchiveErrorCodeOf(errors.New("x"))
 	assert.False(t, ok)
 }
