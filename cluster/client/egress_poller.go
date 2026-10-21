@@ -152,7 +152,13 @@ func (p *EgressPoller) onFragment(buffer *atomic.Buffer, offset int32, length in
 }
 
 func imageForHeader(subscription *aeron.Subscription, header *logbuffer.Header) aeron.Image {
-	if subscription == nil || header == nil {
+	if header == nil {
+		return nil
+	}
+	if img, ok := header.Context().(aeron.Image); ok && img != nil {
+		return img
+	}
+	if subscription == nil {
 		return nil
 	}
 	return subscription.ImageBySessionID(header.SessionId())

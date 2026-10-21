@@ -832,7 +832,24 @@ func (cc *ClientConductor) AsyncRemovePublication(registrationID int64) error {
 	if err := cc.ensureOpen(); err != nil {
 		return err
 	}
+	if res := cc.resources[registrationID]; res != nil &&
+		(res.kind == kindPendingPublication || res.kind == kindPendingExclusivePublication) {
+		return cc.removePendingLocked(registrationID, func() (int64, error) {
+			return cc.driverProxy.RemovePublication(registrationID, false)
+		})
+	}
 	return cc.releasePublicationLocked(registrationID, false)
+}
+
+// removePendingLocked abandons an async add that the driver has not answered yet, as Java's removePublication /
+// removeSubscription do for ids in asyncCommandIdSet: the driver processes commands in order, so the remove sent
+// here releases the resource it is about to create, and the late ready response is ignored.
+func (cc *ClientConductor) removePendingLocked(registrationID int64, sendRemove func() (int64, error)) error {
+	delete(cc.resources, registrationID)
+	delete(cc.asyncCommandIDs, registrationID)
+	delete(cc.asyncErrors, registrationID)
+	_, err := sendRemove()
+	return err
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -937,6 +954,12 @@ func (cc *ClientConductor) AsyncRemoveSubscription(registrationID int64) error {
 		return err
 	}
 	res := cc.resources[registrationID]
+	if res != nil && res.kind == kindPendingSubscription {
+		res.subscription.isClosed.Set(true)
+		return cc.removePendingLocked(registrationID, func() (int64, error) {
+			return cc.driverProxy.RemoveSubscription(registrationID)
+		})
+	}
 	if res == nil || res.kind != kindSubscription {
 		return nil
 	}

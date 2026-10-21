@@ -596,3 +596,35 @@ func encodePublicationErrorFrame(regID int64, code int32, msg string) (*atomic.B
 	buf.PutBytesArray(pubErrErrorMessageOffset+4, &b, 0, int32(len(msg)))
 	return buf, length
 }
+
+func TestAsyncRemovePendingRegistrationsSendsRemove(t *testing.T) {
+	tc := newTestConductor(t)
+	pubID, err := tc.AsyncAddPublication(Channel, StreamId1)
+	require.NoError(t, err)
+	exID, err := tc.AsyncAddExclusivePublication(Channel, StreamId1)
+	require.NoError(t, err)
+	subID, err := tc.AsyncAddSubscription(Channel, StreamId1)
+	require.NoError(t, err)
+
+	require.NoError(t, tc.AsyncRemovePublication(pubID))
+	require.NoError(t, tc.AsyncRemovePublication(exID))
+	require.NoError(t, tc.AsyncRemoveSubscription(subID))
+	require.Equal(t, 2, tc.proxy.called("RemovePublication"))
+	require.Equal(t, 1, tc.proxy.called("RemoveSubscription"))
+	require.False(t, tc.IsCommandActive(pubID))
+	require.False(t, tc.IsCommandActive(subID))
+
+	// Late driver responses for the abandoned registrations are ignored.
+	tc.OnNewPublication(StreamId1, SessionId1, 1, 2, "unused", pubID, pubID)
+	tc.OnSubscriptionReady(subID, 3)
+	_, err = tc.GetPublication(pubID)
+	require.ErrorIs(t, err, ErrUnknownRegistration)
+	_, err = tc.GetSubscription(subID)
+	require.ErrorIs(t, err, ErrUnknownRegistration)
+
+	// A second remove is a no-op.
+	require.NoError(t, tc.AsyncRemovePublication(pubID))
+	require.NoError(t, tc.AsyncRemoveSubscription(subID))
+	require.Equal(t, 2, tc.proxy.called("RemovePublication"))
+	require.Equal(t, 1, tc.proxy.called("RemoveSubscription"))
+}

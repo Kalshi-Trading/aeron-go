@@ -195,6 +195,7 @@ func (ac *AeronCluster) Offer(buffer *atomic.Buffer, offset int32, length int32)
 // SendKeepAlive sends a SessionKeepAlive, retrying up to 3 times on back pressure.
 func (ac *AeronCluster) SendKeepAlive() (bool, error) {
 	length := MessageHeaderLength + int32(sessionKeepAliveBlockLength)
+	ac.ctx.resetIdle()
 	for attempts := sendAttempts; ; {
 		position := ac.publication.TryClaim(length, &ac.bufferClaim)
 		ac.TrackIngressPublicationResult(position)
@@ -221,6 +222,7 @@ func (ac *AeronCluster) SendKeepAlive() (bool, error) {
 // with the given correlationId. Requires the cluster's AuthorisationService to allow it.
 func (ac *AeronCluster) SendAdminRequestToTakeASnapshot(correlationId int64) (bool, error) {
 	length := MessageHeaderLength + int32(adminRequestBlockLength) + 4
+	ac.ctx.resetIdle()
 	for attempts := sendAttempts; ; {
 		position := ac.publication.TryClaim(length, &ac.bufferClaim)
 		ac.TrackIngressPublicationResult(position)
@@ -307,21 +309,23 @@ func (ac *AeronCluster) OnNewLeader(clusterSessionId int64, leadershipTermId int
 		_ = ac.publication.Close()
 	}
 
-	var err error
 	if ac.ctx.IngressEndpoints == "" {
-		var pub aeron.Publisher
-		if pub, err = ac.addNewLeaderIngressPublication(ac.ctx.IngressChannel); err == nil {
-			ac.publication = pub
+		pub, err := ac.addNewLeaderIngressPublication(ac.ctx.IngressChannel)
+		if err != nil {
+			return err
 		}
+		ac.publication = pub
 	} else {
 		ac.ctx.IngressEndpoints = ingressEndpoints
-		err = ac.updateMemberEndpoints(ingressEndpoints, leaderMemberId)
+		if err := ac.updateMemberEndpoints(ingressEndpoints, leaderMemberId); err != nil {
+			return err
+		}
 	}
 	ac.fragmentAssembler.Clear()
-	ac.controlledFragmentAssembler = aeron.NewControlledFragmentAssembler(ac.onControlledFragment, 0)
+	ac.controlledFragmentAssembler.Clear()
 	ac.egressListener.OnNewLeader(clusterSessionId, leadershipTermId, leaderMemberId, ingressEndpoints)
 	ac.controlledEgressListener.OnNewLeader(clusterSessionId, leadershipTermId, leaderMemberId, ingressEndpoints)
-	return err
+	return nil
 }
 
 // TrackIngressPublicationResult updates connection state from an ingress publication result. Call after
@@ -360,8 +364,11 @@ func (ac *AeronCluster) addNewLeaderIngressPublication(channel string) (aeron.Pu
 			return pub, nil
 		}
 		if err != nil {
-			lastErr = err
 			registrationId = nullValue
+			if !isResourceTemporarilyUnavailable(err) {
+				return nil, err
+			}
+			lastErr = err
 		}
 		if !time.Now().Before(deadline) {
 			return nil, fmt.Errorf("%w: failed to add new leader ingress publication (leaderMemberId=%d, "+
@@ -436,6 +443,7 @@ func (ac *AeronCluster) onControlledFragment(buffer *atomic.Buffer, offset int32
 
 func (ac *AeronCluster) closeSession() {
 	length := MessageHeaderLength + int32(sessionCloseRequestBlockLength)
+	ac.ctx.resetIdle()
 	for attempts := sendAttempts; ; {
 		position := ac.publication.TryClaim(length, &ac.bufferClaim)
 		ac.TrackIngressPublicationResult(position)

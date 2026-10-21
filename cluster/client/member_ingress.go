@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -39,7 +40,9 @@ func (m *memberIngress) asyncGetPublication() {
 	}
 	pub, err := getIngressPublication(m.ctx, m.registrationId)
 	if err != nil {
-		m.publicationErr = err
+		if !isResourceTemporarilyUnavailable(err) {
+			m.publicationErr = err
+		}
 		m.registrationId = nullValue
 		return
 	}
@@ -55,7 +58,7 @@ func (m *memberIngress) close() {
 			logger.Debugf("error closing ingress publication memberId=%d: %v", m.memberId, err)
 		}
 	} else if m.registrationId != nullValue {
-		closePendingPublication(m.ctx, m.registrationId)
+		asyncRemovePublication(m.ctx, m.registrationId)
 	}
 	m.registrationId = nullValue
 	m.publication = nil
@@ -137,13 +140,20 @@ func getIngressPublication(ctx *Context, registrationId int64) (aeron.Publisher,
 	return pub, nil
 }
 
-// closePendingPublication best-effort releases a publication whose registration has not yet completed. The Go
-// client has no asyncRemovePublication so we close it if the driver has already responded.
-func closePendingPublication(ctx *Context, registrationId int64) {
+// asyncRemovePublication releases a publication whose async add has not been resolved by getIngressPublication,
+// whether or not the driver has responded yet (Java Aeron.asyncRemovePublication).
+func asyncRemovePublication(ctx *Context, registrationId int64) {
 	if ctx.Aeron == nil || ctx.Aeron.IsClosed() {
 		return
 	}
-	if pub, err := getIngressPublication(ctx, registrationId); err == nil && pub != nil {
-		_ = pub.Close()
+	if err := ctx.Aeron.AsyncRemovePublication(registrationId); err != nil {
+		ctx.ErrorHandler(err)
 	}
+}
+
+// isResourceTemporarilyUnavailable reports a registration error that Java retries rather than throws
+// (ErrorCode.RESOURCE_TEMPORARILY_UNAVAILABLE).
+func isResourceTemporarilyUnavailable(err error) bool {
+	var regErr *aeron.RegistrationError
+	return errors.As(err, &regErr) && regErr.ErrorCode() == aeron.ErrorCodeResourceTemporarilyUnavailable
 }
