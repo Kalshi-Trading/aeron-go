@@ -17,10 +17,7 @@ limitations under the License.
 package driver
 
 import (
-	"fmt"
-
 	"github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/util"
 )
 
 // Command and event type ids added to the Aeron control protocol after the original lirm/aeron-go port
@@ -38,7 +35,6 @@ const (
 // ExtendedListener receives the 1.53.3 driver events that are not part of Listener. A Listener passed to NewAdapter
 // that also implements ExtendedListener receives them; otherwise they are ignored (as Java ignores unknown events).
 type ExtendedListener interface {
-	OnStaticCounter(correlationID int64, counterID int32)
 	OnNextAvailableSessionID(correlationID int64, sessionID int32)
 }
 
@@ -47,10 +43,6 @@ type ExtendedListener interface {
 func dispatchExtendedEvent(listener Listener, msgTypeID int32, buffer *atomic.Buffer, offset int32, length int32) bool {
 	ext, ok := listener.(ExtendedListener)
 	switch msgTypeID {
-	case EventOnStaticCounter:
-		if ok && length >= 12 {
-			ext.OnStaticCounter(buffer.GetInt64(offset), buffer.GetInt32(offset+8))
-		}
 	case EventOnNextAvailableSessionID:
 		if ok && length >= 12 {
 			ext.OnNextAvailableSessionID(buffer.GetInt64(offset), buffer.GetInt32(offset+8))
@@ -88,40 +80,6 @@ func (driver *Proxy) GetNextAvailableSessionID(streamID int32) (int64, error) {
 		buffer.PutInt32(16, streamID)
 		*length = 20
 		return CmdGetNextAvailableSessionID
-	}
-	if err := driver.writeCommandToDriver(filler); err != nil {
-		return 0, err
-	}
-	return correlationID, nil
-}
-
-// AddStaticCounter sends ADD_STATIC_COUNTER. Static counters are not owned by the client and are identified by
-// (typeId, registrationId); an existing counter is returned by the driver if one matches.
-func (driver *Proxy) AddStaticCounter(typeID int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
-	label string, registrationID int64) (int64, error) {
-	labelLength := int32(len(label))
-	alignedKeyLength := util.AlignInt32(keyLength, 4)
-	if 32+alignedKeyLength+4+labelLength > 512 {
-		return 0, fmt.Errorf("static counter key/label too long: key=%d label=%d", keyLength, labelLength)
-	}
-	correlationID := driver.toDriverCommandBuffer.NextCorrelationID()
-	filler := func(buffer *atomic.Buffer, length *int) int32 {
-		buffer.PutInt64(0, driver.clientID)
-		buffer.PutInt64(8, correlationID)
-		buffer.PutInt64(16, registrationID)
-		buffer.PutInt32(24, typeID)
-		buffer.PutInt32(28, keyLength)
-		if keyLength > 0 && keyBuffer != nil {
-			buffer.PutBytes(32, keyBuffer, keyOffset, keyLength)
-		}
-		labelOffset := 32 + alignedKeyLength
-		buffer.PutInt32(labelOffset, labelLength)
-		if labelLength > 0 {
-			labelBytes := []byte(label)
-			buffer.PutBytesArray(labelOffset+4, &labelBytes, 0, labelLength)
-		}
-		*length = int(labelOffset + 4 + labelLength)
-		return CmdAddStaticCounter
 	}
 	if err := driver.writeCommandToDriver(filler); err != nil {
 		return 0, err

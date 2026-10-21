@@ -227,14 +227,14 @@ func TestMultiDestinationSubscription(t *testing.T) {
 
 func TestCountersAndCloseHandlers(t *testing.T) {
 	a := connect(t)
-	counter, err := a.AddCounterByLabelAndWait(1001, "conductor-e2e")
+	counter, err := a.AddCounterByLabel(1001, "conductor-e2e")
 	require.NoError(t, err)
 	counter.Counter().Set(42)
 	require.EqualValues(t, 42, a.CounterReader().GetCounterValue(counter.Id()))
 
-	static1, err := a.AddStaticCounter(1002, nil, 0, 0, "conductor-e2e-static", 987654)
+	static1, err := a.AddStaticCounterByLabel(1002, "conductor-e2e-static", 987654)
 	require.NoError(t, err)
-	static2, err := a.AddStaticCounter(1002, nil, 0, 0, "conductor-e2e-static", 987654)
+	static2, err := a.AddStaticCounterByLabel(1002, "conductor-e2e-static", 987654)
 	require.NoError(t, err)
 	require.Equal(t, static1.Id(), static2.Id(), "static counters are shared by (type, registration id)")
 

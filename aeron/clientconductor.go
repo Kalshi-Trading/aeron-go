@@ -148,8 +148,9 @@ type DriverProxy interface {
 		labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (int64, error)
 	AddCounterByLabel(typeId int32, label string) (int64, error)
 	RemoveCounter(registrationId int64) (int64, error)
-	AddStaticCounter(typeID int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
-		label string, registrationID int64) (int64, error)
+	AddStaticCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
+		labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32, registrationId int64) (int64, error)
+	AddStaticCounterByLabel(typeId int32, label string, registrationId int64) (int64, error)
 
 	GetNextAvailableSessionID(streamID int32) (int64, error)
 }
@@ -493,9 +494,9 @@ func (cc *ClientConductor) awaitResponse(correlationID int64) error {
 			return err
 		}
 		if cc.nanoClock() > deadline {
-			return &DriverTimeoutError{Message: fmt.Sprintf(
+			return NewDriverTimeoutError(fmt.Sprintf(
 				"no response from MediaDriver within %v (correlationId=%d)",
-				time.Duration(cc.driverTimeoutNs), correlationID)}
+				time.Duration(cc.driverTimeoutNs), correlationID))
 		}
 		time.Sleep(awaitingIdleSleep)
 	}
@@ -506,9 +507,9 @@ func (cc *ClientConductor) checkTimeouts(nowNs int64) (int, error) {
 		return 0, nil
 	}
 	if nowNs-cc.timeOfLastServiceNs > cc.interServiceTimeoutNs {
-		return 0, cc.terminate(&ConductorServiceTimeoutError{Message: fmt.Sprintf(
+		return 0, cc.terminate(NewConductorServiceTimeoutError(fmt.Sprintf(
 			"service interval exceeded: timeout=%v, interval=%v",
-			time.Duration(cc.interServiceTimeoutNs), time.Duration(nowNs-cc.timeOfLastServiceNs))})
+			time.Duration(cc.interServiceTimeoutNs), time.Duration(nowNs-cc.timeOfLastServiceNs))))
 	}
 	cc.timeOfLastServiceNs = nowNs
 
@@ -528,10 +529,10 @@ func (cc *ClientConductor) checkLiveness(nowNs int64) (int, error) {
 	lastKeepaliveMs := cc.driverProxy.TimeOfLastDriverKeepalive()
 	if nowMs > lastKeepaliveMs+driverTimeoutMs {
 		if lastKeepaliveMs <= 0 {
-			return 0, cc.terminate(&DriverTimeoutError{Message: "MediaDriver has been shutdown"})
+			return 0, cc.terminate(NewDriverTimeoutError("MediaDriver has been shutdown"))
 		}
-		return 0, cc.terminate(&DriverTimeoutError{Message: fmt.Sprintf(
-			"MediaDriver keepalive: age=%dms > timeout=%dms", nowMs-lastKeepaliveMs, driverTimeoutMs)})
+		return 0, cc.terminate(NewDriverTimeoutError(fmt.Sprintf(
+			"MediaDriver keepalive: age=%dms > timeout=%dms", nowMs-lastKeepaliveMs, driverTimeoutMs)))
 	}
 
 	clientID := cc.driverProxy.ClientID()
@@ -766,9 +767,9 @@ func (cc *ClientConductor) getResource(registrationID int64, pendingKind resourc
 		if cc.nanoClock()-res.timeOfRegistrationNs > cc.driverTimeoutNs {
 			delete(cc.resources, registrationID)
 			delete(cc.asyncCommandIDs, registrationID)
-			return nil, &DriverTimeoutError{Message: fmt.Sprintf(
+			return nil, NewDriverTimeoutError(fmt.Sprintf(
 				"no response from MediaDriver within %v (correlationId=%d)",
-				time.Duration(cc.driverTimeoutNs), registrationID)}
+				time.Duration(cc.driverTimeoutNs), registrationID))
 		}
 		return nil, nil
 	}
@@ -1042,44 +1043,44 @@ func (cc *ClientConductor) HasActiveCommands() bool {
 // ---------------------------------------------------------------------------------------------------------------
 // Counters
 
-// AddCounter allocates a client-owned counter and blocks until the driver responds.
+// AddCounter sends ADD_COUNTER without waiting and returns the registration id; poll GetCounter.
 func (cc *ClientConductor) AddCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
-	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (*Counter, error) {
-	return cc.addCounter(kindPendingCounter, func() (int64, error) {
-		return cc.driverProxy.AddCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
+	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (int64, error) {
+	return cc.asyncAdd(func() (int64, error) {
+		return cc.sendAddCounter(kindPendingCounter, func() (int64, error) {
+			return cc.driverProxy.AddCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
+		})
 	})
 }
 
-// AddCounterByLabel allocates a client-owned counter with an empty key and blocks until the driver responds.
-func (cc *ClientConductor) AddCounterByLabel(typeId int32, label string) (*Counter, error) {
-	return cc.addCounter(kindPendingCounter, func() (int64, error) { return cc.driverProxy.AddCounterByLabel(typeId, label) })
+// AddCounterByLabel sends ADD_COUNTER with an empty key without waiting; poll GetCounter.
+func (cc *ClientConductor) AddCounterByLabel(typeId int32, label string) (int64, error) {
+	return cc.asyncAdd(func() (int64, error) {
+		return cc.sendAddCounter(kindPendingCounter, func() (int64, error) {
+			return cc.driverProxy.AddCounterByLabel(typeId, label)
+		})
+	})
 }
 
-// AddStaticCounter allocates or finds a static counter (not owned by this client, never removed on close) and blocks
-// until the driver responds.
+// AddStaticCounter sends ADD_STATIC_COUNTER without waiting and returns the correlation id; poll GetCounter. Static
+// counters are not owned by this client and are never removed by it.
 func (cc *ClientConductor) AddStaticCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
-	label string, registrationID int64) (*Counter, error) {
-	return cc.addCounter(kindPendingStaticCounter, func() (int64, error) {
-		return cc.driverProxy.AddStaticCounter(typeId, keyBuffer, keyOffset, keyLength, label, registrationID)
+	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32, registrationId int64) (int64, error) {
+	return cc.asyncAdd(func() (int64, error) {
+		return cc.sendAddCounter(kindPendingStaticCounter, func() (int64, error) {
+			return cc.driverProxy.AddStaticCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset,
+				labelLength, registrationId)
+		})
 	})
 }
 
-func (cc *ClientConductor) addCounter(kind resourceKind, send func() (int64, error)) (*Counter, error) {
-	cc.adminLock.Lock()
-	defer cc.unlock()
-	corrID, err := cc.sendAddCounter(kind, send)
-	if err != nil {
-		return nil, err
-	}
-	if err := cc.awaitResponse(corrID); err != nil {
-		delete(cc.resources, corrID)
-		return nil, err
-	}
-	res := cc.resources[corrID]
-	if res == nil || res.counter == nil {
-		return nil, fmt.Errorf("counter %d not available after response", corrID)
-	}
-	return res.counter, nil
+// AddStaticCounterByLabel is AddStaticCounter with an empty key.
+func (cc *ClientConductor) AddStaticCounterByLabel(typeId int32, label string, registrationId int64) (int64, error) {
+	return cc.asyncAdd(func() (int64, error) {
+		return cc.sendAddCounter(kindPendingStaticCounter, func() (int64, error) {
+			return cc.driverProxy.AddStaticCounterByLabel(typeId, label, registrationId)
+		})
+	})
 }
 
 func (cc *ClientConductor) sendAddCounter(kind resourceKind, send func() (int64, error)) (int64, error) {
@@ -1094,51 +1095,32 @@ func (cc *ClientConductor) sendAddCounter(kind resourceKind, send func() (int64,
 	return corrID, nil
 }
 
-// AsyncAddCounter sends ADD_COUNTER without waiting; poll GetCounter.
-func (cc *ClientConductor) AsyncAddCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
-	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (int64, error) {
-	return cc.asyncAdd(func() (int64, error) {
-		return cc.sendAddCounter(kindPendingCounter, func() (int64, error) {
-			return cc.driverProxy.AddCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
-		})
-	})
-}
-
-// AsyncAddCounterByLabel sends ADD_COUNTER with an empty key without waiting; poll GetCounter.
-func (cc *ClientConductor) AsyncAddCounterByLabel(typeId int32, label string) (int64, error) {
-	return cc.asyncAdd(func() (int64, error) {
-		return cc.sendAddCounter(kindPendingCounter, func() (int64, error) {
-			return cc.driverProxy.AddCounterByLabel(typeId, label)
-		})
-	})
-}
-
-// AsyncAddStaticCounter sends ADD_STATIC_COUNTER without waiting; poll GetStaticCounter.
-func (cc *ClientConductor) AsyncAddStaticCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32,
-	keyLength int32, label string, registrationID int64) (int64, error) {
-	return cc.asyncAdd(func() (int64, error) {
-		return cc.sendAddCounter(kindPendingStaticCounter, func() (int64, error) {
-			return cc.driverProxy.AddStaticCounter(typeId, keyBuffer, keyOffset, keyLength, label, registrationID)
-		})
-	})
-}
-
-// GetCounter polls for a counter added with AsyncAddCounter/AsyncAddCounterByLabel.
-func (cc *ClientConductor) GetCounter(registrationID int64) (*Counter, error) {
-	res, err := cc.getResource(registrationID, kindPendingCounter, kindCounter)
+// GetCounter polls for a counter added with AddCounter*/AddStaticCounter*: (nil, nil) while the driver has not
+// responded.
+func (cc *ClientConductor) GetCounter(correlationID int64) (*Counter, error) {
+	cc.adminLock.Lock()
+	res := cc.resources[correlationID]
+	static := res != nil && (res.kind == kindPendingStaticCounter || res.kind == kindStaticCounter)
+	cc.adminLock.Unlock()
+	kinds := []resourceKind{kindPendingCounter, kindCounter}
+	if static {
+		kinds = []resourceKind{kindPendingStaticCounter, kindStaticCounter}
+	}
+	res, err := cc.getResource(correlationID, kinds[0], kinds[1])
 	if res == nil || err != nil {
 		return nil, err
 	}
 	return res.counter, nil
 }
 
-// GetStaticCounter polls for a counter added with AsyncAddStaticCounter.
-func (cc *ClientConductor) GetStaticCounter(correlationID int64) (*Counter, error) {
-	res, err := cc.getResource(correlationID, kindPendingStaticCounter, kindStaticCounter)
-	if res == nil || err != nil {
-		return nil, err
+// releaseStaticCounter is called by Counter.Close for a static counter: the local reference is dropped, the driver
+// counter is left in place.
+func (cc *ClientConductor) releaseStaticCounter(correlationID int64) {
+	cc.adminLock.Lock()
+	defer cc.unlock()
+	if res := cc.resources[correlationID]; res != nil && res.kind == kindStaticCounter {
+		delete(cc.resources, correlationID)
 	}
-	return res.counter, nil
 }
 
 // FindCounter is the pre-parity name of GetCounter.
@@ -1411,7 +1393,7 @@ func (cc *ClientConductor) OnOperationSuccess(corrID int64) {
 
 func (cc *ClientConductor) OnErrorResponse(corrID int64, errorCode int32, errorMessage string) {
 	logger.Debugf("OnErrorResponse: correlationID=%d, errorCode=%d, errorMessage=%s", corrID, errorCode, errorMessage)
-	cc.failCommand(corrID, &RegistrationError{CorrelationID: corrID, Code: errorCode, Message: errorMessage})
+	cc.failCommand(corrID, NewRegistrationError(corrID, errorCode, errorMessage))
 }
 
 func (cc *ClientConductor) OnChannelEndpointError(corrID int64, errorMessage string) {
@@ -1427,10 +1409,10 @@ func (cc *ClientConductor) OnChannelEndpointError(corrID int64, errorMessage str
 			match = res.subscription.ChannelStatusId() == statusIndicatorID
 		}
 		if match {
-			cc.queueError(&ChannelEndpointError{StatusIndicatorID: statusIndicatorID, Message: errorMessage})
+			cc.queueError(NewChannelEndpointError(statusIndicatorID, errorMessage))
 		}
 	}
-	cc.failCommand(corrID, &RegistrationError{CorrelationID: corrID, Code: 4, Message: errorMessage})
+	cc.failCommand(corrID, NewRegistrationError(corrID, 4, errorMessage))
 }
 
 func (cc *ClientConductor) OnAvailableCounter(corrID int64, counterID int32) {
@@ -1463,7 +1445,7 @@ func (cc *ClientConductor) OnStaticCounter(corrID int64, counterID int32) {
 	if res == nil || res.kind != kindPendingStaticCounter {
 		return
 	}
-	counter, err := NewCounter(cc.counterReader.GetCounterRegistrationId(counterID), cc, counterID)
+	counter, err := newCounter(corrID, cc.counterReader.GetCounterRegistrationId(counterID), false, cc, counterID)
 	if err != nil {
 		cc.failCommand(corrID, err)
 		return
@@ -1505,8 +1487,8 @@ func (cc *ClientConductor) OnPublicationError(buffer *atomic.Buffer, offset int3
 func (cc *ClientConductor) OnClientTimeout(clientID int64) {
 	logger.Debugf("OnClientTimeout: clientID=%d", clientID)
 	if clientID == cc.driverProxy.ClientID() && !cc.isClosed.Get() && !cc.isTerminating.Get() {
-		cc.queueError(cc.terminate(&ClientTimeoutError{Message: fmt.Sprintf("client timeout from driver: clientId=%d",
-			clientID)}))
+		cc.queueError(cc.terminate(NewClientTimeoutError(fmt.Sprintf("client timeout from driver: clientId=%d",
+			clientID))))
 	}
 }
 

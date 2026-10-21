@@ -19,8 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lirm/aeron-go/aeron/atomic"
-
 	"github.com/lirm/aeron-go/aeron/broadcast"
 	"github.com/lirm/aeron-go/aeron/counters"
 	"github.com/lirm/aeron-go/aeron/driver"
@@ -154,7 +152,7 @@ func (aeron *Aeron) connectToDriver() error {
 	ctx := aeron.context
 	cnc, err := awaitCncFile(ctx.CncFileName(), ctx.mediaDriverTo)
 	if err != nil {
-		return &DriverTimeoutError{Message: err.Error()}
+		return NewDriverTimeoutError(err.Error())
 	}
 	aeron.counters = cnc.meta
 	aeron.cncFile = cnc.file
@@ -392,73 +390,6 @@ func (aeron *Aeron) NextSessionID(streamID int32) (int32, error) {
 // CounterReader returns a reader for the media driver counters.
 func (aeron *Aeron) CounterReader() *counters.Reader {
 	return aeron.conductor.CounterReader()
-}
-
-// AddCounter sends ADD_COUNTER without blocking and returns the registration id; poll GetCounter / FindCounter.
-// (Kept id-returning for compatibility; see AddCounterAndWait for the blocking Java-style form.)
-func (aeron *Aeron) AddCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
-	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (int64, error) {
-	return aeron.conductor.AsyncAddCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
-}
-
-// AddCounterByLabel sends ADD_COUNTER with an empty key without blocking and returns the registration id.
-func (aeron *Aeron) AddCounterByLabel(typeId int32, label string) (int64, error) {
-	return aeron.conductor.AsyncAddCounterByLabel(typeId, label)
-}
-
-// AddCounterAndWait allocates a client-owned counter, blocking until the driver confirms it (Java Aeron.addCounter).
-func (aeron *Aeron) AddCounterAndWait(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
-	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (*Counter, error) {
-	return aeron.conductor.AddCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
-}
-
-// AddCounterByLabelAndWait allocates a counter with an empty key, blocking until the driver confirms it.
-func (aeron *Aeron) AddCounterByLabelAndWait(typeId int32, label string) (*Counter, error) {
-	return aeron.conductor.AddCounterByLabel(typeId, label)
-}
-
-// AsyncAddCounter allocates a counter without waiting; poll GetCounter.
-func (aeron *Aeron) AsyncAddCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
-	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (int64, error) {
-	return aeron.conductor.AsyncAddCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
-}
-
-// AsyncAddCounterByLabel allocates a counter with an empty key without waiting; poll GetCounter.
-func (aeron *Aeron) AsyncAddCounterByLabel(typeId int32, label string) (int64, error) {
-	return aeron.conductor.AsyncAddCounterByLabel(typeId, label)
-}
-
-// GetCounter polls an async counter add: (nil, nil) while pending.
-func (aeron *Aeron) GetCounter(registrationID int64) (*Counter, error) {
-	return aeron.conductor.GetCounter(registrationID)
-}
-
-// FindCounter is an alias of GetCounter.
-func (aeron *Aeron) FindCounter(registrationID int64) (*Counter, error) {
-	return aeron.conductor.GetCounter(registrationID)
-}
-
-// AsyncRemoveCounter closes a client-owned counter by registration id without waiting.
-func (aeron *Aeron) AsyncRemoveCounter(registrationID int64) error {
-	return aeron.conductor.AsyncRemoveCounter(registrationID)
-}
-
-// AddStaticCounter allocates, or finds an existing, static counter identified by (typeId, registrationID). Static
-// counters are not owned by this client and are not removed when it closes.
-func (aeron *Aeron) AddStaticCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
-	label string, registrationID int64) (*Counter, error) {
-	return aeron.conductor.AddStaticCounter(typeId, keyBuffer, keyOffset, keyLength, label, registrationID)
-}
-
-// AsyncAddStaticCounter is AddStaticCounter without waiting; poll GetStaticCounter with the returned id.
-func (aeron *Aeron) AsyncAddStaticCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
-	label string, registrationID int64) (int64, error) {
-	return aeron.conductor.AsyncAddStaticCounter(typeId, keyBuffer, keyOffset, keyLength, label, registrationID)
-}
-
-// GetStaticCounter polls an async static counter add: (nil, nil) while pending.
-func (aeron *Aeron) GetStaticCounter(correlationID int64) (*Counter, error) {
-	return aeron.conductor.GetStaticCounter(correlationID)
 }
 
 // AddAvailableCounterHandler adds a handler for counter availability; returns an id for removal.

@@ -112,7 +112,11 @@ func (p *fakeDriverProxy) AddCounterByLabel(int32, string) (int64, error) {
 	return p.record("AddCounterByLabel")
 }
 func (p *fakeDriverProxy) RemoveCounter(int64) (int64, error) { return p.record("RemoveCounter") }
-func (p *fakeDriverProxy) AddStaticCounter(int32, *atomic.Buffer, int32, int32, string, int64) (int64, error) {
+func (p *fakeDriverProxy) AddStaticCounterByLabel(int32, string, int64) (int64, error) {
+	return p.record("AddStaticCounter")
+}
+func (p *fakeDriverProxy) AddStaticCounter(int32, *atomic.Buffer, int32, int32, *atomic.Buffer, int32, int32,
+	int64) (int64, error) {
 	return p.record("AddStaticCounter")
 }
 func (p *fakeDriverProxy) GetNextAvailableSessionID(int32) (int64, error) {
@@ -228,7 +232,7 @@ func TestAsyncAddExclusivePublicationError(t *testing.T) {
 	require.Nil(t, pub)
 	var regErr *RegistrationError
 	require.True(t, errors.As(err, &regErr))
-	require.Equal(t, int32(3), regErr.Code)
+	require.Equal(t, int32(3), regErr.ErrorCodeValue)
 	require.Equal(t, regID, regErr.CorrelationID)
 
 	_, err = tc.GetExclusivePublication(regID)
@@ -267,7 +271,7 @@ func TestBlockingAddSubscriptionError(t *testing.T) {
 	require.Nil(t, sub)
 	var regErr *RegistrationError
 	require.True(t, errors.As(err, &regErr))
-	require.Equal(t, int32(11), regErr.Code)
+	require.Equal(t, int32(11), regErr.ErrorCodeValue)
 	require.Empty(t, tc.resources)
 }
 
@@ -389,8 +393,11 @@ func TestCounterLifecycle(t *testing.T) {
 	tc.AddAvailableCounterHandler(availableH)
 	tc.AddUnavailableCounterHandler(unavailableH)
 
-	tc.events.respond = func() { tc.OnAvailableCounter(tc.proxy.nextCorr, CounterId) }
-	counter, err := tc.AddCounterByLabel(CounterTypeId, CounterLabel)
+	firstID, err := tc.AddCounterByLabel(CounterTypeId, CounterLabel)
+	require.NoError(t, err)
+	tc.OnAvailableCounter(firstID, CounterId)
+	tc.flush()
+	counter, err := tc.GetCounter(firstID)
 	require.NoError(t, err)
 	require.Equal(t, CounterId, counter.Id())
 	require.Equal(t, []int64{counter.RegistrationId()}, availableH.ids)
@@ -407,7 +414,7 @@ func TestCounterLifecycle(t *testing.T) {
 	require.True(t, tc.RemoveUnavailableCounterHandler(unavailableH), "remove by value must match")
 	require.False(t, tc.RemoveUnavailableCounterHandler(unavailableH))
 
-	regID, err := tc.AsyncAddCounterByLabel(CounterTypeId, CounterLabel)
+	regID, err := tc.AddCounterByLabel(CounterTypeId, CounterLabel)
 	require.NoError(t, err)
 	tc.OnAvailableCounter(regID, CounterId)
 	c2, err := tc.GetCounter(regID)
@@ -418,10 +425,10 @@ func TestCounterLifecycle(t *testing.T) {
 
 func TestStaticCounterIsNotRemoved(t *testing.T) {
 	tc := newTestConductor(t)
-	corrID, err := tc.AsyncAddStaticCounter(CounterTypeId, nil, 0, 0, CounterLabel, 555)
+	corrID, err := tc.AddStaticCounterByLabel(CounterTypeId, CounterLabel, 555)
 	require.NoError(t, err)
 	tc.OnStaticCounter(corrID, CounterId)
-	counter, err := tc.GetStaticCounter(corrID)
+	counter, err := tc.GetCounter(corrID)
 	require.NoError(t, err)
 	require.Equal(t, CounterId, counter.Id())
 	require.NoError(t, counter.Close())

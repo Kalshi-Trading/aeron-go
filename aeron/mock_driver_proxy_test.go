@@ -337,11 +337,6 @@ func (_m *MockDriverProxy) RemoveDestinationByID(publicationRegistrationID int64
 	return ret.Get(0).(int64), ret.Error(1)
 }
 
-func (_m *MockDriverProxy) AddStaticCounter(typeID int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
-	label string, registrationID int64) (int64, error) {
-	ret := _m.Called(typeID, keyBuffer, keyOffset, keyLength, label, registrationID)
-	return ret.Get(0).(int64), ret.Error(1)
-}
 
 func (_m *MockDriverProxy) GetNextAvailableSessionID(streamID int32) (int64, error) {
 	ret := _m.Called(streamID)

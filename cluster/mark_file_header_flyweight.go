@@ -50,6 +50,6 @@ func (f *MarkFileHeaderFlyweight) Wrap(
 	pos += f.ErrorBufferLength.Wrap(buf, pos)
 	pos += f.ClusterId.Wrap(buf, pos)
 
-	f.SetSize(HeaderLength + ErrorBufferLength)
+	f.SetSize(MarkFileHeaderBlockLength)
 	return f
 }
