@@ -48,7 +48,7 @@ func main() {
 		log.Fatalf("Failed to connect to media driver: %v", err)
 	}
 	defer a.Close()
-	var pub *aeron.Publication
+	var pub aeron.Publisher
 	if *examples.ExamplesConfig.Exclusive {
 		pub, err = a.AddExclusivePublication(channel, streamID)
 	} else {

@@ -44,7 +44,7 @@ func main() {
 	}
 	defer a.Close()
 
-	var publication *aeron.Publication
+	var publication aeron.Publisher
 	if *examples.ExamplesConfig.Exclusive {
 		publication, err = a.AddExclusivePublication(channel, streamID)
 	} else {

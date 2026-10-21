@@ -27,11 +27,9 @@ import (
 )
 
 const (
-	// logIsPublicationRevokedOffset is LogBufferDescriptor.LOG_IS_PUBLICATION_REVOKED_OFFSET (Aeron 1.48+).
-	logIsPublicationRevokedOffset = logbuffer.LogIsPublicationRevokedOffset
-	termTailCountersOffset        = logbuffer.TermTailCountersOffset
-	logActiveTermCountOffset      = logbuffer.LogActiveTermCountOffset
-	logIsConnectedOffset          = logbuffer.LogIsConnectedOffset
+	termTailCountersOffset   = logbuffer.TermTailCountersOffset
+	logActiveTermCountOffset = logbuffer.LogActiveTermCountOffset
+	logIsConnectedOffset     = logbuffer.LogIsConnectedOffset
 )
 
 // publicationBase holds the state and accessors shared by Publication (concurrent) and ExclusivePublication,

@@ -68,7 +68,7 @@ func main() {
 		log.Fatalf("Failed to add pong subscription: %v", err)
 	}
 	defer sub.Close()
-	var pub *aeron.Publication
+	var pub aeron.Publisher
 	if *examples.ExamplesConfig.Exclusive {
 		pub, err = a.AddExclusivePublication(pingChannel, pingStream)
 	} else {
@@ -109,7 +109,7 @@ func main() {
 }
 
 type pinger struct {
-	pub    *aeron.Publication
+	pub    aeron.Publisher
 	sub    *aeron.Subscription
 	hist   *hdrhistogram.Histogram
 	idler  idlestrategy.Idler
