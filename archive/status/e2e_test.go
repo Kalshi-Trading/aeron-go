@@ -223,7 +223,7 @@ func TestE2EBoundedReplayStopsAtLimitCounter(t *testing.T) {
 	end := pub.Position()
 	await(t, "recorded", 10*time.Second, func() bool { return reader.GetCounterValue(recCounter) >= end })
 
-	regId, err := a.AddCounterByLabel(1001, "go-e2e replay limit")
+	regId, err := a.AsyncAddCounterByLabel(1001, "go-e2e replay limit")
 	require.NoError(t, err)
 	var limit *aeron.Counter
 	await(t, "limit counter", 5*time.Second, func() bool {
