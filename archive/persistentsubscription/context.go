@@ -231,7 +231,7 @@ func (ctx *Context) conclude() error {
 func (ctx *Context) allocateCounter(name string, typeID int32) (*aeron.Counter, error) {
 	label := fmt.Sprintf("%s: %d %s %d %s", name, ctx.ReplayStreamID, ctx.ReplayChannel, ctx.LiveStreamID,
 		ctx.LiveChannel)
-	id, err := ctx.Aeron.AddCounterByLabel(typeID, label)
+	id, err := ctx.Aeron.AsyncAddCounterByLabel(typeID, label)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add counter %q: %w", label, err)
 	}

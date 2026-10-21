@@ -16,7 +16,6 @@
 package aeron
 
 import (
-	"github.com/lirm/aeron-go/aeron/atomic"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron/broadcast"
@@ -371,36 +370,6 @@ func (aeron *Aeron) ClientID() int64 {
 // CounterReader returns Aeron's clientconductor's counterReader
 func (aeron *Aeron) CounterReader() *counters.Reader {
 	return aeron.conductor.CounterReader()
-}
-
-// AddCounter allocates a counter on the media driver and returns its registrationId.  The Counter should be freed by
-// calling Counter.Close().
-func (aeron *Aeron) AddCounter(
-	typeId int32,
-	keyBuffer *atomic.Buffer,
-	keyOffset int32,
-	keyLength int32,
-	labelBuffer *atomic.Buffer,
-	labelOffset int32,
-	labelLength int32) (int64, error) {
-	return aeron.conductor.AddCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
-}
-
-// AddCounterByLabel allocates a counter on the media driver and returns its registrationId.  The Counter should be
-// freed by calling Counter.Close().
-func (aeron *Aeron) AddCounterByLabel(typeId int32, label string) (int64, error) {
-	return aeron.conductor.AddCounterByLabel(typeId, label)
-}
-
-// FindCounter retrieves the Counter associated with the given registrationID.  This function is non-blocking.  The
-// value returned is dependent on what has occurred with respect to the media driver:
-//
-// - If the registrationID is unknown, an error is returned.
-// - If the media driver has not answered the command, (nil,nil) is returned.
-// - If the media driver has successfully added the Counter then what is returned is the Counter.
-// - If the media driver has returned an error, that error will be returned.
-func (aeron *Aeron) FindCounter(registrationID int64) (*Counter, error) {
-	return aeron.conductor.FindCounter(registrationID)
 }
 
 // AddAvailableCounterHandler adds a handler to the list to be called when a counter becomes available.  Return the
