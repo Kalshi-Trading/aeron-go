@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -150,9 +151,17 @@ func dropDateLine(s string) []string {
 	return lines
 }
 
+var buildLogInspector sync.Once
+
 func runJava(t *testing.T, args ...string) string {
-	cmdArgs := append([]string{"compose", "-f", "../../docker/docker-compose.yml", "-f",
-		"../../docker/logbuffer.compose.yml", "run", "--rm", "-T", "log-inspector"}, args...)
+	files := []string{"compose", "-f", "../../docker/docker-compose.yml", "-f", "../../docker/logbuffer.compose.yml"}
+	// Build up front so image build progress never lands on the run's stdout.
+	buildLogInspector.Do(func() {
+		build := exec.Command("docker", append(append([]string{}, files...), "build", "-q", "log-inspector")...)
+		out, err := build.CombinedOutput()
+		require.NoErrorf(t, err, "docker compose build log-inspector: %s", out)
+	})
+	cmdArgs := append(append(append([]string{}, files...), "run", "--rm", "-T", "log-inspector"), args...)
 	cmd := exec.Command("docker", cmdArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
