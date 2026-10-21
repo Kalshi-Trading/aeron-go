@@ -115,4 +115,3 @@ func (aeron *Aeron) FindCounter(registrationID int64) (*Counter, error) {
 func (aeron *Aeron) AsyncRemoveCounter(registrationId int64) error {
 	return aeron.conductor.AsyncRemoveCounter(registrationId)
 }
-
