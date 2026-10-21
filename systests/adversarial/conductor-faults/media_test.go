@@ -54,7 +54,8 @@ func mediaVariants() map[string]func(t *testing.T, c *client, stream int32) medi
 			return mediaPair{pub, sub}
 		},
 		"Multicast": func(t *testing.T, c *client, stream int32) mediaPair {
-			ch := fmt.Sprintf("aeron:udp?endpoint=224.0.1.%d:%d|interface=127.0.0.1|ttl=0", 1+nextPort()%200, nextPort())
+			// Java requires an odd data group address (the control address is data+1).
+			ch := fmt.Sprintf("aeron:udp?endpoint=224.0.1.%d:%d|interface=127.0.0.1|ttl=0", 1+2*(nextPort()%100), nextPort())
 			sub, err := c.AddSubscription(ch, stream)
 			require.NoError(t, err)
 			pub, err := c.AddPublication(ch, stream)
