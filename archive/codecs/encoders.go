@@ -31,25 +31,10 @@ import (
 //
 // The codecs are generated from that specification using Simple
 // Binary Encoding (SBE) from https://github.com/real-logic/simple-binary-encoding
+// ConnectRequestPacket encodes an AuthConnectRequest with no credentials; the plain ConnectRequest
+// message was removed from the archive schema.
 func ConnectRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, correlationID int64, responseStream int32, responseChannel string) ([]byte, error) {
-	var request ConnectRequest
-
-	request.CorrelationId = correlationID
-	request.Version = SemanticVersion()
-	request.ResponseStreamId = responseStream
-	request.ResponseChannel = []uint8(responseChannel)
-
-	// Marshal it
-	header := MessageHeader{BlockLength: request.SbeBlockLength(), TemplateId: request.SbeTemplateId(), SchemaId: request.SbeSchemaId(), Version: request.SbeSchemaVersion()}
-	buffer := new(bytes.Buffer)
-	if err := header.Encode(marshaller, buffer); err != nil {
-		return nil, err
-	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
-		return nil, err
-	}
-
-	return buffer.Bytes(), nil
+	return AuthConnectRequestPacket(marshaller, rangeChecking, correlationID, responseStream, responseChannel, nil)
 }
 
 func CloseSessionRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64) ([]byte, error) {

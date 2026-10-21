@@ -66,8 +66,8 @@ func (c *ClusterMembersExtendedResponse) Encode(_m *SbeGoMarshaller, _w io.Write
 	if err := _m.WriteUint16(_w, ActiveMembersNumInGroup); err != nil {
 		return err
 	}
-	for _, prop := range c.ActiveMembers {
-		if err := prop.Encode(_m, _w); err != nil {
+	for idx := range c.ActiveMembers {
+		if err := c.ActiveMembers[idx].Encode(_m, _w); err != nil {
 			return err
 		}
 	}
@@ -79,8 +79,8 @@ func (c *ClusterMembersExtendedResponse) Encode(_m *SbeGoMarshaller, _w io.Write
 	if err := _m.WriteUint16(_w, PassiveMembersNumInGroup); err != nil {
 		return err
 	}
-	for _, prop := range c.PassiveMembers {
-		if err := prop.Encode(_m, _w); err != nil {
+	for idx := range c.PassiveMembers {
+		if err := c.PassiveMembers[idx].Encode(_m, _w); err != nil {
 			return err
 		}
 	}
@@ -133,8 +133,8 @@ func (c *ClusterMembersExtendedResponse) Decode(_m *SbeGoMarshaller, _r io.Reade
 			c.ActiveMembers = make([]ClusterMembersExtendedResponseActiveMembers, ActiveMembersNumInGroup)
 		}
 		c.ActiveMembers = c.ActiveMembers[:ActiveMembersNumInGroup]
-		for i := range c.ActiveMembers {
-			if err := c.ActiveMembers[i].Decode(_m, _r, actingVersion, uint(ActiveMembersBlockLength)); err != nil {
+		for idx := range c.ActiveMembers {
+			if err := c.ActiveMembers[idx].Decode(_m, _r, actingVersion, uint(ActiveMembersBlockLength)); err != nil {
 				return err
 			}
 		}
@@ -153,8 +153,8 @@ func (c *ClusterMembersExtendedResponse) Decode(_m *SbeGoMarshaller, _r io.Reade
 			c.PassiveMembers = make([]ClusterMembersExtendedResponsePassiveMembers, PassiveMembersNumInGroup)
 		}
 		c.PassiveMembers = c.PassiveMembers[:PassiveMembersNumInGroup]
-		for i := range c.PassiveMembers {
-			if err := c.PassiveMembers[i].Decode(_m, _r, actingVersion, uint(PassiveMembersBlockLength)); err != nil {
+		for idx := range c.PassiveMembers {
+			if err := c.PassiveMembers[idx].Decode(_m, _r, actingVersion, uint(PassiveMembersBlockLength)); err != nil {
 				return err
 			}
 		}
@@ -188,13 +188,13 @@ func (c *ClusterMembersExtendedResponse) RangeCheck(actingVersion uint16, schema
 			return fmt.Errorf("Range check failed on c.MemberId (%v < %v > %v)", c.MemberIdMinValue(), c.MemberId, c.MemberIdMaxValue())
 		}
 	}
-	for _, prop := range c.ActiveMembers {
-		if err := prop.RangeCheck(actingVersion, schemaVersion); err != nil {
+	for idx := range c.ActiveMembers {
+		if err := c.ActiveMembers[idx].RangeCheck(actingVersion, schemaVersion); err != nil {
 			return err
 		}
 	}
-	for _, prop := range c.PassiveMembers {
-		if err := prop.RangeCheck(actingVersion, schemaVersion); err != nil {
+	for idx := range c.PassiveMembers {
+		if err := c.PassiveMembers[idx].RangeCheck(actingVersion, schemaVersion); err != nil {
 			return err
 		}
 	}
@@ -626,11 +626,15 @@ func (*ClusterMembersExtendedResponse) SbeSchemaId() (schemaId uint16) {
 }
 
 func (*ClusterMembersExtendedResponse) SbeSchemaVersion() (schemaVersion uint16) {
-	return 8
+	return 17
 }
 
 func (*ClusterMembersExtendedResponse) SbeSemanticType() (semanticType []byte) {
 	return []byte("")
+}
+
+func (*ClusterMembersExtendedResponse) SbeSemanticVersion() (semanticVersion string) {
+	return "5.4"
 }
 
 func (*ClusterMembersExtendedResponse) CorrelationIdId() uint16 {
@@ -1498,7 +1502,7 @@ func (*ClusterMembersExtendedResponseActiveMembers) SbeBlockLength() (blockLengt
 }
 
 func (*ClusterMembersExtendedResponseActiveMembers) SbeSchemaVersion() (schemaVersion uint16) {
-	return 8
+	return 17
 }
 
 func (*ClusterMembersExtendedResponse) PassiveMembersId() uint16 {
@@ -1522,5 +1526,5 @@ func (*ClusterMembersExtendedResponsePassiveMembers) SbeBlockLength() (blockLeng
 }
 
 func (*ClusterMembersExtendedResponsePassiveMembers) SbeSchemaVersion() (schemaVersion uint16) {
-	return 8
+	return 17
 }

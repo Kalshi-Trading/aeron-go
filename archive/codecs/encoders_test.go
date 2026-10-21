@@ -31,7 +31,7 @@ func TestEncoders(t *testing.T) {
 		t.Log("ConnectRequestPacket() failed")
 		t.Fail()
 	}
-	if len(packet) != 62 { // Look for unexepected change
+	if len(packet) != 70 { // Look for unexepected change
 		t.Logf("ConnectRequestPacket failed length check: %d", len(packet))
 		t.Fail()
 	}

@@ -11,6 +11,7 @@ import (
 
 type ServiceTerminationPosition struct {
 	LogPosition int64
+	AckRequired BooleanTypeEnum
 }
 
 func (s *ServiceTerminationPosition) Encode(_m *SbeGoMarshaller, _w io.Writer, doRangeCheck bool) error {
@@ -22,6 +23,9 @@ func (s *ServiceTerminationPosition) Encode(_m *SbeGoMarshaller, _w io.Writer, d
 	if err := _m.WriteInt64(_w, s.LogPosition); err != nil {
 		return err
 	}
+	if err := s.AckRequired.Encode(_m, _w); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -30,6 +34,11 @@ func (s *ServiceTerminationPosition) Decode(_m *SbeGoMarshaller, _r io.Reader, a
 		s.LogPosition = s.LogPositionNullValue()
 	} else {
 		if err := _m.ReadInt64(_r, &s.LogPosition); err != nil {
+			return err
+		}
+	}
+	if s.AckRequiredInActingVersion(actingVersion) {
+		if err := s.AckRequired.Decode(_m, _r, actingVersion); err != nil {
 			return err
 		}
 	}
@@ -50,6 +59,9 @@ func (s *ServiceTerminationPosition) RangeCheck(actingVersion uint16, schemaVers
 			return fmt.Errorf("Range check failed on s.LogPosition (%v < %v > %v)", s.LogPositionMinValue(), s.LogPosition, s.LogPositionMaxValue())
 		}
 	}
+	if err := s.AckRequired.RangeCheck(actingVersion, schemaVersion); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -58,7 +70,7 @@ func ServiceTerminationPositionInit(s *ServiceTerminationPosition) {
 }
 
 func (*ServiceTerminationPosition) SbeBlockLength() (blockLength uint16) {
-	return 8
+	return 12
 }
 
 func (*ServiceTerminationPosition) SbeTemplateId() (templateId uint16) {
@@ -70,11 +82,15 @@ func (*ServiceTerminationPosition) SbeSchemaId() (schemaId uint16) {
 }
 
 func (*ServiceTerminationPosition) SbeSchemaVersion() (schemaVersion uint16) {
-	return 8
+	return 17
 }
 
 func (*ServiceTerminationPosition) SbeSemanticType() (semanticType []byte) {
 	return []byte("")
+}
+
+func (*ServiceTerminationPosition) SbeSemanticVersion() (semanticVersion string) {
+	return "5.4"
 }
 
 func (*ServiceTerminationPosition) LogPositionId() uint16 {
@@ -117,4 +133,34 @@ func (*ServiceTerminationPosition) LogPositionMaxValue() int64 {
 
 func (*ServiceTerminationPosition) LogPositionNullValue() int64 {
 	return math.MinInt64
+}
+
+func (*ServiceTerminationPosition) AckRequiredId() uint16 {
+	return 2
+}
+
+func (*ServiceTerminationPosition) AckRequiredSinceVersion() uint16 {
+	return 17
+}
+
+func (s *ServiceTerminationPosition) AckRequiredInActingVersion(actingVersion uint16) bool {
+	return actingVersion >= s.AckRequiredSinceVersion()
+}
+
+func (*ServiceTerminationPosition) AckRequiredDeprecated() uint16 {
+	return 0
+}
+
+func (*ServiceTerminationPosition) AckRequiredMetaAttribute(meta int) string {
+	switch meta {
+	case 1:
+		return ""
+	case 2:
+		return ""
+	case 3:
+		return ""
+	case 4:
+		return "required"
+	}
+	return ""
 }

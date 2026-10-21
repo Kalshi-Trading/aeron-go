@@ -1,0 +1,74 @@
+# Java Aeron 1.53.3 media driver + archive sharing an aeron dir with the host so Go clients
+# on the host can connect over shared memory: AERON_DIR=/dev/shm/aeron-compose (see docker/README.md).
+services:
+  archiving-driver:
+    build: .
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    shm_size: 2g
+    volumes:
+      - /dev/shm:/dev/shm
+    tmpfs:
+      - /data/archive:uid=1000,gid=1000
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-compose
+        -Daeron.dir.delete.on.start=true
+        -Daeron.client.liveness.timeout=10000000000
+        -Daeron.publication.unblock.timeout=20000000000
+        -Daeron.archive.dir=/data/archive/rec
+        -Daeron.archive.dir.delete.on.start=true
+        -Daeron.archive.control.channel=aeron:udp?endpoint=localhost:8010
+        -Daeron.archive.control.stream.id=10
+        -Daeron.archive.replication.channel=aeron:udp?endpoint=localhost:0
+        -Daeron.archive.recording.events.enabled=true
+        -Daeron.archive.recording.events.channel=aeron:udp?control-mode=dynamic|control=localhost:8030
+        -Daeron.archive.id=1
+        -Daeron.threading.mode=SHARED
+        -Daeron.archive.threading.mode=SHARED
+    command: ["io.aeron.archive.ArchivingMediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-compose/cnc.dat"]
+      interval: 1s
+      retries: 30
+
+  # Java sample publisher sending to a UDP channel the Go side can subscribe/record.
+  java-publisher:
+    build: .
+    profiles: ["clients"]
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    volumes:
+      - /dev/shm:/dev/shm
+    depends_on:
+      archiving-driver:
+        condition: service_healthy
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-compose
+        -Daeron.sample.channel=aeron:udp?endpoint=localhost:20121
+        -Daeron.sample.streamId=1001
+        -Daeron.sample.messages=100000000
+        -Daeron.sample.linger=0
+    command: ["io.aeron.samples.BasicPublisher"]
+
+  java-subscriber:
+    build: .
+    profiles: ["clients"]
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    volumes:
+      - /dev/shm:/dev/shm
+    depends_on:
+      archiving-driver:
+        condition: service_healthy
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-compose
+        -Daeron.sample.channel=aeron:udp?endpoint=localhost:20122
+        -Daeron.sample.streamId=1002
+    command: ["io.aeron.samples.BasicSubscriber"]
+
