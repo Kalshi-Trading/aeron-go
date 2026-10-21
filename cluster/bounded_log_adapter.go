@@ -206,6 +206,5 @@ func (adapter *boundedLogAdapter) Close() error {
 		err = adapter.image.Close()
 		adapter.image = nil
 	}
-	adapter.builder.Reset()
 	return err
 }

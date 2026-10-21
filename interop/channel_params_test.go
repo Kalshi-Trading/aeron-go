@@ -79,10 +79,17 @@ func paramsJavaToGo(t *testing.T, pubCh, subCh string, c channelParamCase) {
 	j.waitFor("connected", 20*time.Second)
 	r := goReceive(sub.Poll, c.o)
 	done := j.waitFor("done", c.o.timeoutOrDefault())
+	// Read the image before the Java publisher exits: once it closes, the image (IPC in particular) can be removed
+	// at any moment and ImageBySessionID returns nil.
+	var img aeron.Image
+	if c.joinPosition >= 0 {
+		img = sub.ImageBySessionID(r.SessionID)
+		require.NotNil(t, img, "no image for session %d", r.SessionID)
+	}
 	j.send("exit")
 	requireResult(t, "go subscriber", r, c.o, done.int("position"))
 	if c.joinPosition >= 0 {
-		require.Equal(t, c.joinPosition, sub.ImageBySessionID(r.SessionID).JoinPosition())
+		require.Equal(t, c.joinPosition, img.JoinPosition())
 		require.Greater(t, done.int("position"), c.joinPosition)
 	}
 }
