@@ -51,7 +51,7 @@ func aeronDir() string {
 var portSeq int32 = 24600
 var streamSeq int32 = 7000
 
-func nextPort() int    { return int(atomic.AddInt32(&portSeq, 1)) }
+func nextPort() int     { return int(atomic.AddInt32(&portSeq, 1)) }
 func nextStream() int32 { return atomic.AddInt32(&streamSeq, 1) }
 
 func goContext() *aeron.Context {
