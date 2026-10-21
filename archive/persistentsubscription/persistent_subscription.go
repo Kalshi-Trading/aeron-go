@@ -155,7 +155,7 @@ type PersistentSubscription struct {
 	liveChannel       string
 	liveStreamID      int32
 	replayChannel     string
-	replayChannelURI  aeron.ChannelUri
+	replayChannelURI  *aeron.ChannelUri
 	replayChannelType replayChannelType
 	replayStreamID    int32
 	aeron             aeronClient
@@ -259,7 +259,7 @@ func newPersistentSubscription(ctx *Context, aeronClient aeronClient) *Persisten
 	return ps
 }
 
-func replayChannelTypeOf(uri aeron.ChannelUri) replayChannelType {
+func replayChannelTypeOf(uri *aeron.ChannelUri) replayChannelType {
 	if uri.Get("control-mode") == "response" {
 		return replayChannelResponse
 	}
