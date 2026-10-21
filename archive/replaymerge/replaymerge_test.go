@@ -642,3 +642,18 @@ func TestArchiveErrorIsArchiveException(t *testing.T) {
 		h.arch.replays[0].correlationID), archErr.Message)
 	assert.True(t, h.rm.HasFailed())
 }
+
+// Java ReplayMerge throws ArchiveException("archive is not connected") with errorCode GENERIC and a null
+// correlationId, so callers catching ArchiveException see an archive disconnect as an archive error.
+func TestArchiveNotConnectedIsArchiveException(t *testing.T) {
+	h := newHarness(t, testReplayDestPort)
+	h.step(0)
+	h.arch.responseDown = true
+	_, err := h.rm.DoWork()
+	require.ErrorIs(t, err, ErrArchiveNotConnected)
+	var archErr *ArchiveError
+	require.ErrorAs(t, err, &archErr)
+	assert.Equal(t, archive.ErrorCodeGeneric, archErr.ErrorCode)
+	assert.Equal(t, int64(aeron.NullValue), archErr.CorrelationID)
+	assert.Contains(t, err.Error(), "archive is not connected")
+}

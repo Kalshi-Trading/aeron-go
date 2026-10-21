@@ -1,0 +1,89 @@
+# Java Aeron 1.53.3 stack for the adversarial ReplayMerge / PersistentSubscription fault tests in
+# systests/adversarial/replaymerge (AERON_E2E=1 AERON_ADVERSARIAL=1). The tests SIGKILL/SIGSTOP and restart these
+# containers, so they are separate from every other stack. Resources: AERON_DIR /dev/shm/aeron-adv-replaymerge,
+# UDP ports 27400-27499, stream ids 9400-9499.
+#
+#   rm-driver   standalone MediaDriver at /dev/shm/aeron-adv-replaymerge (killed/paused/restarted by the tests)
+#   rm-archive  standalone Archive on rm-driver: control localhost:27410 stream 10, events localhost:27411, archive
+#               id 94. Its catalog lives in /dev/shm/aeron-adv-replaymerge-archive so recordings survive an archive
+#               restart; the mark file is on a per-start tmpfs so a restart is not refused ("active mark file").
+#   rm-oracle   Java ReplayMerge oracle (docker/adversarial-replaymerge/RmOracle.java), run by the tests with
+#               `docker compose run --rm rm-oracle ...`.
+#
+#   docker compose -p adv-replaymerge -f docker/adversarial-replaymerge.compose.yml up -d --build --wait rm-driver rm-archive
+name: adv-replaymerge
+services:
+  rm-driver:
+    build: .
+    image: docker-archiving-driver
+    container_name: adv-replaymerge-driver
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    shm_size: 1g
+    volumes:
+      - /dev/shm:/dev/shm
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-adv-replaymerge
+        -Daeron.dir.delete.on.start=true
+        -Daeron.client.liveness.timeout=3000000000
+        -Daeron.image.liveness.timeout=3000000000
+        -Daeron.publication.unblock.timeout=5000000000
+        -Daeron.publication.connection.timeout=2000000000
+        -Daeron.timer.interval=100000000
+        -Daeron.untethered.window.limit.timeout=1000000000
+        -Daeron.untethered.resting.timeout=1000000000
+        -Daeron.threading.mode=SHARED
+    command: ["io.aeron.driver.MediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-adv-replaymerge/cnc.dat"]
+      interval: 1s
+      retries: 30
+
+  rm-archive:
+    image: docker-archiving-driver
+    container_name: adv-replaymerge-archive
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    volumes:
+      - /dev/shm:/dev/shm
+    tmpfs:
+      - /tmp/mark:uid=1000,gid=1000
+    depends_on:
+      rm-driver:
+        condition: service_healthy
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-adv-replaymerge
+        -Daeron.driver.timeout=3000
+        -Daeron.archive.dir=/dev/shm/aeron-adv-replaymerge-archive
+        -Daeron.archive.mark.file.dir=/tmp/mark
+        -Daeron.archive.control.channel=aeron:udp?endpoint=localhost:27410
+        -Daeron.archive.control.stream.id=10
+        -Daeron.archive.replication.channel=aeron:udp?endpoint=localhost:0
+        -Daeron.archive.recording.events.enabled=true
+        -Daeron.archive.recording.events.channel=aeron:udp?control-mode=dynamic|control=localhost:27411
+        -Daeron.archive.id=94
+        -Daeron.archive.threading.mode=SHARED
+    command: ["io.aeron.archive.Archive"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/mark/archive-mark.dat"]
+      interval: 1s
+      retries: 30
+
+  rm-oracle:
+    image: eclipse-temurin:21-jdk
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    profiles: ["tools"]
+    init: true
+    volumes:
+      - /dev/shm:/dev/shm
+      - ./adversarial-replaymerge:/oracle:ro
+      - ../systests/driver/aeron-all-1.53.3.jar:/opt/aeron/aeron-all.jar:ro
+    entrypoint: ["java", "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED",
+                 "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED", "-cp", "/opt/aeron/aeron-all.jar",
+                 "/oracle/RmOracle.java", "dir=/dev/shm/aeron-adv-replaymerge"]
