@@ -373,6 +373,21 @@ func goPublish(pub aeron.Publisher, o msgOpts) (int64, error) {
 type pollFunc func(handler term.FragmentHandler, fragmentLimit int) int
 
 // goReceive polls until count messages arrived (or timeout) and returns what was received.
+// recordJoinPosition wraps sub.Poll to record the join position of the image delivering the first fragment, while
+// that image is certainly still present (a bounded replay's image is removed soon after its last fragment).
+func recordJoinPosition(sub *aeron.Subscription, joinPosition *int64) pollFunc {
+	recorded := false
+	return func(handler term.FragmentHandler, fragmentLimit int) int {
+		return sub.Poll(func(buf *aatomic.Buffer, offset, length int32, header *logbuffer.Header) {
+			if !recorded {
+				recorded = true
+				*joinPosition = sub.ImageBySessionID(header.SessionId()).JoinPosition()
+			}
+			handler(buf, offset, length, header)
+		}, fragmentLimit)
+	}
+}
+
 func goReceive(poll pollFunc, o msgOpts) Result {
 	v := NewVerifier(o.sizes, o.reserved)
 	v.First = o.first
