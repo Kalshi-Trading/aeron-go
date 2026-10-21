@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -320,4 +321,35 @@ func TestValidateSocketTos(t *testing.T) {
 		_, err := ValidateSocketTos(s)
 		assert.Error(t, err, s)
 	}
+}
+
+func TestChannelUriShouldOnlyValidateMediaWithoutQuery(t *testing.T) {
+	for media, s := range map[string]string{
+		"foo": "aeron:foo?endpoint=localhost:1",
+		"":    "aeron:?endpoint=localhost:1",
+		"UDP": "aeron:UDP?endpoint=localhost:1",
+	} {
+		uri, err := ParseChannelUri(s)
+		require.NoError(t, err, s)
+		assert.Equal(t, media, uri.Media(), s)
+		assert.Equal(t, s, uri.String())
+		_, err = NewChannelUriStringBuilderFromUri(uri)
+		assert.Error(t, err, s)
+	}
+}
+
+func TestChannelUriMaxLengthIsInUtf16CodeUnits(t *testing.T) {
+	const prefix = "aeron:ipc?alias="
+	atMax := prefix + strings.Repeat("é", MaxUriLength-len(prefix))
+	require.Greater(t, len(atMax), MaxUriLength)
+	_, err := ParseChannelUri(atMax)
+	assert.NoError(t, err)
+
+	tooLong := prefix + strings.Repeat("😀", MaxUriLength)
+	_, err = ParseChannelUri(tooLong)
+	require.Error(t, err)
+	assert.True(t, utf8.ValidString(err.Error()))
+	want := prefix + strings.Repeat("😀", (MaxUriLength-len(prefix))/2)
+	assert.Equal(t, "URI length ("+strconv.Itoa(len(prefix)+2*MaxUriLength)+") exceeds max supported length (4095): "+
+		want, err.Error())
 }

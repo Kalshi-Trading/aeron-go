@@ -53,6 +53,9 @@ func (ac *AtomicCounter) Get() int64 {
 
 func (ac *AtomicCounter) GetAcquire() int64 { return ac.Get() }
 
+// GetOpaque is Get: Go atomics have no weaker opaque ordering.
+func (ac *AtomicCounter) GetOpaque() int64 { return ac.Get() }
+
 func (ac *AtomicCounter) GetWeak() int64 {
 	return ac.Reader.values.GetInt64(ac.valueOffset)
 }
@@ -66,6 +69,9 @@ func (ac *AtomicCounter) Set(value int64) {
 func (ac *AtomicCounter) SetOrdered(value int64) { ac.Set(value) }
 func (ac *AtomicCounter) SetRelease(value int64) { ac.Set(value) }
 
+// SetOpaque is Set: Go atomics have no weaker opaque ordering.
+func (ac *AtomicCounter) SetOpaque(value int64) { ac.Set(value) }
+
 func (ac *AtomicCounter) SetWeak(value int64) {
 	ac.Reader.values.PutInt64(ac.valueOffset, value)
 }
@@ -77,6 +83,7 @@ func (ac *AtomicCounter) Increment() int64 { return ac.GetAndAdd(1) }
 
 func (ac *AtomicCounter) IncrementOrdered() int64 { return ac.GetAndAdd(1) }
 func (ac *AtomicCounter) IncrementRelease() int64 { return ac.GetAndAdd(1) }
+func (ac *AtomicCounter) IncrementOpaque() int64  { return ac.GetAndAdd(1) }
 
 // IncrementPlain adds 1 without atomicity and returns the previous value.
 func (ac *AtomicCounter) IncrementPlain() int64 { return ac.GetAndAddPlain(1) }
@@ -86,6 +93,7 @@ func (ac *AtomicCounter) Decrement() int64 { return ac.GetAndAdd(-1) }
 
 func (ac *AtomicCounter) DecrementOrdered() int64 { return ac.GetAndAdd(-1) }
 func (ac *AtomicCounter) DecrementRelease() int64 { return ac.GetAndAdd(-1) }
+func (ac *AtomicCounter) DecrementOpaque() int64  { return ac.GetAndAdd(-1) }
 func (ac *AtomicCounter) DecrementPlain() int64   { return ac.GetAndAddPlain(-1) }
 
 // GetAndAdd atomically adds increment and returns the previous value.
@@ -95,6 +103,7 @@ func (ac *AtomicCounter) GetAndAdd(increment int64) int64 {
 
 func (ac *AtomicCounter) GetAndAddOrdered(increment int64) int64 { return ac.GetAndAdd(increment) }
 func (ac *AtomicCounter) GetAndAddRelease(increment int64) int64 { return ac.GetAndAdd(increment) }
+func (ac *AtomicCounter) GetAndAddOpaque(increment int64) int64  { return ac.GetAndAdd(increment) }
 
 // GetAndAddPlain adds increment without atomicity and returns the previous value.
 func (ac *AtomicCounter) GetAndAddPlain(increment int64) int64 {
@@ -133,6 +142,11 @@ func (ac *AtomicCounter) ProposeMaxOrdered(proposedValue int64) bool {
 }
 
 func (ac *AtomicCounter) ProposeMaxRelease(proposedValue int64) bool {
+	return ac.ProposeMaxOrdered(proposedValue)
+}
+
+// ProposeMaxOpaque is ProposeMaxOrdered.
+func (ac *AtomicCounter) ProposeMaxOpaque(proposedValue int64) bool {
 	return ac.ProposeMaxOrdered(proposedValue)
 }
 

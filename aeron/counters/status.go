@@ -161,14 +161,13 @@ func AppendToLabel(metaDataBuffer *atomic.Buffer, counterId int32, value string)
 		return 0, fmt.Errorf("counter id %d is not allocated, state: %d", counterId, state)
 	}
 	existing := metaDataBuffer.GetInt32(offset + LabelOffset)
-	remaining := MaxLabelLength - existing
-	n := int32(len(value))
-	if n > remaining {
-		n = remaining
+	if existing < 0 || existing > MaxLabelLength {
+		return 0, fmt.Errorf("counter id %d has invalid label length: %d", counterId, existing)
 	}
+	b := asciiBytes(value, MaxLabelLength-existing)
+	n := int32(len(b))
 	if n > 0 {
-		b := []byte(value[:n])
-		metaDataBuffer.PutBytesSlice(offset+LabelOffset+util.SizeOfInt32+existing, b[:n])
+		metaDataBuffer.PutBytesSlice(offset+LabelOffset+util.SizeOfInt32+existing, b)
 		metaDataBuffer.PutInt32Ordered(offset+LabelOffset, existing+n)
 	}
 	return n, nil
@@ -181,6 +180,29 @@ func SetReferenceID(metaDataBuffer, valuesBuffer *atomic.Buffer, counterId int32
 	}
 	valuesBuffer.PutInt64Ordered(CounterOffset(counterId)+ReferenceIdOffset, referenceId)
 	return nil
+}
+
+// asciiBytes encodes value like Agrona putStringWithoutLengthAscii: one byte per UTF-16 code unit, '?' for anything
+// outside 7-bit ASCII, truncated to at most maxLength bytes.
+func asciiBytes(value string, maxLength int32) []byte {
+	b := make([]byte, 0, len(value))
+	for _, r := range value {
+		if int32(len(b)) >= maxLength {
+			break
+		}
+		switch {
+		case r < 0x80:
+			b = append(b, byte(r))
+		case r > 0xFFFF:
+			b = append(b, '?')
+			if int32(len(b)) < maxLength {
+				b = append(b, '?')
+			}
+		default:
+			b = append(b, '?')
+		}
+	}
+	return b
 }
 
 func validateMetaDataCounterId(metaDataBuffer *atomic.Buffer, counterId int32) error {

@@ -70,15 +70,15 @@ func (hdr *Header) FrameLength() int32 {
 }
 
 func (hdr *Header) TermID() int32 {
-	return frameTermID(&hdr.buffer, hdr.offset)
+	return GetFrameTermID(&hdr.buffer, hdr.offset)
 }
 
 func (hdr *Header) SessionID() int32 {
-	return frameSessionID(&hdr.buffer, hdr.offset)
+	return GetFrameSessionID(&hdr.buffer, hdr.offset)
 }
 
 func (hdr *Header) StreamID() int32 {
-	return frameStreamID(&hdr.buffer, hdr.offset)
+	return GetFrameStreamID(&hdr.buffer, hdr.offset)
 }
 
 // Deprecated: use ReservedValue.

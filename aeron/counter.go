@@ -59,6 +59,26 @@ func newCounter(correlationId int64, registrationId int64, clientOwned bool, cli
 	}, nil
 }
 
+// NewCounterFromReader wraps an already allocated counter that this client did not add (io.aeron.Counter(CountersReader,
+// int)). The registration id is read from the counter's values; the correlation id is NullValue. Close only marks the
+// Counter closed: it does not free the counter in the driver.
+func NewCounterFromReader(reader *counters.Reader, counterId int32) (*Counter, error) {
+	if state := reader.GetCounterState(counterId); state != counters.RecordAllocated {
+		return nil, fmt.Errorf("counter id is not allocated: %d", counterId)
+	}
+	atomicCounter, err := counters.NewAtomicCounter(reader, counterId)
+	if err != nil {
+		return nil, err
+	}
+	return &Counter{
+		AtomicCounter:  atomicCounter,
+		correlationId:  NullValue,
+		registrationId: reader.GetCounterRegistrationID(counterId),
+		clientOwned:    true,
+		counterId:      counterId,
+	}, nil
+}
+
 // RegistrationID returns the registration id of the counter: the correlation id of the add command for client owned
 // counters, or the user supplied registration id for static counters.
 func (c *Counter) RegistrationID() int64 {
@@ -95,7 +115,7 @@ func (c *Counter) Close() error {
 	if c.isClosed.CompareAndSet(false, true) {
 		if c.clientConductor != nil {
 			if c.clientOwned {
-				return c.clientConductor.releaseCounter(*c)
+				return c.clientConductor.releaseCounter(c.registrationId, c.counterId)
 			}
 			c.clientConductor.releaseStaticCounter(c.correlationId)
 		}

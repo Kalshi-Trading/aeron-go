@@ -62,9 +62,13 @@ func (s *CounterTestSuite) SetupTest() {
 }
 
 func (s *CounterTestSuite) TearDownTest() {
+	if s.mediaDriver == nil {
+		return // SetupTest skipped
+	}
 	s.clientA.Close()
 	s.clientB.Close()
 	s.mediaDriver.StopMediaDriver()
+	s.mediaDriver = nil
 }
 
 func (s *CounterTestSuite) TestShouldBeAbleToAddCounter() {

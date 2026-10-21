@@ -370,3 +370,24 @@ func TestUriSizeAndDurationHelpers(t *testing.T) {
 	assert.Equal(t, "0ns", uriFormatDuration(0))
 	assert.Equal(t, "1001ns", uriFormatDuration(1001))
 }
+
+func TestChannelUriStringBuilderEmptyStringsAreSetNotUnset(t *testing.T) {
+	b := NewChannelUriStringBuilder().Media(UdpMedia).Endpoint("").Tags("").Alias("").NetworkInterface("").
+		CongestionControl("").FlowControl("").ResponseEndpoint("")
+	require.NoError(t, b.Validate())
+	assert.Equal(t, "aeron:udp?tags=|endpoint=|interface=|alias=|cc=|fc=|response-endpoint=", b.MustBuild())
+	b.Unset(EndpointParamName).Unset(TagsParamName).Unset(InterfaceParamName).Unset(AliasParamName).
+		Unset(CongestionControlParamName).Unset(FlowControlParamName).Unset(ResponseEndpointParamName)
+	assert.Equal(t, "aeron:udp", b.MustBuild())
+	assert.Error(t, b.Validate())
+
+	for name, b := range map[string]*ChannelUriStringBuilder{
+		"controlMode":  NewChannelUriStringBuilder().ControlMode(""),
+		"mediaRcvTs":   NewChannelUriStringBuilder().MediaReceiveTimestampOffset(""),
+		"channelRcvTs": NewChannelUriStringBuilder().ChannelReceiveTimestampOffset(""),
+		"channelSndTs": NewChannelUriStringBuilder().ChannelSendTimestampOffset(""),
+		"responseCorr": NewChannelUriStringBuilder().ResponseCorrelationIdString(""),
+	} {
+		assert.Error(t, b.Err(), name)
+	}
+}

@@ -2,6 +2,8 @@
 
 package logbuffer
 
+import "github.com/lirm/aeron-go/aeron/atomic"
+
 // Deprecated: use TermID.
 func (hdr *Header) TermId() int32 {
 	return hdr.TermID()
@@ -25,4 +27,19 @@ func (hdr *Header) InitialTermId() int32 {
 // Deprecated: use SetSessionID.
 func (hdr *Header) SetSessionId(value int32) *Header {
 	return hdr.SetSessionID(value)
+}
+
+// Deprecated: use GetFrameTermID.
+func GetTermId(logBuffer *atomic.Buffer, frameOffset int32) int32 {
+	return GetFrameTermID(logBuffer, frameOffset)
+}
+
+// Deprecated: use GetFrameSessionID.
+func GetSessionId(logBuffer *atomic.Buffer, frameOffset int32) int32 {
+	return GetFrameSessionID(logBuffer, frameOffset)
+}
+
+// Deprecated: use GetFrameStreamID.
+func GetStreamId(logBuffer *atomic.Buffer, frameOffset int32) int32 {
+	return GetFrameStreamID(logBuffer, frameOffset)
 }

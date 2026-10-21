@@ -85,11 +85,15 @@ func (proxy *consensusModuleProxy) offer2(
 	bufferOne *atomic.Buffer, offsetOne int32, lengthOne int32,
 	bufferTwo *atomic.Buffer, offsetTwo int32, lengthTwo int32,
 ) int64 {
-	return proxy.publication.Offer2(bufferOne, offsetOne, lengthOne, bufferTwo, offsetTwo, lengthTwo, nil)
+	result := proxy.publication.Offer2(bufferOne, offsetOne, lengthOne, bufferTwo, offsetTwo, lengthTwo, nil)
+	checkResult(result)
+	return result
 }
 
 func (proxy *consensusModuleProxy) tryClaim(length int32, claim *logbuffer.Claim) int64 {
-	return proxy.publication.TryClaim(length, claim)
+	result := proxy.publication.TryClaim(length, claim)
+	checkResult(result)
+	return result
 }
 
 // ClusterError is raised (via panic inside the agent, returned from StartAndRun) for unrecoverable cluster

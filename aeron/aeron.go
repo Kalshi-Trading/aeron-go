@@ -16,12 +16,15 @@
 package aeron
 
 import (
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron/broadcast"
 	"github.com/lirm/aeron-go/aeron/counters"
 	"github.com/lirm/aeron-go/aeron/driver"
+	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/lirm/aeron-go/aeron/logging"
 	rb "github.com/lirm/aeron-go/aeron/ringbuffer"
 	"github.com/lirm/aeron-go/aeron/util/memmap"
@@ -82,17 +85,37 @@ var logger = logging.MustGetLogger("aeron")
 // Aeron.connect it waits up to the media driver timeout for the CnC file to appear and the driver to heartbeat,
 // returning a *DriverTimeoutError otherwise.
 func Connect(ctx *Context) (*Aeron, error) {
-	if !ctx.concluded {
+	if !ctx.inUse.CompareAndSwap(false, true) {
+		return nil, NewAeronError(CategoryError, "context is already in use by another Aeron client")
+	}
+	if !ctx.concluded.Load() {
 		if err := ctx.Conclude(); err != nil {
+			ctx.inUse.Store(false)
 			return nil, err
 		}
 	}
+	aeron, err := connect(ctx)
+	if err != nil {
+		ctx.inUse.Store(false)
+		return nil, err
+	}
+	return aeron, nil
+}
+
+func connect(ctx *Context) (*Aeron, error) {
 	aeron := new(Aeron)
 	aeron.context = ctx
 	logger.Debugf("Connecting with context: %v", ctx)
 
 	if err := aeron.connectToDriver(); err != nil {
 		return nil, err
+	}
+
+	interServiceTo := time.Duration(aeron.counters.ClientLivenessTo.Get())
+	if interServiceTo <= ctx.keepAliveInterval {
+		_ = aeron.cncFile.Close()
+		return nil, NewConfigurationError(fmt.Sprintf("interServiceTimeoutNs=%d <= keepAliveIntervalNs=%d",
+			interServiceTo.Nanoseconds(), ctx.keepAliveInterval.Nanoseconds()))
 	}
 
 	aeron.driverProxy.Init(&aeron.toDriverRingBuffer)
@@ -106,7 +129,7 @@ func Connect(ctx *Context) (*Aeron, error) {
 
 	aeron.toClientsCopyReceiver = broadcast.NewCopyReceiver(aeron.toClientsBroadcastReceiver)
 
-	ctx.interServiceTo = time.Duration(aeron.counters.ClientLivenessTo.Get())
+	ctx.interServiceTo = interServiceTo
 	ctx.clientID = aeron.driverProxy.ClientID()
 
 	cc := &aeron.conductor
@@ -123,6 +146,8 @@ func Connect(ctx *Context) (*Aeron, error) {
 	cc.clientName = ctx.clientName
 	cc.preTouchMappedMemory = ctx.preTouchMappedMemory
 	cc.subscriberErrorHandler = ctx.subscriberErrorHandler
+	cc.awaitingIdleStrategy = ctx.awaitingIdleStrategy
+	cc.driverAgentInvoker = ctx.driverAgentInvoker
 
 	if ctx.availableCounterHandler != nil {
 		cc.AddAvailableCounterHandler(ctx.availableCounterHandler)
@@ -150,11 +175,21 @@ func (aeron *Aeron) connectToDriver() error {
 	ctx := aeron.context
 	cnc, err := awaitCncFile(ctx.CncFileName(), ctx.mediaDriverTo)
 	if err != nil {
-		return &DriverTimeoutError{TimeoutError{AeronError{Category: CategoryFatal, Cause: err}}}
+		if errors.Is(err, ErrDriverTimeout) {
+			return &DriverTimeoutError{TimeoutError{AeronError{Category: CategoryFatal, Cause: err}}}
+		}
+		var aeronErr CategorizedError
+		if errors.As(err, &aeronErr) {
+			return err
+		}
+		return WrapAeronError(CategoryError, "cannot connect to media driver", err)
 	}
 	aeron.counters = cnc.meta
 	aeron.cncFile = cnc.file
 	ctx.filePageSize = cnc.filePageSize()
+	if ctx.filePageSize == 0 {
+		ctx.filePageSize = logbuffer.PageMinSize
+	}
 	aeron.toDriverRingBuffer.Init(aeron.counters.ToDriverBuf.Get())
 	return nil
 }
@@ -170,6 +205,7 @@ func (aeron *Aeron) Close() error {
 		if err := aeron.cncFile.Close(); err != nil && aeron.closeErr == nil {
 			aeron.closeErr = err
 		}
+		aeron.context.inUse.Store(false)
 	})
 	return aeron.closeErr
 }
