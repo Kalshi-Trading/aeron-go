@@ -14,89 +14,70 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// basic_publisher is a port of io.aeron.samples.BasicPublisher: it offers "Hello World! <n>"
+// once a second. Add -exclusive to use an exclusive publication.
 package main
 
 import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/logging"
 	"github.com/lirm/aeron-go/examples"
 )
 
-var logger = logging.MustGetLogger("basic_publisher")
-
-var interrupt = make(chan os.Signal, 1)
-
-func init() {
-	signal.Notify(interrupt, os.Interrupt)
-	signal.Notify(interrupt, syscall.SIGTERM)
-}
-
 func main() {
 	flag.Parse()
+	examples.SetupLogging()
+	ctx, cancel := examples.SignalContext()
+	defer cancel()
 
-	if !*examples.ExamplesConfig.LoggingOn {
-		logging.SetLevel(logging.INFO, "aeron")
-		logging.SetLevel(logging.INFO, "memmap")
-		logging.SetLevel(logging.INFO, "driver")
-		logging.SetLevel(logging.INFO, "counters")
-		logging.SetLevel(logging.INFO, "logbuffers")
-		logging.SetLevel(logging.INFO, "buffer")
-		logging.SetLevel(logging.INFO, "rb")
-	}
+	channel, streamID := *examples.ExamplesConfig.Channel, int32(*examples.ExamplesConfig.StreamID)
+	fmt.Printf("Publishing to %s on stream id %d\n", channel, streamID)
 
-	errorHandler := func(err error) {
-		logger.Warning(err)
-	}
-	to := time.Duration(time.Millisecond.Nanoseconds() * *examples.ExamplesConfig.DriverTo)
-	ctx := aeron.NewContext().AeronDir(*examples.ExamplesConfig.AeronPrefix).MediaDriverTimeout(to).ErrorHandler(errorHandler)
-
-	a, err := aeron.Connect(ctx)
+	a, err := aeron.Connect(examples.NewContext())
 	if err != nil {
-		logger.Fatalf("Failed to connect to media driver: %s\n", err.Error())
+		log.Fatalf("Failed to connect to media driver: %v", err)
 	}
 	defer a.Close()
 
-	publication, err := a.AddPublication(*examples.ExamplesConfig.Channel, int32(*examples.ExamplesConfig.StreamID))
+	var publication *aeron.Publication
+	if *examples.ExamplesConfig.Exclusive {
+		publication, err = a.AddExclusivePublication(channel, streamID)
+	} else {
+		publication, err = a.AddPublication(channel, streamID)
+	}
 	if err != nil {
-		logger.Fatalf(err.Error())
+		log.Fatalf("Failed to add publication: %v", err)
 	}
 	defer publication.Close()
-	log.Printf("Publication found %v", publication)
 
-	for counter := 0; counter < *examples.ExamplesConfig.Messages; counter++ {
-		message := fmt.Sprintf("this is a message %d", counter)
-		srcBuffer := atomic.MakeBuffer(([]byte)(message))
-		ret := publication.Offer(srcBuffer, 0, int32(len(message)), nil)
-		switch ret {
-		case aeron.NotConnected:
-			log.Printf("%d: not connected yet", counter)
-		case aeron.BackPressured:
-			log.Printf("%d: back pressured", counter)
-		default:
-			if ret < 0 {
-				log.Printf("%d: Unrecognized code: %d", counter, ret)
-			} else {
-				log.Printf("%d: success!", counter)
+	buffer := atomic.MakeBuffer(make([]byte, 256))
+	messages := *examples.ExamplesConfig.Messages
+	for i := 0; i < messages && ctx.Err() == nil; i++ {
+		fmt.Printf("Offering %d/%d - ", i, messages)
+		msg := []byte(fmt.Sprintf("Hello World! %d", i))
+		buffer.PutBytesArray(0, &msg, 0, int32(len(msg)))
+		result := publication.Offer(buffer, 0, int32(len(msg)), nil)
+		if result > 0 {
+			fmt.Println("yay!")
+		} else {
+			fmt.Println(examples.OfferResultString(result))
+			if examples.IsTerminalOfferResult(result) {
+				break
 			}
 		}
-
 		if !publication.IsConnected() {
-			log.Printf("no subscribers detected")
+			fmt.Println("No active subscribers detected")
 		}
 		select {
-		case <-interrupt:
-			return
-		default:
-			time.Sleep(time.Second)
+		case <-ctx.Done():
+		case <-time.After(time.Second):
 		}
 	}
+	fmt.Println("Done sending.")
+	examples.Linger()
 }
