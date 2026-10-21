@@ -70,6 +70,8 @@ type publicationStateDefn struct {
 	errorMessage             string
 	buffers                  *logbuffer.LogBuffers
 	publication              *Publication
+	exclusivePublication     *ExclusivePublication
+	isExclusive              bool
 }
 
 func (pub *publicationStateDefn) Init(channel string, regID int64, streamID int32, now int64) *publicationStateDefn {
@@ -164,10 +166,10 @@ type DriverProxy interface {
 	TimeOfLastDriverKeepalive() int64
 	NextCorrelationID() int64
 	AddSubscription(channel string, streamID int32) (int64, error)
-	RemoveSubscription(registrationID int64) error
+	RemoveSubscription(registrationID int64) (int64, error)
 	AddPublication(channel string, streamID int32) (int64, error)
 	AddExclusivePublication(channel string, streamID int32) (int64, error)
-	RemovePublication(registrationID int64) error
+	RemovePublication(registrationID int64, revoke bool) (int64, error)
 	ClientClose() error
 	AddDestination(registrationID int64, channel string) (int64, error)
 	RemoveDestination(registrationID int64, channel string) (int64, error)
@@ -425,6 +427,7 @@ func (cc *ClientConductor) AddExclusivePublication(channel string, streamID int3
 
 	pubState := new(publicationStateDefn)
 	pubState.Init(channel, regID, streamID, now)
+	pubState.isExclusive = true
 
 	cc.pubs = append(cc.pubs, pubState)
 
@@ -432,33 +435,54 @@ func (cc *ClientConductor) AddExclusivePublication(channel string, streamID int3
 }
 
 func (cc *ClientConductor) FindPublication(registrationID int64) (*Publication, error) {
-
 	cc.adminLock.Lock()
 	defer cc.adminLock.Unlock()
 
-	var publication *Publication
+	pub, err := cc.findRegisteredPublication(registrationID)
+	if pub == nil || err != nil {
+		return nil, err
+	}
+	if pub.isExclusive {
+		return nil, fmt.Errorf("registration ID %d is an exclusive publication, use FindExclusivePublication", registrationID)
+	}
+	if pub.publication == nil {
+		publication := NewPublication(pub.buffers)
+		cc.initPublicationBase(&publication.publicationBase, pub)
+		pub.publication = publication
+	}
+	return pub.publication, nil
+}
+
+// FindExclusivePublication returns the ExclusivePublication for registrationID once the driver has registered it.
+func (cc *ClientConductor) FindExclusivePublication(registrationID int64) (*ExclusivePublication, error) {
+	cc.adminLock.Lock()
+	defer cc.adminLock.Unlock()
+
+	pub, err := cc.findRegisteredPublication(registrationID)
+	if pub == nil || err != nil {
+		return nil, err
+	}
+	if !pub.isExclusive {
+		return nil, fmt.Errorf("registration ID %d is not an exclusive publication, use FindPublication", registrationID)
+	}
+	if pub.exclusivePublication == nil {
+		publication := NewExclusivePublication(pub.buffers)
+		cc.initPublicationBase(&publication.publicationBase, pub)
+		pub.exclusivePublication = publication
+	}
+	return pub.exclusivePublication, nil
+}
+
+func (cc *ClientConductor) findRegisteredPublication(registrationID int64) (*publicationStateDefn, error) {
 	for _, pub := range cc.pubs {
 		if pub.regID != registrationID {
 			continue
-		}
-		if pub.publication != nil {
-			return pub.publication, nil
 		}
 		switch pub.status {
 		case RegistrationStatus.AwaitingMediaDriver:
 			return nil, timeoutExceeded(pub.timeOfRegistration, cc.driverTimeoutNs)
 		case RegistrationStatus.RegisteredMediaDriver:
-			publication = NewPublication(pub.buffers)
-			publication.conductor = cc
-			publication.channel = pub.channel
-			publication.regID = registrationID
-			publication.originalRegID = pub.origRegID
-			publication.streamID = pub.streamID
-			publication.sessionID = pub.sessionID
-			publication.pubLimit = NewPosition(cc.counterValuesBuffer, pub.posLimitCounterID)
-			publication.channelStatusIndicatorID = pub.channelStatusIndicatorID
-			pub.publication = publication
-			return publication, nil
+			return pub, nil
 		case RegistrationStatus.ErroredMediaDriver:
 			return nil, NewRegistrationError(registrationID, pub.errorCode, pub.errorMessage)
 		default:
@@ -468,7 +492,18 @@ func (cc *ClientConductor) FindPublication(registrationID int64) (*Publication, 
 	return nil, fmt.Errorf("registration ID %d cannot be found", registrationID)
 }
 
-func (cc *ClientConductor) releasePublication(regID int64) error {
+func (cc *ClientConductor) initPublicationBase(base *publicationBase, pub *publicationStateDefn) {
+	base.conductor = cc
+	base.channel = pub.channel
+	base.regID = pub.regID
+	base.originalRegID = pub.origRegID
+	base.streamID = pub.streamID
+	base.sessionID = pub.sessionID
+	base.pubLimit = NewPosition(cc.counterValuesBuffer, pub.posLimitCounterID)
+	base.channelStatusIndicatorID = pub.channelStatusIndicatorID
+}
+
+func (cc *ClientConductor) releasePublication(regID int64, revoke bool) error {
 	logger.Debugf("ReleasePublication: regID=%d", regID)
 
 	if err := cc.getDriverStatus(); err != nil {
@@ -483,7 +518,7 @@ func (cc *ClientConductor) releasePublication(regID int64) error {
 	pubcnt := len(cc.pubs)
 	for i, pub := range cc.pubs {
 		if pub != nil && pub.regID == regID {
-			if err := cc.driverProxy.RemovePublication(regID); err != nil {
+			if _, err := cc.driverProxy.RemovePublication(regID, revoke); err != nil {
 				return err
 			}
 
@@ -588,7 +623,7 @@ func (cc *ClientConductor) releaseSubscription(regID int64, images []Image) erro
 				logger.Debugf("Removing subscription: %d; %v", regID, images)
 			}
 
-			if err := cc.driverProxy.RemoveSubscription(regID); err != nil {
+			if _, err := cc.driverProxy.RemoveSubscription(regID); err != nil {
 				return err
 			}
 
@@ -970,7 +1005,9 @@ func DefaultImageFactory(sessionID int32, corrID int64, logFilename string, subR
 	image := NewImage(sessionID, corrID, logbuffer.Wrap(logFilename))
 	image.subscriptionRegistrationID = subRegId
 	image.sourceIdentity = sourceIdentity
+	image.logFileName = logFilename
 	image.subscriberPosition = NewPosition(counterValuesBuffer, subscriberPositionID)
+	image.joinPosition = image.subscriberPosition.get()
 	logger.Debugf("OnAvailableImage: new image position: %v -> %d",
 		image.subscriberPosition, image.subscriberPosition.get())
 	return image
@@ -1039,6 +1076,9 @@ func (cc *ClientConductor) OnChannelEndpointError(corrID int64, errorMessage str
 	for _, pubDef := range cc.pubs {
 		if pubDef.publication != nil && pubDef.publication.ChannelStatusID() == statusIndicatorId {
 			cc.onError(NewChannelEndpointError(statusIndicatorId, errorMessage))
+		}
+		if pubDef.exclusivePublication != nil && pubDef.exclusivePublication.ChannelStatusID() == statusIndicatorId {
+			cc.onError(fmt.Errorf(errorMessage))
 		}
 	}
 
@@ -1187,6 +1227,12 @@ func (cc *ClientConductor) closeAllResources(now int64) {
 		for _, pub := range cc.pubs {
 			if pub != nil && pub.publication != nil {
 				err = pub.publication.Close()
+				if err != nil {
+					cc.onError(err)
+				}
+			}
+			if pub != nil && pub.exclusivePublication != nil {
+				err = pub.exclusivePublication.Close()
 				if err != nil {
 					cc.onError(err)
 				}

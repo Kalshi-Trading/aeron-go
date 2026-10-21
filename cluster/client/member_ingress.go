@@ -13,7 +13,7 @@ type memberIngress struct {
 	memberId       int32
 	endpoint       string
 	registrationId int64
-	publication    *aeron.Publication
+	publication    aeron.Publisher
 	publicationErr error
 }
 
@@ -122,11 +122,19 @@ func asyncAddIngressPublication(ctx *Context, channel string, streamId int32) (i
 	return ctx.Aeron.AsyncAddPublication(channel, streamId)
 }
 
-func getIngressPublication(ctx *Context, registrationId int64) (*aeron.Publication, error) {
+func getIngressPublication(ctx *Context, registrationId int64) (aeron.Publisher, error) {
 	if ctx.IsIngressExclusive {
-		return ctx.Aeron.GetExclusivePublication(registrationId)
+		pub, err := ctx.Aeron.GetExclusivePublication(registrationId)
+		if pub == nil || err != nil {
+			return nil, err
+		}
+		return pub, nil
 	}
-	return ctx.Aeron.GetPublication(registrationId)
+	pub, err := ctx.Aeron.GetPublication(registrationId)
+	if pub == nil || err != nil {
+		return nil, err
+	}
+	return pub, nil
 }
 
 // closePendingPublication best-effort releases a publication whose registration has not yet completed. The Go

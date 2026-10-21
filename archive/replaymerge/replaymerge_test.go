@@ -42,6 +42,7 @@ const (
 )
 
 type fakeImage struct {
+	aeron.Image     // methods not used by the test panic
 	position        int64
 	closed          bool
 	transportCount  int32

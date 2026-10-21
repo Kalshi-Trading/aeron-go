@@ -674,18 +674,25 @@ func (_m *MockDriverProxy) RemoveDestination(registrationID int64, channel strin
 	return r0, r1
 }
 
-// RemovePublication provides a mock function with given fields: registrationID
-func (_m *MockDriverProxy) RemovePublication(registrationID int64) error {
-	ret := _m.Called(registrationID)
+// RemovePublication provides a mock function with given fields: registrationID, revoke
+func (_m *MockDriverProxy) RemovePublication(registrationID int64, revoke bool) (int64, error) {
+	ret := _m.Called(registrationID, revoke)
 
-	var r0 error
-	if rf, ok := ret.Get(0).(func(int64) error); ok {
-		r0 = rf(registrationID)
+	var r0 int64
+	if rf, ok := ret.Get(0).(func(int64, bool) int64); ok {
+		r0 = rf(registrationID, revoke)
 	} else {
-		r0 = ret.Error(0)
+		r0 = ret.Get(0).(int64)
 	}
 
-	return r0
+	var r1 error
+	if rf, ok := ret.Get(1).(func(int64, bool) error); ok {
+		r1 = rf(registrationID, revoke)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
 }
 
 // RemoveRcvDestination provides a mock function with given fields: registrationID, channel
@@ -710,17 +717,24 @@ func (_m *MockDriverProxy) RemoveRcvDestination(registrationID int64, channel st
 }
 
 // RemoveSubscription provides a mock function with given fields: registrationID
-func (_m *MockDriverProxy) RemoveSubscription(registrationID int64) error {
+func (_m *MockDriverProxy) RemoveSubscription(registrationID int64) (int64, error) {
 	ret := _m.Called(registrationID)
 
-	var r0 error
-	if rf, ok := ret.Get(0).(func(int64) error); ok {
+	var r0 int64
+	if rf, ok := ret.Get(0).(func(int64) int64); ok {
 		r0 = rf(registrationID)
 	} else {
-		r0 = ret.Error(0)
+		r0 = ret.Get(0).(int64)
 	}
 
-	return r0
+	var r1 error
+	if rf, ok := ret.Get(1).(func(int64) error); ok {
+		r1 = rf(registrationID)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
 }
 
 // TimeOfLastDriverKeepalive provides a mock function with given fields:

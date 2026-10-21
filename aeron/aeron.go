@@ -294,13 +294,13 @@ func (aeron *Aeron) GetPublication(registrationID int64) (*Publication, error) {
 
 // AddExclusivePublication will add a new exclusive publication to the driver. If such publication already
 // exists within ClientConductor the same instance will be returned.
-func (aeron *Aeron) AddExclusivePublication(channel string, streamID int32) (*Publication, error) {
+func (aeron *Aeron) AddExclusivePublication(channel string, streamID int32) (*ExclusivePublication, error) {
 	registrationID, err := aeron.conductor.AddExclusivePublication(channel, streamID)
 	if err != nil {
 		return nil, err
 	}
 	for {
-		publication, err := aeron.conductor.FindPublication(registrationID)
+		publication, err := aeron.conductor.FindExclusivePublication(registrationID)
 		if publication != nil || err != nil {
 			return publication, err
 		}
@@ -311,8 +311,8 @@ func (aeron *Aeron) AddExclusivePublication(channel string, streamID int32) (*Pu
 // AddExclusivePublicationDeprecated will add a new exclusive publication to the driver. If such publication already
 // exists within ClientConductor the same instance will be returned.
 // Returns a channel, which can be used for either blocking or non-blocking want for media driver confirmation
-func (aeron *Aeron) AddExclusivePublicationDeprecated(channel string, streamID int32) chan *Publication {
-	ch := make(chan *Publication, 1)
+func (aeron *Aeron) AddExclusivePublicationDeprecated(channel string, streamID int32) chan *ExclusivePublication {
+	ch := make(chan *ExclusivePublication, 1)
 
 	registrationID, err := aeron.conductor.AddExclusivePublication(channel, streamID)
 	if err != nil {
@@ -322,7 +322,7 @@ func (aeron *Aeron) AddExclusivePublicationDeprecated(channel string, streamID i
 	}
 	go func() {
 		for {
-			publication, err := aeron.conductor.FindPublication(registrationID)
+			publication, err := aeron.conductor.FindExclusivePublication(registrationID)
 			if publication != nil || err != nil {
 				if err != nil {
 					aeron.conductor.onError(err)
@@ -349,8 +349,8 @@ func (aeron *Aeron) AsyncAddExclusivePublication(channel string, streamID int32)
 // Publication nor an error.
 // Also note that while aeron-go currently handles GetPublication and GetExclusivePublication the same way, they may
 // diverge in the future.  Other Aeron languages already handle these calls differently.
-func (aeron *Aeron) GetExclusivePublication(registrationID int64) (*Publication, error) {
-	return aeron.conductor.FindPublication(registrationID)
+func (aeron *Aeron) GetExclusivePublication(registrationID int64) (*ExclusivePublication, error) {
+	return aeron.conductor.FindExclusivePublication(registrationID)
 }
 
 // NextCorrelationID generates the next correlation id that is unique for the connected Media Driver.

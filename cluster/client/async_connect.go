@@ -65,7 +65,7 @@ type AsyncConnect struct {
 	egressImage              aeron.Image
 	memberByIdMap            map[int32]*memberIngress
 	ingressRegistrationId    int64
-	ingressPublication       *aeron.Publication
+	ingressPublication       aeron.Publisher
 }
 
 // Connect concludes the context and blocks until connected to the cluster or MessageTimeout elapses.

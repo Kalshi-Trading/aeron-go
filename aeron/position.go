@@ -43,11 +43,26 @@ func NewPosition(buffer *atomic.Buffer, id int32) Position {
 
 //go:norace
 func (pos *Position) get() int64 {
-	p := pos.buffer.GetInt64(pos.offset)
+	p := pos.buffer.GetInt64Volatile(pos.offset)
 	return p
 }
 
 //go:norace
 func (pos *Position) set(value int64) {
 	pos.buffer.PutInt64(pos.offset, value)
+}
+
+// ID returns the counter id of this position.
+func (pos *Position) ID() int32 {
+	return pos.id
+}
+
+//go:norace
+func (pos *Position) getVolatile() int64 {
+	return pos.buffer.GetInt64Volatile(pos.offset)
+}
+
+//go:norace
+func (pos *Position) setRelease(value int64) {
+	pos.buffer.PutInt64Ordered(pos.offset, value)
 }
