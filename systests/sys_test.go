@@ -49,6 +49,7 @@ type SysTestSuite struct {
 }
 
 func (suite *SysTestSuite) SetupTest() {
+	driver.SkipIfUnavailable(suite.T())
 	mediaDriver, err := driver.StartMediaDriver()
 	suite.Require().NoError(err, "Couldn't start Media Driver: ")
 	suite.mediaDriver = mediaDriver

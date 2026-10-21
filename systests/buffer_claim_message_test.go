@@ -39,6 +39,7 @@ type BufferClaimMessageTestSuite struct {
 }
 
 func (suite *BufferClaimMessageTestSuite) SetupSuite() {
+	driver.SkipIfUnavailable(suite.T())
 	mediaDriver, err := driver.StartMediaDriver()
 	suite.Require().NoError(err, "Couldn't start Media Driver")
 	suite.mediaDriver = mediaDriver

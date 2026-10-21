@@ -41,6 +41,7 @@ type CounterTestSuite struct {
 }
 
 func (s *CounterTestSuite) SetupTest() {
+	driver.SkipIfUnavailable(s.T())
 	mediaDriver, err := driver.StartMediaDriver()
 	s.Require().NoError(err, "Couldn't start Media Driver")
 	s.mediaDriver = mediaDriver

@@ -34,3 +34,7 @@ examples/basic_publisher_claim/basic_publisher_claim
 *.bin
 *.iml
 systests/systests
+# Aeron jar fetched by scripts/fetch-aeron-jar.sh
+systests/driver/aeron-all-*.jar
+# e2e binaries
+/bin/

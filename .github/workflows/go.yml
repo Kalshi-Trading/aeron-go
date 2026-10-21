@@ -2,29 +2,90 @@ name: Go
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, parity ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, parity ]
 
 jobs:
-  build:
+  unit:
+    name: unit (go ${{ matrix.go }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [ '1.21', 'stable' ]
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
+    - uses: actions/setup-go@v5
       with:
-        go-version: 1.21
+        go-version: ${{ matrix.go }}
 
     - name: Set up Java
       uses: actions/setup-java@v4
       with:
-        distribution: 'zulu'
+        distribution: 'temurin'
         java-version: '21'
+
+    - name: Fetch Aeron 1.53.3 jar for systests
+      run: scripts/fetch-aeron-jar.sh
 
     - name: Build
       run: go build -v ./...
 
+    - name: Vet
+      # unsafeptr/unreachable are pre-existing in aeron/util, flyweight, atomic, logbuffer and archive/control.go
+      run: go vet -unsafeptr=false -unreachable=false ./...
+
     - name: Test
-      run: go test -v ./...
+      env:
+        AERON_SYSTESTS_REQUIRED: '1'
+      run: go test -count=1 ./...
+
+  race:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+
+    - name: Race tests (core packages)
+      run: make race
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+
+    - name: Set up Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+
+    - name: Fetch Aeron 1.53.3 jar for systests
+      run: scripts/fetch-aeron-jar.sh
+
+    - name: Pre-pull base images from mirror.gcr.io (Docker Hub rate limits shared runners)
+      run: make docker-mirror
+
+    - name: AERON_E2E=1 tests against the docker Java 1.53.3 archiving driver
+      env:
+        AERON_SYSTESTS_REQUIRED: '1'
+      run: make e2e
+
+    - name: Go clients in containers (compose profile e2e)
+      run: make e2e-docker
+
+    - name: Driver logs on failure
+      if: failure()
+      run: |
+        docker compose -f docker/docker-compose.yml --profile e2e logs --no-color || true
+        docker compose -f docker/cluster.compose.yml logs --no-color || true
