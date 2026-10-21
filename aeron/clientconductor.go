@@ -163,10 +163,10 @@ type DriverProxy interface {
 	TimeOfLastDriverKeepalive() int64
 	NextCorrelationID() int64
 	AddSubscription(channel string, streamID int32) (int64, error)
-	RemoveSubscription(registrationID int64) error
+	RemoveSubscription(registrationID int64) (int64, error)
 	AddPublication(channel string, streamID int32) (int64, error)
 	AddExclusivePublication(channel string, streamID int32) (int64, error)
-	RemovePublication(registrationID int64) error
+	RemovePublication(registrationID int64, revoke bool) (int64, error)
 	ClientClose() error
 	AddDestination(registrationID int64, channel string) (int64, error)
 	RemoveDestination(registrationID int64, channel string) (int64, error)
@@ -464,7 +464,7 @@ func (cc *ClientConductor) releasePublication(regID int64) error {
 	pubcnt := len(cc.pubs)
 	for i, pub := range cc.pubs {
 		if pub != nil && pub.regID == regID {
-			if err := cc.driverProxy.RemovePublication(regID); err != nil {
+			if _, err := cc.driverProxy.RemovePublication(regID, false); err != nil {
 				return err
 			}
 
@@ -569,7 +569,7 @@ func (cc *ClientConductor) releaseSubscription(regID int64, images []Image) erro
 				logger.Debugf("Removing subscription: %d; %v", regID, images)
 			}
 
-			if err := cc.driverProxy.RemoveSubscription(regID); err != nil {
+			if _, err := cc.driverProxy.RemoveSubscription(regID); err != nil {
 				return err
 			}
 
