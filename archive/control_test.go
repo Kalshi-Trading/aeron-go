@@ -2,6 +2,7 @@ package archive
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"reflect"
 	"testing"
@@ -25,7 +26,9 @@ func TestControl_PollForResponse(t *testing.T) {
 		correlations.Store(int64(1), control)
 		id, err := control.PollForResponse(1, 0)
 		assert.Zero(t, id)
-		assert.EqualError(t, err, `timeout waiting for correlationID 1`)
+		var te *aeron.TimeoutError
+		assert.True(t, errors.As(err, &te), "%v", err)
+		assert.Contains(t, err.Error(), "awaiting response - correlationId=1")
 	})
 
 	t.Run("returns the error response", func(t *testing.T) {
