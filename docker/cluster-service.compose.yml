@@ -1,0 +1,56 @@
+# Java Aeron 1.53.3 ClusteredMediaDriver (media driver + archive + consensus module, single member)
+# for running the Go clustered service container (cluster/) as the clustered service on the host.
+#
+#   docker compose -f docker/cluster-service.compose.yml up -d --build cluster-node
+#   AERON_E2E=1 AERON_CLUSTER_E2E_DIR=/dev/shm/aeron-cluster-svc go test ./cluster -run E2E -v
+#   docker compose -f docker/cluster-service.compose.yml down -v
+#
+# The consensus module waits for one service (aeron.cluster.service.count=1) to ack on the IPC control
+# channel; the Go service runs on the host sharing /dev/shm. Cluster/archive state lives in the
+# cluster-data volume so `docker compose restart cluster-node` exercises snapshot recovery.
+services:
+  cluster-node:
+    build: .
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    shm_size: 2g
+    volumes:
+      - /dev/shm:/dev/shm
+      - cluster-data:/data/cluster
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-cluster-svc
+        -Daeron.dir.delete.on.start=true
+        -Daeron.client.liveness.timeout=10000000000
+        -Daeron.publication.unblock.timeout=20000000000
+        -Daeron.archive.dir=/data/cluster/archive
+        -Daeron.archive.control.channel=aeron:udp?endpoint=localhost:8110
+        -Daeron.archive.control.stream.id=10
+        -Daeron.archive.replication.channel=aeron:udp?endpoint=localhost:0
+        -Daeron.archive.id=7
+        -Daeron.threading.mode=SHARED
+        -Daeron.archive.threading.mode=SHARED
+        -Daeron.cluster.dir=/data/cluster/cluster
+        -Daeron.cluster.member.id=0
+        -Daeron.cluster.members=0,localhost:20110,localhost:20111,localhost:20112,localhost:20113,localhost:8110
+        -Daeron.cluster.ingress.channel=aeron:udp
+        -Daeron.cluster.log.channel=aeron:ipc?term-length=4m
+        -Daeron.cluster.replication.channel=aeron:udp?endpoint=localhost:0
+        -Daeron.cluster.service.count=1
+        -Daeron.cluster.session.timeout=30000000000
+        -Daeron.cluster.leader.heartbeat.timeout=30000000000
+        -Daeron.cluster.service.heartbeat.timeout=60000000000
+    command: ["io.aeron.cluster.ClusteredMediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-cluster-svc/cnc.dat"]
+      interval: 1s
+      retries: 30
+
+volumes:
+  cluster-data:
+    # tmpfs owned by uid 1000 so the non-root container user can write
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "uid=1000,gid=1000,size=1g"
