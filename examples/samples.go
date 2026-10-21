@@ -200,3 +200,15 @@ func Linger() {
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
+
+// AwaitConnected waits up to timeout for pub to see a subscriber so the first offer is not dropped as NOT_CONNECTED.
+func AwaitConnected(ctx context.Context, pub interface{ IsConnected() bool }, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for !pub.IsConnected() {
+		if ctx.Err() != nil || time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return true
+}
