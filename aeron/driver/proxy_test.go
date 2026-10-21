@@ -308,6 +308,9 @@ func (l *recordingListener) OnUnavailableCounter(correlationID int64, counterID 
 	l.record("OnUnavailableCounter", correlationID, counterID)
 }
 func (l *recordingListener) OnClientTimeout(clientID int64) { l.record("OnClientTimeout", clientID) }
+func (l *recordingListener) OnStaticCounter(correlationID int64, counterID int32) {
+	l.record("OnStaticCounter", correlationID, counterID)
+}
 func (l *recordingListener) OnPublicationError(buffer *atomic.Buffer, offset int32, length int32) {
 	var frame command.PublicationErrorFrame
 	l.record("OnPublicationError", frame.Wrap(buffer, offset).Value(), length)
@@ -315,10 +318,6 @@ func (l *recordingListener) OnPublicationError(buffer *atomic.Buffer, offset int
 
 type extendedListener struct {
 	recordingListener
-}
-
-func (l *extendedListener) OnStaticCounter(correlationID int64, counterID int32) {
-	l.record("OnStaticCounter", correlationID, counterID)
 }
 
 func (l *extendedListener) OnNextAvailableSessionID(correlationID int64, nextSessionID int32) {
@@ -443,7 +442,6 @@ func TestListenerAdapterSkipsOptionalCallbacks(t *testing.T) {
 	adapter := NewAdapter(listener, nil)
 	buf := atomic.MakeBuffer(make([]byte, 256))
 	assert.NotPanics(t, func() {
-		adapter.OnMessage(command.OnStaticCounter, buf, 0, command.StaticCounterLength)
 		adapter.OnMessage(command.OnNextAvailableSessionID, buf, 0, command.NextAvailableSessionIDLength)
 	})
 	assert.Empty(t, listener.calls)

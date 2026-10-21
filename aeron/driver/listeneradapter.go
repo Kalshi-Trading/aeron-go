@@ -74,8 +74,8 @@ func (pos *SubscriberPosition) IndicatorID() int32 {
 // Listener receives decoded driver responses. The adapter does no correlation filtering: every message on the
 // to-clients broadcast buffer is delivered, and the listener decides whether it concerns this client.
 //
-// A Listener may additionally implement StaticCounterListener and NextAvailableSessionIDListener to receive the
-// corresponding responses; they are dropped otherwise.
+// A Listener may additionally implement NextAvailableSessionIDListener to receive ON_NEXT_AVAILABLE_SESSION_ID;
+// it is dropped otherwise.
 type Listener interface {
 	OnNewPublication(streamID int32, sessionID int32, positionLimitCounterID int32, channelStatusIndicatorID int32,
 		logFileName string, correlationID int64, registrationID int64)
@@ -91,14 +91,11 @@ type Listener interface {
 	OnAvailableCounter(correlationID int64, counterID int32)
 	OnUnavailableCounter(correlationID int64, counterID int32)
 	OnClientTimeout(clientID int64)
+	// OnStaticCounter receives ON_STATIC_COUNTER responses to AddStaticCounter.
+	OnStaticCounter(correlationID int64, counterID int32)
 	// OnPublicationError receives ON_PUBLICATION_ERROR (an error frame received by a publication). It is broadcast to
 	// all clients; decode with command.PublicationErrorFrame and filter on RegistrationID.
 	OnPublicationError(buffer *atomic.Buffer, offset int32, length int32)
-}
-
-// StaticCounterListener receives ON_STATIC_COUNTER responses to AddStaticCounter.
-type StaticCounterListener interface {
-	OnStaticCounter(correlationID int64, counterID int32)
 }
 
 // NextAvailableSessionIDListener receives ON_NEXT_AVAILABLE_SESSION_ID responses to NextAvailableSessionID.
@@ -192,10 +189,8 @@ func (adapter *ListenerAdapter) OnMessage(msgTypeID int32, buffer *atomic.Buffer
 		listener.OnClientTimeout(msg.ClientID())
 
 	case command.OnStaticCounter:
-		if l, ok := listener.(StaticCounterListener); ok {
-			msg := adapter.staticCounter.Wrap(buffer, offset)
-			l.OnStaticCounter(msg.CorrelationID(), msg.CounterID())
-		}
+		msg := adapter.staticCounter.Wrap(buffer, offset)
+		listener.OnStaticCounter(msg.CorrelationID(), msg.CounterID())
 
 	case command.OnPublicationError:
 		listener.OnPublicationError(buffer, offset, length)

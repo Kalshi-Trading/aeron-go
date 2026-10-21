@@ -181,7 +181,7 @@ func TestE2ERecordingAndReplay(t *testing.T) {
 	}
 
 	t.Run("BoundedReplayWithCounter", func(t *testing.T) {
-		counterRegistrationID, err := a.aeron.AddCounterByLabel(1001, "e2e replay bound")
+		counterRegistrationID, err := a.aeron.AsyncAddCounterByLabel(1001, "e2e replay bound")
 		if err != nil {
 			t.Fatal(err)
 		}
