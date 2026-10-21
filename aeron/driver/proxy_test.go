@@ -2,6 +2,7 @@ package driver
 
 import (
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
@@ -447,17 +448,29 @@ func TestListenerAdapterSkipsOptionalCallbacks(t *testing.T) {
 	assert.Empty(t, listener.calls)
 }
 
-// Java DriverEventsAdapter only routes CHANNEL_ENDPOINT_ERROR to onChannelEndpointError; a bind failure reported by
-// the Java driver as GENERIC_ERROR "Address already in use" is a normal error response for the offending command.
-func TestListenerAdapterAddressInUseIsErrorResponse(t *testing.T) {
+func TestProxyRejectsCommandLongerThanMaxMsgLength(t *testing.T) {
+	f := newRingFixture(t)
+	channel := "aeron:udp?endpoint=localhost:40123|alias=" + strings.Repeat("x", int(f.ring.MaxMsgLength()))
+	var err error
+	require.NotPanics(t, func() { _, err = f.proxy.AddPublication(channel, 1) })
+	require.ErrorContains(t, err, "exceeds maxMsgLength")
+	require.NotPanics(t, func() { _, err = f.proxy.AddSubscription(channel, 1) })
+	require.Error(t, err)
+	assert.Zero(t, f.ring.Size(), "nothing claimed or committed")
+	_, err = f.proxy.AddPublication("aeron:ipc", 1)
+	require.NoError(t, err, "ring still usable")
+}
+
+func TestListenerAdapterRoutesOnErrorByCodeOnly(t *testing.T) {
 	listener := &recordingListener{}
 	adapter := NewAdapter(listener, nil)
-	buf := atomic.MakeBuffer(make([]byte, 256))
+	buf, off := atomic.MakeBuffer(make([]byte, 1024)), int32(0)
 	var er command.ErrorResponse
-	er.Wrap(buf, 0)
-	er.SetOffendingCommandCorrelationID(55)
+	er.Wrap(buf, off)
+	er.SetOffendingCommandCorrelationID(7)
 	er.SetErrorCode(command.ErrorCodeGenericError)
 	er.SetErrorMessage("java.net.BindException: Address already in use")
-	adapter.OnMessage(command.OnError, buf, 0, er.Length())
-	assert.Equal(t, []string{"OnErrorResponse"}, listener.calls)
+	adapter.OnMessage(command.OnError, buf, off, er.Length())
+	require.Equal(t, []string{"OnErrorResponse"}, listener.calls)
+	assert.Equal(t, []interface{}{int64(7), command.ErrorCodeGenericError, "java.net.BindException: Address already in use"}, listener.args[0])
 }
