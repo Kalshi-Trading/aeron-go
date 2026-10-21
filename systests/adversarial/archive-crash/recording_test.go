@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const extendChannel = "aeron:udp?endpoint=localhost:27339"
+const extendChannel = "aeron:udp?endpoint=localhost:27349"
 
 // TestArchiveKillDuringActiveRecording SIGKILLs the archive while each publisher type is being recorded. The stale
 // client must fail within its message timeout, and after a restart the recording must be listed with a stop
