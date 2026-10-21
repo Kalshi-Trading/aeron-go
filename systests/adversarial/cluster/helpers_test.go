@@ -360,6 +360,9 @@ type client struct {
 	offered advproto.Ranges
 	results map[int64]int
 	lastKA  time.Time
+	kaLog   []string
+	obs     *aeron.Aeron
+	obsLdr  *aeron.Aeron
 }
 
 // idle polls and keeps the session alive (Java clients must send keep-alives within the session timeout).
@@ -367,7 +370,25 @@ func (c *client) idle() {
 	c.Poll(c.o.controlled)
 	if !c.AC.IsClosed() && time.Since(c.lastKA) > 500*time.Millisecond {
 		c.lastKA = time.Now()
-		_, _ = c.AC.SendKeepAlive()
+		ok, err := c.AC.SendKeepAlive()
+		pos := ""
+		if c.obs != nil {
+			pub := c.AC.IngressPublication()
+			sid := fmt.Sprintf(" %d %d ", pub.SessionID(), pub.StreamID())
+			c.obs.CounterReader().Scan(func(ct counters.Counter) {
+				if strings.HasPrefix(ct.Label, "snd-pos") && strings.Contains(ct.Label, sid) {
+					pos = fmt.Sprintf(" pub-pos=%d snd-pos=%d", pub.Position(), ct.Value)
+				}
+			})
+		}
+		if c.obsLdr != nil {
+			c.obsLdr.CounterReader().Scan(func(ct counters.Counter) {
+				if strings.HasPrefix(ct.Label, "sub-pos") && strings.Contains(ct.Label, " 9601 ") {
+					pos += fmt.Sprintf(" ldr[%s]=%d", strings.Fields(ct.Label)[2], ct.Value)
+				}
+			})
+		}
+		c.kaLog = append(c.kaLog, fmt.Sprintf("%s ok=%v err=%v%s", time.Now().Format("15:04:05.000"), ok, err, pos))
 	}
 }
 
@@ -442,7 +463,7 @@ func (c *client) sendAcked(t *testing.T, n int64, timeout time.Duration) {
 			time.Sleep(100 * time.Microsecond)
 		}
 		require.False(t, time.Now().After(deadline), "offer of %d messages timed out at seq %d", n, c.next)
-		require.False(t, c.AC.IsClosed(), "client closed while sending")
+		require.False(t, c.AC.IsClosed(), "client closed while sending; keepalives=%v", c.kaLog)
 	}
 	c.awaitAcked(t, target-1, timeout)
 }
@@ -486,6 +507,8 @@ func (s *stack) dump(t *testing.T, c *client, live []*member) *advproto.Dump {
 	}
 	require.Zero(t, first.State.Dups, "duplicate committed messages")
 	require.Zero(t, first.State.Corrupt, "corrupt committed messages")
+	require.Zero(t, first.State.TimerDups, "timers fired twice")
+	require.LessOrEqual(t, first.State.TimersFired.Count(), first.State.TimersScheduled)
 	return first
 }
 

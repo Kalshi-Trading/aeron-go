@@ -31,9 +31,13 @@ type service struct {
 	cluster  cluster.Cluster
 	state    *advproto.Replicated
 	loaded   bool
-	reply    *atomic.Buffer
-	replyArr []byte
+	// stalled holds sessions whose egress stayed back-pressured past echoBudget (e.g. a SIGKILLed client whose
+	// driver has not yet timed it out). They get a single echo attempt per message so a dead client cannot stall
+	// the service, the log and, through log back-pressure, every other session's ingress and keep-alives.
+	stalled map[int64]bool
 }
+
+const echoBudget = 100 * time.Millisecond
 
 func event(format string, args ...interface{}) {
 	fmt.Printf("EVENT "+format+"\n", args...)
@@ -43,12 +47,16 @@ func (s *service) OnStart(c cluster.Cluster, image aeron.Image) {
 	s.cluster = c
 	s.state = advproto.NewReplicated()
 	if image != nil {
-		var data []byte
+		var data, pad []byte
 		assembler := aeron.NewFragmentAssembler(func(buf *atomic.Buffer, offset, length int32, _ *logbuffer.Header) {
-			data = buf.GetBytesArray(offset, length)
+			if data == nil {
+				data = buf.GetBytesArray(offset, length)
+			} else if pad == nil {
+				pad = buf.GetBytesArray(offset, length)
+			}
 		}, 0)
 		deadline := time.Now().Add(30 * time.Second)
-		for data == nil {
+		for pad == nil {
 			if image.Poll(assembler.OnFragment, 10) == 0 {
 				if image.IsClosed() || time.Now().After(deadline) {
 					panic("snapshot image closed before state was read")
@@ -58,6 +66,9 @@ func (s *service) OnStart(c cluster.Cluster, image aeron.Image) {
 		}
 		if err := json.Unmarshal(data, s.state); err != nil {
 			panic(err)
+		}
+		if kind, _, _, err := advproto.Decode(pad); err != nil || kind != advproto.KindSnapshotPad {
+			panic(fmt.Sprintf("snapshot pad invalid: kind=%d err=%v", kind, err))
 		}
 		s.loaded = true
 	}
@@ -99,6 +110,10 @@ func (s *service) OnSessionMessage(session cluster.ClientSession, timestamp int6
 		s.state.Applied[tag] = r
 		s.state.Messages++
 		s.state.Bytes += int64(length)
+		if seq%40 == 0 {
+			s.state.TimersScheduled++
+			s.cluster.ScheduleTimer(tag<<32|seq, timestamp+100)
+		}
 	case advproto.KindDump:
 		d := &advproto.Dump{Node: s.node, DumpID: seq, LogPosition: s.cluster.LogPosition(), State: s.state,
 			SnapshotLoaded: s.loaded}
@@ -109,17 +124,33 @@ func (s *service) OnSessionMessage(session cluster.ClientSession, timestamp int6
 	if session == nil {
 		return
 	}
-	advproto.Encode(s.replyArr, kind, tag, seq, 0)
-	for i := 0; i < 2000; i++ {
-		r := session.Offer(s.reply, 0, advproto.HeaderLength, nil)
+	// Echo the whole message so large messages are fragmented on egress too.
+	id := session.Id()
+	deadline := time.Now().Add(echoBudget)
+	for {
+		r := session.Offer(buffer, offset, length, nil)
 		if r > 0 || r == cluster.ClientSessionMockedOffer || r == aeron.NotConnected || r == aeron.PublicationClosed {
+			delete(s.stalled, id)
+			return
+		}
+		if s.stalled[id] || time.Now().After(deadline) {
+			if !s.stalled[id] {
+				s.stalled[id] = true
+				event("egress-stalled session=%d result=%d", id, r)
+			}
 			return
 		}
 		s.cluster.IdleStrategy().Idle(0)
 	}
 }
 
-func (s *service) OnTimerEvent(int64, int64) { s.state.Timers++ }
+func (s *service) OnTimerEvent(correlationID, timestamp int64) {
+	if !s.state.TimersFired.Add(correlationID) {
+		s.state.TimerDups++
+		event("timer-dup id=%d", correlationID)
+	}
+	s.state.Mix(5, correlationID, timestamp)
+}
 
 func (s *service) OnTakeSnapshot(publication *aeron.ExclusivePublication) {
 	b, err := json.Marshal(s.state)
@@ -134,6 +165,19 @@ func (s *service) OnTakeSnapshot(publication *aeron.ExclusivePublication) {
 		}
 		if r == aeron.PublicationClosed || r == aeron.MaxPositionExceeded {
 			panic(fmt.Sprintf("snapshot offer failed: %d", r))
+		}
+		s.cluster.IdleStrategy().Idle(0)
+	}
+	pad := make([]byte, advproto.HeaderLength+100*1024)
+	n := advproto.Encode(pad, advproto.KindSnapshotPad, 0, s.state.Messages, len(pad)-advproto.HeaderLength)
+	padBuf := atomic.MakeBuffer(pad)
+	for {
+		r := publication.Offer(padBuf, 0, int32(n), nil)
+		if r > 0 {
+			break
+		}
+		if r == aeron.PublicationClosed || r == aeron.MaxPositionExceeded {
+			panic(fmt.Sprintf("snapshot pad offer failed: %d", r))
 		}
 		s.cluster.IdleStrategy().Idle(0)
 	}
@@ -159,8 +203,7 @@ func main() {
 	ctx := aeron.NewContext().AeronDir(*aeronDir)
 	opts := cluster.NewOptions()
 	opts.ClusterDir = *clusterDir
-	replyArr := make([]byte, advproto.HeaderLength)
-	svc := &service{node: int32(*node), stateDir: *stateDir, reply: atomic.MakeBuffer(replyArr), replyArr: replyArr}
+	svc := &service{node: int32(*node), stateDir: *stateDir, stalled: map[int64]bool{}}
 	agent, err := cluster.NewClusteredServiceAgent(ctx, opts, svc)
 	if err != nil {
 		event("exit err=%v", err)

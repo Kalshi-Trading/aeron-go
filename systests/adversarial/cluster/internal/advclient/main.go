@@ -21,6 +21,7 @@ func main() {
 	count := flag.Int64("count", 10, "messages to send")
 	size := flag.Int("size", 64, "payload size")
 	hold := flag.Bool("hold", false, "keep polling after sending")
+	flag.BoolVar(&o.Exclusive, "exclusive", false, "use an ExclusivePublication for ingress")
 	flag.Parse()
 
 	s, err := advproto.NewSender(o)

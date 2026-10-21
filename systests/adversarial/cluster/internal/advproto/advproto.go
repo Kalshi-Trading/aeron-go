@@ -16,6 +16,8 @@ import (
 const (
 	KindData int32 = 1
 	KindDump int32 = 2
+	// KindSnapshotPad is a large fragmented message written after the state in every snapshot.
+	KindSnapshotPad int32 = 3
 )
 
 // HeaderLength is the fixed prefix of every message: kind, length, tag, seq.
@@ -114,7 +116,10 @@ type Replicated struct {
 	Closes   map[string]int64
 	// ClosedSessions maps a closed cluster session id to its close reason.
 	ClosedSessions map[int64]string
-	Timers         int64
+	// TimersScheduled/TimersFired count service timers; TimerDups counts timers that fired twice.
+	TimersScheduled int64
+	TimersFired     Ranges
+	TimerDups       int64
 }
 
 // NewReplicated returns empty state.
