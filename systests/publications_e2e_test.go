@@ -154,7 +154,7 @@ func TestPublicationsE2E(t *testing.T) {
 		require.NoError(t, err)
 		defer pub.Close()
 		h.waitFor("connected", pub.IsConnected)
-		require.Equal(t, aeron.ChannelStatusActive, pub.ChannelStatus())
+		require.Equal(t, int64(aeron.ChannelStatusActive), pub.ChannelStatus())
 		addrs := pub.LocalSocketAddresses()
 		t.Logf("local socket addresses: %v", addrs)
 		require.NotEmpty(t, addrs)

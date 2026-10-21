@@ -56,7 +56,7 @@ type Publisher interface {
 	PositionLimitID() int32
 	AvailableWindow() int64
 
-	ChannelStatus() int
+	ChannelStatus() int64
 	ChannelStatusID() int32
 	LocalSocketAddresses() []string
 	AddDestination(endpointChannel string) error

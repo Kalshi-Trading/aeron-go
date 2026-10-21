@@ -197,7 +197,7 @@ func TestPublicationAccessors(t *testing.T) {
 	assert.Equal(t, int32(0), pub.PositionLimitID())
 	assert.True(t, pub.IsConnected())
 	assert.False(t, pub.IsRevoked())
-	assert.Equal(t, ChannelStatusActive, pub.ChannelStatus())
+	assert.Equal(t, int64(ChannelStatusActive), pub.ChannelStatus())
 	assert.Nil(t, pub.LocalSocketAddresses())
 
 	l.lb.Buffer(logbuffer.LogMetaDataSectionIndex).PutUInt8(logIsPublicationRevokedOffset, 1)
@@ -209,7 +209,7 @@ func TestPublicationAccessors(t *testing.T) {
 	assert.Equal(t, PublicationClosed, pub.Position())
 	assert.Equal(t, PublicationClosed, pub.PositionLimit())
 	assert.Equal(t, PublicationClosed, pub.AvailableWindow())
-	assert.Equal(t, ChannelStatusNoIdAllocated, pub.ChannelStatus())
+	assert.Equal(t, int64(ChannelStatusNoIdAllocated), pub.ChannelStatus())
 	assert.Equal(t, PublicationClosed, pub.Offer(bufOf(make([]byte, 8)), 0, 8, nil))
 	assert.Error(t, pub.AddDestination("aeron:udp?endpoint=localhost:1"))
 }

@@ -22,7 +22,7 @@ import (
 
 // ChannelStatus returns the channel endpoint status of this publication (status.Active etc.), status.Active for IPC
 // (no status counter) and status.NoIDAllocated-equivalent ChannelStatusNoIdAllocated when closed.
-func (pub *Publication) ChannelStatus() int64 {
+func (pub *publicationBase) ChannelStatus() int64 {
 	if pub.IsClosed() {
 		return int64(ChannelStatusNoIdAllocated)
 	}
@@ -34,6 +34,9 @@ func (pub *Publication) ChannelStatus() int64 {
 
 // LocalSocketAddresses returns the local socket addresses bound by this publication's channel (e.g. the control
 // address of an MDC publication), or nil if the channel is not active.
-func (pub *Publication) LocalSocketAddresses() []string {
+func (pub *publicationBase) LocalSocketAddresses() []string {
+	if pub.IsClosed() || pub.channelStatusIndicatorID == status.NoIDAllocated {
+		return nil
+	}
 	return status.FindAddresses(pub.conductor.CounterReader(), pub.ChannelStatus(), pub.channelStatusIndicatorID)
 }

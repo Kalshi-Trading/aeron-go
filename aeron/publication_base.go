@@ -82,38 +82,6 @@ func (pub *publicationBase) ChannelStatusID() int32 {
 	return pub.channelStatusIndicatorID
 }
 
-// ChannelStatus returns the status of the media channel for this Publication: ChannelStatusActive,
-// ChannelStatusErrored, etc. Returns ChannelStatusNoIdAllocated if the publication is closed.
-func (pub *publicationBase) ChannelStatus() int {
-	if pub.IsClosed() {
-		return ChannelStatusNoIdAllocated
-	}
-	if pub.channelStatusIndicatorID == ChannelStatusNoIdAllocated {
-		return ChannelStatusActive // IPC publications have no channel status counter
-	}
-	return int(pub.conductor.CounterReader().GetCounterValue(pub.channelStatusIndicatorID))
-}
-
-// LocalSocketAddresses returns the bound local socket addresses ("ip:port" or "[ip6]:port") of this publication's
-// channel endpoint. Empty if the channel is not active.
-func (pub *publicationBase) LocalSocketAddresses() []string {
-	if pub.ChannelStatus() != ChannelStatusActive || pub.channelStatusIndicatorID == ChannelStatusNoIdAllocated {
-		return nil
-	}
-	var bindings []string
-	reader := pub.conductor.CounterReader()
-	reader.ScanForType(LocalSocketAddressStatusCounterTypeId, func(counterId int32, keyBuffer *atomic.Buffer) bool {
-		channelStatusId := keyBuffer.GetInt32(ChannelStatusIdOffset)
-		length := keyBuffer.GetInt32(LocalSocketAddressLengthOffset)
-		if channelStatusId == pub.channelStatusIndicatorID && length > 0 &&
-			reader.GetCounterValue(counterId) == ChannelStatusActive {
-			bindings = append(bindings, string(keyBuffer.GetBytesArray(LocalSocketAddressStringOffset, length)))
-		}
-		return true
-	})
-	return bindings
-}
-
 // RegistrationID returns the registration id.
 func (pub *publicationBase) RegistrationID() int64 {
 	return pub.regID
