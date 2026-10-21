@@ -208,7 +208,7 @@ func (aeron *Aeron) AddSubscriptionDeprecated(channel string, streamID int32) ch
 				close(ch)
 				return
 			}
-			aeron.context.idleStrategy.Idle(0)
+			aeron.awaitIdle()
 		}
 	}()
 	return ch
@@ -258,7 +258,7 @@ func (aeron *Aeron) AddPublicationDeprecated(channel string, streamID int32) cha
 				close(ch)
 				return
 			}
-			aeron.context.idleStrategy.Idle(0)
+			aeron.awaitIdle()
 		}
 	}()
 
@@ -332,7 +332,7 @@ func (aeron *Aeron) AddExclusivePublicationDeprecated(channel string, streamID i
 				close(ch)
 				return
 			}
-			aeron.context.idleStrategy.Idle(0)
+			aeron.awaitIdle()
 		}
 	}()
 
