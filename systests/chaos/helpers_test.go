@@ -64,10 +64,26 @@ func docker(t *testing.T, args ...string) {
 	require.NoError(t, err, "docker %v: %s", args, out)
 }
 
-// restartDriver starts the chaos driver (and its archive) and waits for both to be healthy.
+// restartStack starts the chaos driver (and its archive) and waits for both to be healthy. After the driver has been
+// killed the archive terminates on its own driver timeout, so wait for (or force) that first: otherwise compose sees it
+// still running and then fails when it exits.
 func restartStack(t *testing.T) {
 	t.Helper()
+	if !running(chaosDriver) {
+		deadline := time.Now().Add(15 * time.Second)
+		for running(chaosArchive) && time.Now().Before(deadline) {
+			time.Sleep(200 * time.Millisecond)
+		}
+		if running(chaosArchive) {
+			docker(t, "kill", chaosArchive)
+		}
+	}
 	require.NoError(t, compose("up", "-d", "--wait", "chaos-driver", "chaos-archive"))
+}
+
+func running(container string) bool {
+	out, err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", container).Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
 func newContext(dir string) *aeron.Context {
