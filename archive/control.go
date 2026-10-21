@@ -31,7 +31,6 @@ const controlFragmentLimit = 10
 // Control contains everything required for the archive subscription/response side
 type Control struct {
 	Subscription *aeron.Subscription
-	State        controlState
 
 	// Polling results
 	Results ControlResults
@@ -63,24 +62,7 @@ type PollContext struct {
 	correlationID int64
 }
 
-// Archive Connection State used internally for connection establishment
-const (
-	ControlStateError              = -1
-	ControlStateNew                = iota
-	ControlStateConnectRequestSent = iota
-	ControlStateChallenged         = iota
-	ControlStateConnectRequestOk   = iota
-	ControlStateConnected          = iota
-	ControlStateTimedOut           = iota
-)
-
 var ErrNotConnected = fmt.Errorf("not connected")
-
-// Used internally to handle connection state
-type controlState struct {
-	state int
-	err   error
-}
 
 // CodecIds stops us allocating every object when we need only one
 // Arguably SBE should give us a static value
@@ -93,12 +75,10 @@ type CodecIds struct {
 	recordingStarted                uint16
 	recordingProgress               uint16
 	recordingStopped                uint16
+	ping                            uint16
 }
 
 var codecIds CodecIds
-
-// pingTemplateId identifies the archive control session liveness Ping (sent by 1.53+ archives)
-var pingTemplateId = (&codecs.Ping{}).SbeTemplateId()
 
 func init() {
 	var controlResponse codecs.ControlResponse
@@ -118,6 +98,7 @@ func init() {
 	codecIds.recordingStarted = recordingStarted.SbeTemplateId()
 	codecIds.recordingProgress = recordingProgress.SbeTemplateId()
 	codecIds.recordingStopped = recordingStopped.SbeTemplateId()
+	codecIds.ping = (*codecs.Ping)(nil).SbeTemplateId()
 }
 
 func controlFragmentHandler(context interface{}, buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) (action term.ControlledPollAction) {
@@ -209,143 +190,14 @@ func controlFragmentHandler(context interface{}, buffer *atomic.Buffer, offset i
 	case codecIds.recordingSubscriptionDescriptor:
 		logger.Debugf("controlFragmentHandler: ignoring RecordingSubscriptionDescriptor type %d", hdr.TemplateId)
 
-	case pingTemplateId:
-		// Archive session liveness heartbeat (1.53+), nothing to do
+	case codecIds.ping:
+		// Liveness message from the archive's control session, nothing to do.
+
 	default:
 		// This can happen when testing/adding new functionality
 		fmt.Printf("controlFragmentHandler: Unexpected message type %d\n", hdr.TemplateId)
 	}
 	return
-}
-
-// ConnectionControlFragmentHandler is the connection handling specific fragment handler.
-// This mechanism only alows us to pass results back via global state which we do in control.State
-func ConnectionControlFragmentHandler(context *PollContext, buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
-	logger.Debugf("ConnectionControlFragmentHandler: correlationID:%d offset:%d length: %d header: %#v", context.correlationID, offset, length, header)
-
-	var hdr codecs.SbeGoMessageHeader
-
-	buf := new(bytes.Buffer)
-	buffer.WriteBytes(buf, offset, length)
-
-	marshaller := codecs.NewSbeGoMarshaller()
-	if err := hdr.Decode(marshaller, buf); err != nil {
-		// Not much to be done here as we can't correlate
-		err2 := fmt.Errorf("ConnectionControlFragmentHandler() failed to decode control message header: %w", err)
-		// Call the global error handler, ugly but it's all we've got
-		if context.control.archive.Listeners.ErrorListener != nil {
-			context.control.archive.Listeners.ErrorListener(err2)
-		}
-	}
-
-	switch hdr.TemplateId {
-	case codecIds.controlResponse:
-		var controlResponse = new(codecs.ControlResponse)
-		logger.Debugf("Received controlResponse: length %d", buf.Len())
-		if err := controlResponse.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
-			// Not much to be done here as we can't correlate
-			err2 := fmt.Errorf("ConnectionControlFragmentHandler failed to decode control response: %w", err)
-			if context.control.archive.Listeners.ErrorListener != nil {
-				context.control.archive.Listeners.ErrorListener(err2)
-			}
-			logger.Debugf("ConnectionControlFragmentHandler failed to decode control response: %w", err)
-			return
-		}
-
-		// Look this message up
-		c, ok := correlations.Load(controlResponse.CorrelationId)
-		if !ok {
-			logger.Debugf("connectionControlFragmentHandler/controlResponse: ignoring correlationID=%d [%s]\n%#v", controlResponse.CorrelationId, string(controlResponse.ErrorMessage), controlResponse)
-			return
-		}
-		control := c.(*Control)
-
-		// Check this was for us
-		if controlResponse.CorrelationId == context.correlationID {
-			// Check result
-			if controlResponse.Code != codecs.ControlResponseCode.OK {
-				control.State.state = ControlStateError
-				control.State.err = fmt.Errorf("Control Response failure: %s", controlResponse.ErrorMessage)
-				if context.control.archive.Listeners.ErrorListener != nil {
-					context.control.archive.Listeners.ErrorListener(control.State.err)
-				}
-				return
-			}
-
-			// assert state change
-			if control.State.state != ControlStateConnectRequestSent {
-				control.State.state = ControlStateError
-				control.State.err = fmt.Errorf("Control Response not expecting response")
-				if context.control.archive.Listeners.ErrorListener != nil {
-					context.control.archive.Listeners.ErrorListener(control.State.err)
-				}
-			}
-
-			// Looking good, so update state and store the SessionID
-			control.State.state = ControlStateConnected
-			control.State.err = nil
-			control.archive.SessionID = controlResponse.ControlSessionId
-		} else {
-			// It's conceivable if the same application is making concurrent connection attempts using
-			// the same channel/stream that we can reach here which is our parent's problem
-			logger.Debugf("connectionControlFragmentHandler/controlResponse: ignoring correlationID=%d", controlResponse.CorrelationId)
-		}
-
-	case codecIds.challenge:
-		var challenge = new(codecs.Challenge)
-
-		if err := challenge.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
-			// Not much to be done here as we can't correlate
-			err2 := fmt.Errorf("ControlFragmentHandler failed to decode challenge: %w", err)
-			if context.control.archive.Listeners.ErrorListener != nil {
-				context.control.archive.Listeners.ErrorListener(err2)
-			}
-		}
-
-		logger.Infof("ControlFragmentHandler: challenge:%s, session:%d, correlationID:%d", challenge.EncodedChallenge, challenge.ControlSessionId, challenge.CorrelationId)
-
-		// Look this message up
-		c, ok := correlations.Load(challenge.CorrelationId)
-		if !ok {
-			logger.Debugf("connectionControlFragmentHandler/controlResponse: ignoring correlationID=%d", challenge.CorrelationId)
-			return
-		}
-		control := c.(*Control)
-
-		// Check this was for us
-		if challenge.CorrelationId == context.correlationID {
-
-			// Check the challenge is expected iff our option for this is not nil
-			if control.archive.Options.AuthChallenge != nil {
-				if !bytes.Equal(control.archive.Options.AuthChallenge, challenge.EncodedChallenge) {
-					control.State.err = fmt.Errorf("ChallengeResponse Unexpected: expected:%v received:%v", control.archive.Options.AuthChallenge, challenge.EncodedChallenge)
-					return
-				}
-			}
-
-			// Send the response
-			// Looking good, so update state and store the SessionID
-			control.State.state = ControlStateChallenged
-			control.State.err = nil
-			control.archive.SessionID = challenge.ControlSessionId
-			control.archive.Proxy.ChallengeResponse(challenge.CorrelationId, control.archive.Options.AuthResponse)
-		} else {
-			// It's conceivable if the same application is making concurrent connection attempts using
-			// the same channel/stream that we can reach here which is our parent's problem
-			logger.Debugf("connectionControlFragmentHandler/challengr: ignoring correlationID=%d", challenge.CorrelationId)
-		}
-
-	// These can happen when testing/reconnecting or if multiple clients are on the same channel/stream
-	case codecIds.recordingDescriptor:
-		logger.Debugf("connectionControlFragmentHandler: ignoring RecordingDescriptor type %d", hdr.TemplateId)
-	case codecIds.recordingSubscriptionDescriptor:
-		logger.Debugf("connectionControlFragmentHandler: ignoring RecordingSubscriptionDescriptor type %d", hdr.TemplateId)
-	case codecIds.recordingSignalEvent:
-		logger.Debugf("connectionControlFragmentHandler: ignoring recordingSignalEvent type %d", hdr.TemplateId)
-
-	default:
-		fmt.Printf("ConnectionControlFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
-	}
 }
 
 // PollForErrorResponse polls the response stream for errors or async events.
@@ -384,8 +236,6 @@ func (control *Control) PollForErrorResponse() (int, error) {
 			return received, nil
 		}
 	}
-
-	return 0, nil // Should not happen
 }
 
 // errorResponseFragmentHandler is used to check for errors and async events on an idle control
@@ -513,8 +363,9 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 			}
 		}
 
-	case pingTemplateId:
-		// Archive session liveness heartbeat (1.53+), nothing to do
+	// The archive pings control sessions to check liveness; nothing to do on receipt
+	case codecIds.ping:
+
 	default:
 		fmt.Printf("errorResponseFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
 	}
@@ -657,8 +508,6 @@ func (control *Control) PollForResponse(correlationID int64, sessionID int64) (i
 			control.archive.Options.IdleStrategy.Idle(0)
 		}
 	}
-
-	return 0, fmt.Errorf("PollForResponse out of loop") // can't happen
 }
 
 // DescriptorFragmentHandler is used to poll for descriptors (both recording and subscription)

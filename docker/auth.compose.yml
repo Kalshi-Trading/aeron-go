@@ -1,0 +1,39 @@
+# Java 1.53.3 ArchivingMediaDriver with a challenge/response authenticator, used by the archive connect E2E tests.
+#   docker compose -f docker/auth.compose.yml up -d --build auth-archiving-driver
+#   AERON_E2E=1 go test ./archive -run E2E -v
+# Credentials (see auth/ChallengeAuthenticatorSupplier.java):
+#   admin:admin      -> accepted
+#   admin:challenge  -> challenged with "challenge!", accepted on response "admin:response"
+#   anything else    -> rejected
+# Aeron dir /dev/shm/aeron-auth, control aeron:udp?endpoint=localhost:8110 stream 10, archive id 2.
+services:
+  auth-archiving-driver:
+    build: ./auth
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    shm_size: 2g
+    volumes:
+      - /dev/shm:/dev/shm
+    tmpfs:
+      - /data/archive:uid=1000,gid=1000
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-auth
+        -Daeron.dir.delete.on.start=true
+        -Daeron.client.liveness.timeout=10000000000
+        -Daeron.archive.dir=/data/archive/rec
+        -Daeron.archive.dir.delete.on.start=true
+        -Daeron.archive.control.channel=aeron:udp?endpoint=localhost:8110
+        -Daeron.archive.control.stream.id=10
+        -Daeron.archive.replication.channel=aeron:udp?endpoint=localhost:0
+        -Daeron.archive.recording.events.enabled=false
+        -Daeron.archive.id=2
+        -Daeron.archive.authenticator.supplier=ChallengeAuthenticatorSupplier
+        -Daeron.threading.mode=SHARED
+        -Daeron.archive.threading.mode=SHARED
+    command: ["io.aeron.archive.ArchivingMediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-auth/cnc.dat"]
+      interval: 1s
+      retries: 30

@@ -32,7 +32,7 @@ func NewBackoffIdleStrategy(maxSpins, maxYields, minParkPeriodNs, maxParkPeriodN
 const DefaultMaxSpins = 10
 
 // DefaultMaxYields is the default number of times the strategy will yield without work before going to next state.
-const DefaultMaxYields = 20
+const DefaultMaxYields = 5
 
 // DefaultMinParkNs is the default interval the strategy will park the thread on entering the park state.
 const DefaultMinParkNs = 1000
@@ -67,9 +67,18 @@ func (s *BackoffIdleStrategy) Idle(workCount int) {
 	}
 }
 
+// IdleNoWork performs one idle step unconditionally.
+func (s *BackoffIdleStrategy) IdleNoWork() { s.idle() }
+
+// Reset the strategy to the not-idle state.
+func (s *BackoffIdleStrategy) Reset() { s.reset() }
+
+// Alias returns "backoff".
+func (s *BackoffIdleStrategy) Alias() string { return AliasBackoff }
+
 func (s *BackoffIdleStrategy) String() string {
-	return fmt.Sprintf("BackoffIdleStrategy(MaxSpins:%d, MaxYields:%d, MinParkPeriodNs:%d, MaxParkPeriodNs:%d)",
-		s.maxSpins, s.maxYields, s.minParkPeriodNs, s.maxParkPeriodNs)
+	return fmt.Sprintf("BackoffIdleStrategy{alias=%s, maxSpins=%d, maxYields=%d, minParkPeriodNs=%d, maxParkPeriodNs=%d}",
+		AliasBackoff, s.maxSpins, s.maxYields, s.minParkPeriodNs, s.maxParkPeriodNs)
 }
 
 func (s *BackoffIdleStrategy) reset() {

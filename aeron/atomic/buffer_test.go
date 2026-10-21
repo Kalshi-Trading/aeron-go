@@ -47,8 +47,6 @@ func TestMakeAtomicBuffer(t *testing.T) {
 	b = MakeBuffer(unsafe.Pointer(&arr[0]), 64)
 	t.Logf("buf: %v", b)
 
-	b = MakeBuffer(uintptr(unsafe.Pointer(&arr[0])), 64)
-	t.Logf("buf: %v", b)
 }
 
 func TestInit(t *testing.T) {
@@ -104,7 +102,7 @@ func TestWrap(t *testing.T) {
 	assert.NotEqual(t, int64(31415), buffer.GetInt64Volatile(2))
 	assert.NotEqual(t, int64(31415), buffer.GetInt64Volatile(0))
 
-	newPtr := unsafe.Pointer(uintptr(ptr) + uintptr(1))
+	newPtr := unsafe.Add(ptr, 1)
 	t.Logf("Old pointer: %v; new pointer: %v", ptr, newPtr)
 	var newLen int32 = 31
 	buffer.Wrap(newPtr, newLen)

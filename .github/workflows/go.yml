@@ -57,11 +57,6 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      # Docker Hub rate limits anonymous pulls on shared runners; use Google's mirror.
-      JAVA_IMAGE: mirror.gcr.io/library/eclipse-temurin:21-jre
-      GO_IMAGE: mirror.gcr.io/library/golang:1.21-bookworm
-      RUNTIME_IMAGE: mirror.gcr.io/library/debian:bookworm-slim
     steps:
     - uses: actions/checkout@v4
 
@@ -78,6 +73,9 @@ jobs:
     - name: Fetch Aeron 1.53.3 jar for systests
       run: scripts/fetch-aeron-jar.sh
 
+    - name: Pre-pull base images from mirror.gcr.io (Docker Hub rate limits shared runners)
+      run: make docker-mirror
+
     - name: AERON_E2E=1 tests against the docker Java 1.53.3 archiving driver
       env:
         AERON_SYSTESTS_REQUIRED: '1'
@@ -88,4 +86,6 @@ jobs:
 
     - name: Driver logs on failure
       if: failure()
-      run: docker compose -f docker/docker-compose.yml --profile e2e logs --no-color || true
+      run: |
+        docker compose -f docker/docker-compose.yml --profile e2e logs --no-color || true
+        docker compose -f docker/cluster.compose.yml logs --no-color || true

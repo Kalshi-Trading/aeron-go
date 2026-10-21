@@ -109,10 +109,10 @@ func main() {
 
 	liveDestination := sampleChannel
 
-	replayDestinationUri, _ := aeron.ParseChannelUri("aeron:udp?endpoint=localhost:0")
-	replayDestination := replayDestinationUri.String()
+	// An ephemeral port: ReplayMerge resolves the bound port before requesting the replay.
+	replayDestination := "aeron:udp?endpoint=localhost:0"
 
-	replayChannelUri, _ := aeron.ParseChannelUri(replayDestination)
+	replayChannelUri, _ := aeron.ParseChannelUri("aeron:udp")
 	replayChannelUri.SetSessionID(recording.SessionId)
 	replayChannel := replayChannelUri.String()
 
@@ -124,7 +124,7 @@ func main() {
 		replayDestination,
 		liveDestination,
 	)
-	merge, err := replaymerge.NewReplayMerge(
+	merge, err := replaymerge.NewReplayMergeWithDefaults(
 		subscription,
 		arch,
 		replayChannel,
@@ -132,29 +132,27 @@ func main() {
 		liveDestination,
 		recording.RecordingId,
 		0,
-		5000,
 	)
 	if err != nil {
 		logger.Fatalf(err.Error())
 	}
 	defer merge.Close()
 
-	var fragmentsRead int
 	for !merge.IsMerged() {
-		fragmentsRead, err = merge.Poll(printHandler, 10)
+		fragmentsRead, err := merge.Poll(printHandler, 10)
 		if err != nil {
-			logger.Fatalf(err.Error())
+			logger.Fatalf("replay merge failed: %s: %s", err, merge)
 		}
 		arch.RecordingEventsPoll()
 		idleStrategy.Idle(fragmentsRead)
 	}
+	logger.Infof("Merged with live stream after %d messages: %s", counter, merge)
 
-	merge.Close()
-
-	for {
-		fragmentsRead := subscription.Poll(printHandler, 10)
+	// Once merged the replay has been stopped and removed and the image continues on the live destination.
+	image := merge.Image()
+	for !image.IsClosed() {
+		fragmentsRead := image.Poll(printHandler, 10)
 		arch.RecordingEventsPoll()
-
 		idleStrategy.Idle(fragmentsRead)
 	}
 }

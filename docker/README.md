@@ -11,14 +11,12 @@ The driver runs with host networking and shares /dev/shm with the host, so Go cl
 connect via shared memory exactly as with a local driver. `scripts/fetch-aeron-jar.sh` downloads the
 same aeron-all jar for the in-process systests (`systests/driver`).
 
-If Docker Hub rate limits (429), build from Google's mirror instead:
-
-    export JAVA_IMAGE=mirror.gcr.io/library/eclipse-temurin:21-jre
-    export GO_IMAGE=mirror.gcr.io/library/golang:1.21-bookworm RUNTIME_IMAGE=mirror.gcr.io/library/debian:bookworm-slim
+If Docker Hub rate limits (429), `make docker-mirror` pulls every base image used under docker/ from
+mirror.gcr.io and tags it with its Docker Hub name (or set JAVA_IMAGE / GO_IMAGE / RUNTIME_IMAGE).
 
 ## End-to-end tests
 
-    make e2e          # start archiving-driver, run every AERON_E2E=1 test in the repo (go test ./...), tear down
+    make e2e          # start archiving-driver + auth archive + 1-node cluster, run every AERON_E2E=1 test, tear down
     make e2e-docker   # same driver plus the Go clients from e2e/cmd running in containers (profile e2e)
 
 `make e2e-docker` is `docker compose -f docker/docker-compose.yml --profile e2e up --build` plus
