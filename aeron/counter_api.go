@@ -22,22 +22,13 @@ import (
 // (Aeron.addCounter). The Counter should be freed by calling Counter.Close().
 func (aeron *Aeron) AddCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
 	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (*Counter, error) {
-	correlationId, err := aeron.AsyncAddCounter(
-		typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
-	if err != nil {
-		return nil, err
-	}
-	return aeron.awaitCounter(correlationId)
+	return aeron.conductor.AddCounterSync(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
 }
 
 // AddCounterByLabel allocates a client owned counter with an empty key and blocks until it is available
 // (Aeron.addCounter(typeId, label)).
 func (aeron *Aeron) AddCounterByLabel(typeId int32, label string) (*Counter, error) {
-	correlationId, err := aeron.AsyncAddCounterByLabel(typeId, label)
-	if err != nil {
-		return nil, err
-	}
-	return aeron.awaitCounter(correlationId)
+	return aeron.conductor.AddCounterByLabelSync(typeId, label)
 }
 
 // AsyncAddCounter sends the add counter command and returns its correlation id without waiting; poll GetCounter.
@@ -57,21 +48,13 @@ func (aeron *Aeron) AsyncAddCounterByLabel(typeId int32, label string) (int64, e
 // if a non-static counter exists with the same typeId and registrationId.
 func (aeron *Aeron) AddStaticCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
 	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32, registrationId int64) (*Counter, error) {
-	correlationId, err := aeron.AsyncAddStaticCounter(
+	return aeron.conductor.AddStaticCounterSync(
 		typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength, registrationId)
-	if err != nil {
-		return nil, err
-	}
-	return aeron.awaitCounter(correlationId)
 }
 
 // AddStaticCounterByLabel is AddStaticCounter with an empty key.
 func (aeron *Aeron) AddStaticCounterByLabel(typeId int32, label string, registrationId int64) (*Counter, error) {
-	correlationId, err := aeron.AsyncAddStaticCounterByLabel(typeId, label, registrationId)
-	if err != nil {
-		return nil, err
-	}
-	return aeron.awaitCounter(correlationId)
+	return aeron.conductor.AddStaticCounterByLabelSync(typeId, label, registrationId)
 }
 
 // AsyncAddStaticCounter sends the add static counter command and returns its correlation id; poll GetCounter.
@@ -107,14 +90,4 @@ func (aeron *Aeron) FindCounter(registrationID int64) (*Counter, error) {
 // AsyncRemoveCounter asks the driver to free a client owned counter without waiting (Aeron.asyncRemoveCounter).
 func (aeron *Aeron) AsyncRemoveCounter(registrationId int64) error {
 	return aeron.conductor.AsyncRemoveCounter(registrationId)
-}
-
-func (aeron *Aeron) awaitCounter(correlationId int64) (*Counter, error) {
-	for {
-		counter, err := aeron.conductor.GetCounter(correlationId)
-		if counter != nil || err != nil {
-			return counter, err
-		}
-		aeron.context.idleStrategy.Idle(0)
-	}
 }

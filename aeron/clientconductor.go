@@ -1269,6 +1269,51 @@ func (cc *ClientConductor) AddStaticCounterByLabel(typeId int32, label string, r
 	})
 }
 
+// AddCounterSync adds a client owned counter and blocks until the driver responds (Java Aeron.addCounter).
+func (cc *ClientConductor) AddCounterSync(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
+	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (*Counter, error) {
+	if err := validateCounterKeyAndLabelLength(keyLength, labelLength); err != nil {
+		return nil, err
+	}
+	return cc.addCounter(kindPendingCounter, func() (int64, error) {
+		return cc.driverProxy.AddCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
+	})
+}
+
+// AddCounterByLabelSync is AddCounterSync with an empty key.
+func (cc *ClientConductor) AddCounterByLabelSync(typeId int32, label string) (*Counter, error) {
+	if err := validateCounterLabel(label); err != nil {
+		return nil, err
+	}
+	return cc.addCounter(kindPendingCounter, func() (int64, error) {
+		return cc.driverProxy.AddCounterByLabel(typeId, label)
+	})
+}
+
+// AddStaticCounterSync adds (or finds) a static counter and blocks until the driver responds.
+func (cc *ClientConductor) AddStaticCounterSync(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32,
+	keyLength int32, labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32,
+	registrationId int64) (*Counter, error) {
+	if err := validateCounterKeyAndLabelLength(keyLength, labelLength); err != nil {
+		return nil, err
+	}
+	return cc.addCounter(kindPendingStaticCounter, func() (int64, error) {
+		return cc.driverProxy.AddStaticCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset,
+			labelLength, registrationId)
+	})
+}
+
+// AddStaticCounterByLabelSync is AddStaticCounterSync with an empty key.
+func (cc *ClientConductor) AddStaticCounterByLabelSync(typeId int32, label string,
+	registrationId int64) (*Counter, error) {
+	if err := validateCounterLabel(label); err != nil {
+		return nil, err
+	}
+	return cc.addCounter(kindPendingStaticCounter, func() (int64, error) {
+		return cc.driverProxy.AddStaticCounterByLabel(typeId, label, registrationId)
+	})
+}
+
 func validateCounterKeyAndLabelLength(keyLength int32, labelLength int32) error {
 	if keyLength < 0 || keyLength > ctr.MaxKeyLength {
 		return fmt.Errorf("key length out of bounds: %d", keyLength)
@@ -1296,6 +1341,25 @@ func (cc *ClientConductor) sendAddCounter(kind resourceKind, send func() (int64,
 	}
 	cc.resources[corrID] = &conductorResource{kind: kind, timeOfRegistrationNs: cc.nanoClock()}
 	return corrID, nil
+}
+
+// addCounter sends an add counter command and blocks until the driver responds (Java ClientConductor.addCounter).
+func (cc *ClientConductor) addCounter(kind resourceKind, send func() (int64, error)) (*Counter, error) {
+	cc.adminLock.Lock()
+	defer cc.unlock()
+	corrID, err := cc.sendAddCounter(kind, send)
+	if err != nil {
+		return nil, err
+	}
+	if err := cc.awaitResponse(corrID); err != nil {
+		delete(cc.resources, corrID)
+		return nil, err
+	}
+	res := cc.resources[corrID]
+	if res == nil || res.counter == nil {
+		return nil, fmt.Errorf("counter %d not available after response", corrID)
+	}
+	return res.counter, nil
 }
 
 // GetCounter polls for a counter added with AddCounter*/AddStaticCounter*: (nil, nil) while the driver has not
