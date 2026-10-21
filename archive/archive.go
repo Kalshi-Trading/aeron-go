@@ -467,7 +467,7 @@ func (archive *Archive) StopRecordingBySubscriptionId(subscriptionID int64) erro
 // recording that pertains to the given Publication
 //
 // Returns error on failure, nil on success
-func (archive *Archive) StopRecordingByPublication(publication aeron.Publication) error {
+func (archive *Archive) StopRecordingByPublication(publication aeron.Publisher) error {
 	channel, err := AddSessionIdToChannel(publication.Channel(), publication.SessionID())
 	if err != nil {
 		return err
@@ -488,6 +488,7 @@ func (archive *Archive) AddRecordedPublication(channel string, stream int32) (*a
 		return nil, err
 	}
 	if !publication.IsOriginal() {
+		publication.Close()
 		return nil, fmt.Errorf("publication already added for channel=%s stream=%d", channel, stream)
 	}
 
@@ -613,7 +614,7 @@ func (archive *Archive) StartReplay(recordingID int64, position int64, length in
 // of the received replay for correlation with the matching channel and stream id in the lower 32 bits
 func (archive *Archive) BoundedReplay(recordingID int64, position int64, length int64, limitCounterID int32, replayStream int32, replayChannel string) (int64, error) {
 	correlationID := nextCorrelationID()
-	logger.Debugf("BoundedReplay(%d, %d, %d, %d, %d, %s), correlationID:%d", recordingID, position, length, limitCounterID, replayStream, correlationID)
+	logger.Debugf("BoundedReplay(%d, %d, %d, %d, %d, %s), correlationID:%d", recordingID, position, length, limitCounterID, replayStream, replayChannel, correlationID)
 	correlations.Store(correlationID, archive.Control) // For subsequent lookup in the fragment assemblers
 	defer correlations.Delete(correlationID)           // Clear the lookup
 
@@ -760,7 +761,7 @@ func (archive *Archive) GetStopPosition(recordingID int64) (int64, error) {
 // Returns the RecordingID or RecordingIdNullValue if no match
 func (archive *Archive) FindLastMatchingRecording(minRecordingID int64, sessionID int32, stream int32, channel string) (int64, error) {
 	correlationID := nextCorrelationID()
-	logger.Debugf("FindLastMatchingRecording(%d, %d, %d, %s), correlationID:%d", minRecordingID, sessionID, stream, correlationID)
+	logger.Debugf("FindLastMatchingRecording(%d, %d, %d, %s), correlationID:%d", minRecordingID, sessionID, stream, channel, correlationID)
 	correlations.Store(correlationID, archive.Control) // For subsequent lookup in the fragment assemblers
 	defer correlations.Delete(correlationID)           // Clear the lookup
 
@@ -798,7 +799,7 @@ func (archive *Archive) ListRecordingSubscriptions(pseudoIndex int32, subscripti
 // Returns error on failure, nil on success
 func (archive *Archive) DetachSegments(recordingID int64, newStartPosition int64) error {
 	correlationID := nextCorrelationID()
-	logger.Debugf("DetachSegments(%d, %d), correlationID:%d", recordingID, correlationID)
+	logger.Debugf("DetachSegments(%d, %d), correlationID:%d", recordingID, newStartPosition, correlationID)
 	correlations.Store(correlationID, archive.Control) // For subsequent lookup in the fragment assemblers
 	defer correlations.Delete(correlationID)           // Clear the lookup
 
@@ -1046,4 +1047,13 @@ func (archive *Archive) PurgeRecording(recordingID int64) (int64, error) {
 	return archive.request(func(correlationID int64) error {
 		return archive.Proxy.PurgeRecordingRequest(correlationID, recordingID)
 	})
+}
+
+// UpdateChannel updates the channel stored in the catalog for a stopped recording, equivalent to Java
+// AeronArchive.updateChannel.
+func (archive *Archive) UpdateChannel(recordingID int64, newChannel string) error {
+	_, err := archive.request(func(correlationID int64) error {
+		return archive.Proxy.UpdateChannelRequest(correlationID, recordingID, newChannel)
+	})
+	return err
 }

@@ -15,6 +15,8 @@
 package archive
 
 import (
+	"fmt"
+
 	"github.com/lirm/aeron-go/archive/codecs"
 )
 
@@ -25,7 +27,15 @@ func (proxy *Proxy) ReplicateRequestWithParams(correlationID int64, srcRecording
 	if params == nil {
 		params = NewReplicationParams()
 	}
+	if params.LiveDestination != "" && params.ReplicationSessionID != int32(NullValue) {
+		return fmt.Errorf("ReplicationParams.LiveDestination and ReplicationParams.ReplicationSessionID can not be specified together")
+	}
 	return proxy.offerPacket(codecs.ReplicateRequest2FullPacket(
 		proxy.marshaller, proxy.archive.Options.RangeChecking, proxy.archive.SessionID, correlationID,
 		params.toCodec(srcRecordingID, srcControlStreamID, srcControlChannel)))
+}
+
+// UpdateChannelRequest sends an UpdateChannelRequest, equivalent to Java ArchiveProxy.updateChannel.
+func (proxy *Proxy) UpdateChannelRequest(correlationID int64, recordingID int64, newChannel string) error {
+	return proxy.offerPacket(codecs.UpdateChannelRequestPacket(proxy.marshaller, proxy.archive.Options.RangeChecking, proxy.archive.SessionID, correlationID, recordingID, newChannel))
 }
