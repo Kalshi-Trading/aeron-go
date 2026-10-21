@@ -29,6 +29,9 @@ const ArchiveIdLabelSuffix = " - archiveId="
 // io.aeron.archive.ArchiveCounters (error count, control sessions, cycle time, recorder/replayer stats, ...).
 const ArchiveIdKeyOffset int32 = 0
 
+// ArchiveCounterKeyLength is the key length of the per-archive counters allocated by ArchiveCounters.allocate.
+const ArchiveCounterKeyLength = ArchiveIdKeyOffset + util.SizeOfInt64
+
 // FindArchiveCounter finds the first allocated counter of typeId whose key starts with archiveId
 // (io.aeron.archive.ArchiveCounters.find). Returns counters.NullCounterId if not found.
 //

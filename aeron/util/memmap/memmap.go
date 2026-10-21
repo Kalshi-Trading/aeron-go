@@ -17,7 +17,6 @@ package memmap
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"sync"
 	"syscall"
@@ -73,15 +72,20 @@ func MapExisting(filename string, offset int64, length int) (*File, error) {
 	if size < 0 {
 		return nil, fmt.Errorf("mmap: stat %q returned %d", filename, size)
 	}
-	if size != int64(size) {
+	if size != int64(int(size)) {
 		return nil, fmt.Errorf("mmap: file %q is too large", filename)
 	}
+	if offset < 0 || offset >= size {
+		return nil, fmt.Errorf("mmap: offset %d outside file %q of size %d", offset, filename, size)
+	}
 
-	var mapSize int
+	mapSize := int(size - offset)
 	if length != 0 {
+		if length < 0 || int64(length) > size-offset {
+			return nil, fmt.Errorf("mmap: region offset=%d length=%d exceeds file %q of size %d",
+				offset, length, filename, size)
+		}
 		mapSize = length
-	} else {
-		mapSize = int(size)
 	}
 
 	logger.Debugf("Mapping existing file: fd: %d, size: %d, offset: %d", f.Fd(), size, offset)
@@ -105,13 +109,11 @@ func NewFile(filename string, offset int64, length int) (*File, error) {
 	}
 	defer f.Close()
 
-	_, err = f.Seek(int64(length-1), 0)
-	if err != nil {
-		log.Fatal(err)
+	if length <= 0 || offset < 0 {
+		return nil, fmt.Errorf("mmap: invalid region offset=%d length=%d for %q", offset, length, filename)
 	}
-	_, err = f.Write([]byte("\000"))
-	if err != nil {
-		log.Fatal(err)
+	if err = f.Truncate(offset + int64(length)); err != nil {
+		return nil, err
 	}
 
 	mmap, err := doMap(f, offset, length)
@@ -135,9 +137,12 @@ func (mmap *File) GetMemorySize() int {
 
 // Close attempts to unmap the mapped memory region
 func (mmap *File) Close() (err error) {
-	mm, _ := memories.Load(mmap.mmap)
-	tomap := mm.(mapper.MMap)
-	return tomap.Unmap()
+	mm, ok := memories.LoadAndDelete(mmap.mmap)
+	if !ok {
+		return nil
+	}
+	m := mm.(mapper.MMap)
+	return m.Unmap()
 }
 
 func doMap(f *os.File, offset int64, length int) (*File, error) {

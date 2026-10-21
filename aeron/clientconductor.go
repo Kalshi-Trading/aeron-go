@@ -225,10 +225,6 @@ type ClientConductor struct {
 	exited         bool
 	afterExit      func()
 
-	// awaitIdle is called between polls while a blocking call awaits a driver response (Context awaiting idle
-	// strategy, or the driver agent invoker).
-	awaitIdle func()
-
 	timeOfLastKeepaliveNs   int64
 	timeOfLastServiceNs     int64
 	driverTimeoutNs         int64
@@ -243,6 +239,9 @@ type ClientConductor struct {
 	clientName             string
 	preTouchMappedMemory   bool
 	subscriberErrorHandler func(error)
+
+	awaitingIdleStrategy idlestrategy.Idler
+	driverAgentInvoker   AgentInvoker
 }
 
 // Init is the primary initialization method for ClientConductor
@@ -558,11 +557,19 @@ func (cc *ClientConductor) awaitResponse(correlationID int64) error {
 				"no response from MediaDriver within %v (correlationId=%d)",
 				time.Duration(cc.driverTimeoutNs), correlationID))
 		}
-		if cc.awaitIdle != nil {
-			cc.awaitIdle()
-		} else {
-			time.Sleep(awaitingIdleSleep)
-		}
+		cc.awaitIdle()
+	}
+}
+
+// awaitIdle runs the embedded driver's agent invoker, if any, otherwise idles with the awaiting idle strategy.
+func (cc *ClientConductor) awaitIdle() {
+	switch {
+	case cc.driverAgentInvoker != nil:
+		cc.driverAgentInvoker.Invoke()
+	case cc.awaitingIdleStrategy != nil:
+		cc.awaitingIdleStrategy.Idle(0)
+	default:
+		time.Sleep(awaitingIdleSleep)
 	}
 }
 
@@ -901,21 +908,19 @@ func (cc *ClientConductor) AsyncRemovePublication(registrationID int64) error {
 	if registrationID == nullValue || cc.isTerminating.Get() || cc.isClosed.Get() {
 		return nil
 	}
+	if cc.removePendingLocked(registrationID, kindPendingPublication, kindPendingExclusivePublication) {
+		return cc.sendTrackedRemove(func() (int64, error) { return cc.driverProxy.RemovePublication(registrationID, false) })
+	}
 	res := cc.resources[registrationID]
-	if res != nil {
-		switch res.kind {
-		case kindPublication, kindExclusivePublication:
-			return cc.releasePublicationLocked(registrationID, res.pubBase.revokeOnClose)
-		case kindPendingPublication, kindPendingExclusivePublication:
-			delete(cc.resources, registrationID)
-		default:
-			return fmt.Errorf("%w: %d is not a publication", ErrWrongResourceType, registrationID)
-		}
-	} else if _, ok := cc.asyncCommandIDs[registrationID]; !ok {
+	if res == nil {
 		return nil
 	}
-	delete(cc.asyncCommandIDs, registrationID)
-	return cc.sendTrackedRemove(func() (int64, error) { return cc.driverProxy.RemovePublication(registrationID, false) })
+	switch res.kind {
+	case kindPublication, kindExclusivePublication:
+		return cc.releasePublicationLocked(registrationID, res.pubBase.revokeOnClose)
+	default:
+		return fmt.Errorf("%w: %d is not a publication", ErrWrongResourceType, registrationID)
+	}
 }
 
 // sendTrackedRemove sends a remove command and tracks its correlation id as an active async command (Java adds every
@@ -927,6 +932,25 @@ func (cc *ClientConductor) sendTrackedRemove(send func() (int64, error)) error {
 	}
 	cc.asyncCommandIDs[corrID] = cc.nanoClock()
 	return nil
+}
+
+// removePendingLocked forgets an async add which the driver has not yet answered, so that a later ready response
+// is ignored. Like Java ClientConductor.removePublication/removeSubscription the caller then sends the driver remove.
+func (cc *ClientConductor) removePendingLocked(registrationID int64, kinds ...resourceKind) bool {
+	res := cc.resources[registrationID]
+	if res == nil {
+		// A failed add whose error was never collected: the driver holds nothing to remove.
+		delete(cc.asyncErrors, registrationID)
+		return false
+	}
+	for _, k := range kinds {
+		if res.kind == k {
+			delete(cc.resources, registrationID)
+			delete(cc.asyncCommandIDs, registrationID)
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1002,23 +1026,29 @@ func (cc *ClientConductor) FindSubscription(registrationID int64) (*Subscription
 	return cc.GetSubscription(registrationID)
 }
 
-// releaseSubscription is called by Subscription.Close after it has emptied its image list.
-func (cc *ClientConductor) releaseSubscription(regID int64, images []Image) error {
+// releaseSubscription closes sub, its images and sends REMOVE_SUBSCRIPTION (Java ClientConductor.removeSubscription).
+// The image list is emptied under adminLock so OnAvailableImage cannot add an image after the list was drained.
+func (cc *ClientConductor) releaseSubscription(sub *Subscription) error {
 	cc.adminLock.Lock()
 	defer cc.unlock()
-	return cc.releaseSubscriptionLocked(regID, images)
-}
-
-func (cc *ClientConductor) releaseSubscriptionLocked(regID int64, images []Image) error {
 	if cc.isTerminating.Get() || cc.isClosed.Get() {
 		return nil
 	}
+	if !sub.isClosed.CompareAndSet(false, true) {
+		return nil
+	}
+	return cc.releaseSubscriptionLocked(sub)
+}
+
+// releaseSubscriptionLocked must be called with adminLock held after sub has been marked closed.
+func (cc *ClientConductor) releaseSubscriptionLocked(sub *Subscription) error {
+	cc.closeImages(sub.images.Empty(), sub.UnavailableImageHandler(), explicitCloseLingerNs)
+	regID := sub.registrationID
 	res := cc.resources[regID]
-	if res == nil || res.kind != kindSubscription {
+	if res == nil || res.kind != kindSubscription || res.subscription != sub {
 		return nil
 	}
 	delete(cc.resources, regID)
-	cc.closeImages(images, res.subscription.UnavailableImageHandler(), explicitCloseLingerNs)
 	return cc.sendTrackedRemove(func() (int64, error) { return cc.driverProxy.RemoveSubscription(regID) })
 }
 
@@ -1029,25 +1059,23 @@ func (cc *ClientConductor) AsyncRemoveSubscription(registrationID int64) error {
 	if registrationID == nullValue || cc.isTerminating.Get() || cc.isClosed.Get() {
 		return nil
 	}
+	if res := cc.resources[registrationID]; res != nil && res.kind == kindPendingSubscription {
+		res.subscription.isClosed.Set(true)
+	}
+	if cc.removePendingLocked(registrationID, kindPendingSubscription) {
+		return cc.sendTrackedRemove(func() (int64, error) { return cc.driverProxy.RemoveSubscription(registrationID) })
+	}
 	res := cc.resources[registrationID]
-	if res != nil {
-		switch res.kind {
-		case kindSubscription:
-			if !res.subscription.isClosed.CompareAndSet(false, true) {
-				return nil
-			}
-			return cc.releaseSubscriptionLocked(registrationID, res.subscription.images.Empty())
-		case kindPendingSubscription:
-			res.subscription.isClosed.Set(true)
-			delete(cc.resources, registrationID)
-		default:
-			return fmt.Errorf("%w: %d is not a subscription", ErrWrongResourceType, registrationID)
-		}
-	} else if _, ok := cc.asyncCommandIDs[registrationID]; !ok {
+	if res == nil {
 		return nil
 	}
-	delete(cc.asyncCommandIDs, registrationID)
-	return cc.sendTrackedRemove(func() (int64, error) { return cc.driverProxy.RemoveSubscription(registrationID) })
+	if res.kind != kindSubscription {
+		return fmt.Errorf("%w: %d is not a subscription", ErrWrongResourceType, registrationID)
+	}
+	if !res.subscription.isClosed.CompareAndSet(false, true) {
+		return nil
+	}
+	return cc.releaseSubscriptionLocked(res.subscription)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1339,21 +1367,17 @@ func (cc *ClientConductor) AsyncRemoveCounter(registrationID int64) error {
 	if registrationID == nullValue || cc.isTerminating.Get() || cc.isClosed.Get() {
 		return nil
 	}
+	if cc.removePendingLocked(registrationID, kindPendingCounter) {
+		return cc.sendTrackedRemove(func() (int64, error) { return cc.driverProxy.RemoveCounter(registrationID) })
+	}
 	res := cc.resources[registrationID]
-	if res != nil {
-		switch res.kind {
-		case kindCounter:
-			return cc.releaseCounterLocked(registrationID, res.counter.Id())
-		case kindPendingCounter:
-			delete(cc.resources, registrationID)
-		default:
-			return fmt.Errorf("%w: %d is not a client owned counter", ErrWrongResourceType, registrationID)
-		}
-	} else if _, ok := cc.asyncCommandIDs[registrationID]; !ok {
+	if res == nil {
 		return nil
 	}
-	delete(cc.asyncCommandIDs, registrationID)
-	return cc.sendTrackedRemove(func() (int64, error) { return cc.driverProxy.RemoveCounter(registrationID) })
+	if res.kind != kindCounter {
+		return fmt.Errorf("%w: %d is not a client owned counter", ErrWrongResourceType, registrationID)
+	}
+	return cc.releaseCounterLocked(registrationID, res.counter.Id())
 }
 
 // NextSessionID asks the driver for the next available session id for a stream (driver >= 1.47).
@@ -1678,7 +1702,6 @@ func (cc *ClientConductor) OnPublicationError(buffer *atomic.Buffer, offset int3
 		if (res.kind == kindPublication || res.kind == kindExclusivePublication) &&
 			res.pubBase.originalRegID == frame.RegistrationID {
 			cc.queueCallback(func() { h(&frame) })
-			return
 		}
 	}
 }

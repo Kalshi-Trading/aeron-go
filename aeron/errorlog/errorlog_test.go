@@ -88,3 +88,27 @@ func TestRecordLayout(t *testing.T) {
 		t.Error("second record should be 8-byte aligned at 32")
 	}
 }
+
+// A record whose length is shorter than the record header must not panic the reader (Java fails the read, the Go
+// reader stops).
+func TestReadCorruptLengthDoesNotPanic(t *testing.T) {
+	buf := newBuffer(256)
+	log := NewDistinctErrorLog(buf, func() int64 { return 5 })
+	log.Record(errors.New("abc"))
+	buf.PutInt32(32, 5)
+	var got []string
+	n := Read(buf, func(_ int32, _, _ int64, e string) { got = append(got, e) })
+	if n != 1 || len(got) != 1 || got[0] != "abc" {
+		t.Errorf("n=%d got=%v", n, got)
+	}
+}
+
+func TestRecordNilError(t *testing.T) {
+	log := NewDistinctErrorLog(newBuffer(256), nil)
+	if log.Record(nil) {
+		t.Error("nil error must not be recorded")
+	}
+	if HasErrors(log.Buffer()) {
+		t.Error("log must stay empty")
+	}
+}

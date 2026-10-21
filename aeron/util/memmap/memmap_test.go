@@ -50,3 +50,37 @@ func TestMmapBasics(t *testing.T) {
 		t.Fail()
 	}
 }
+
+func TestNewFileInvalidLengthReturnsError(t *testing.T) {
+	name := t.TempDir() + "/zero.bin"
+	if _, err := NewFile(name, 0, 0); err == nil {
+		t.Fatal("expected error for zero length")
+	}
+}
+
+func TestMapExistingRegionBeyondFileReturnsError(t *testing.T) {
+	name := t.TempDir() + "/small.bin"
+	m, err := NewFile(name, 0, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MapExisting(name, 0, 8192); err == nil {
+		t.Fatal("expected error mapping past end of file")
+	}
+	if _, err := MapExisting(name, 4096, 0); err == nil {
+		t.Fatal("expected error for offset at end of file")
+	}
+	m2, err := MapExisting(name, 0, 0)
+	if err != nil || m2.GetMemorySize() != 4096 {
+		t.Fatalf("m2=%v err=%v", m2, err)
+	}
+	if err := m2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m2.Close(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+}

@@ -59,7 +59,7 @@ Areas: `client` (aeron package core), `counters`, `logbuffer`, `errors/logging`,
 
 | # | Sev | Finding | Recommended fix | Area |
 |---|-----|---------|-----------------|------|
-| R1 | M | `FindCounterIdBySession(reader, sessionId)` has no `archiveId` parameter; Java 1.53.3 `RecordingPos.findCounterIdBySession(counters, sessionId, archiveId)` disambiguates multiple archives on one driver. `IsRecordingActive` likewise. | Add archiveId variants (another workstream - archive-counters - is on this). | archive |
+| R1 | M | `FindCounterIdBySession(reader, sessionId)` has no `archiveId` parameter; Java 1.53.3 `RecordingPos.findCounterIdBySession(counters, sessionId, archiveId)` disambiguates multiple archives on one driver. `IsRecordingActive` likewise. | Done: `archive/status.FindCounterIdByRecording/FindCounterIdBySession(reader, id, archiveId)`, `IsActive`, `GetArchiveId`; the `archive.*` wrappers are deprecated (archiveId = NullValue). | archive |
 | R2 | D | Archive listeners are a struct of function fields (`ArchiveListeners`) plus package-level `Logging*Listener` defaults that log through the global logger. Java uses `RecordingSignalConsumer`, `ErrorHandler`, `RecordingEventsListener` interfaces set on `AeronArchive.Context`. | Accept listeners through `Options`; default to no-op, not logging. | archive |
 | R3 | M | `StartRecording(channel, stream, isLocal bool, autoStop bool)`: `isLocal` bool instead of `codecs.SourceLocation`, inconsistent with `ExtendRecording` which takes `codecs.SourceLocationEnum`. | Use a `SourceLocation` type in both. Breaking. | archive |
 | R4 | D | `PollForErrorResponse() (int, error)` - Java returns the error message string or null; Go returns a count plus error, and the count is meaningless to callers. | `PollForErrorResponse() error`. | archive |
@@ -101,7 +101,9 @@ Areas: `client` (aeron package core), `counters`, `logbuffer`, `errors/logging`,
 | archive RecordedBasicPublisher / ReplayedBasicSubscriber | `archive/examples/basic_recording_publisher`, `basic_replayed_subscriber` | fixed (counter wait instead of sleep, `os.Exit(1)` on success, stop recording, `-exit`) |
 | archive EmbeddedReplayThroughput | `archive/examples/replay_throughput` | new (external archive) |
 | cluster EchoService / client | `examples/cluster` (service, existing), `examples/cluster_echo_client` (new) | new client, verified vs Java `EchoServiceNode` (`docker/cluster.compose.yml`) |
-| StreamStat, ImageRateSubscriber, FileSender/Receiver, LogInspector, Embedded*Ipc* variants, ReplayMergeSubscriber (other workstream), PersistentSubscriber, RecordingReplicator | - | not ported (lower value; ReplayMerge owned elsewhere) |
+| archive ReplayMergeSubscriber / PersistentSubscriber | `archive/examples/basic_replay_merge`, `persistent_subscriber` | ported (E2E `TestArchiveReplayMerge`, `TestArchivePersistentSubscriber`) |
+| LogInspector | `examples/loginspector` | ported |
+| StreamStat, ImageRateSubscriber, FileSender/Receiver, Embedded*Ipc* variants, RecordingReplicator | - | not ported (lower value) |
 
 ## 9. Suggested order for the review fleet
 

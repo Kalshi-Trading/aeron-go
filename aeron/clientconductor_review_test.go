@@ -156,12 +156,12 @@ func TestHeartbeatCounterSearchedEveryServiceUntilFound(t *testing.T) {
 func TestBlockingCallUsesAwaitIdle(t *testing.T) {
 	tc := newTestConductor(t)
 	idles := 0
-	tc.awaitIdle = func() {
+	tc.awaitingIdleStrategy = idleFunc(func() {
 		idles++
 		if idles == 3 {
 			tc.events.respond = func() { tc.OnSubscriptionReady(1001, 7) }
 		}
-	}
+	})
 	sub, err := tc.AddSubscription(Channel, StreamId1)
 	require.NoError(t, err)
 	require.NotNil(t, sub)
@@ -237,3 +237,6 @@ func TestCloseFromConductorCallback(t *testing.T) {
 	require.Equal(t, 1, tc.proxy.clientClose)
 }
 
+type idleFunc func()
+
+func (f idleFunc) Idle(int) { f() }

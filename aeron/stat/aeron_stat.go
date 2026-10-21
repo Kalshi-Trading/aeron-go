@@ -18,6 +18,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
@@ -29,7 +30,10 @@ var ansiHome = "\u001b[H"
 
 func main() {
 	ctx := aeron.NewContext()
-	counterFile, _, _ := counters.MapFile(ctx.CncFileName())
+	counterFile, _, err := counters.MapFile(ctx.CncFileName())
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	reader := counters.NewReader(counterFile.ValuesBuf.Get(), counterFile.MetaDataBuf.Get())
 
