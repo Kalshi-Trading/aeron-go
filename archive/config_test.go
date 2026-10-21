@@ -16,6 +16,7 @@ package archive
 
 import (
 	"flag"
+	"os"
 
 	"github.com/lirm/aeron-go/aeron"
 )
@@ -46,7 +47,14 @@ var TestConfig = struct {
 	flag.Int("replaystream", 1002, "default base replay stream to use"),
 	flag.String("replaychannel", "aeron:udp?endpoint=localhost:20121", "default replay to receive from"),
 
-	flag.String("prefix", aeron.DefaultAeronDir+"/aeron-"+aeron.UserName, "root directory for aeron driver file"),
+	flag.String("prefix", defaultAeronPrefix(), "root directory for aeron driver file (defaults to $AERON_DIR)"),
 	flag.Bool("profile", false, "enable CPU profiling"),
 	flag.Bool("debug", false, "enable DEBUG logging"),
+}
+
+func defaultAeronPrefix() string {
+	if dir := os.Getenv("AERON_DIR"); dir != "" {
+		return dir
+	}
+	return aeron.DefaultAeronDir + "/aeron-" + aeron.UserName
 }

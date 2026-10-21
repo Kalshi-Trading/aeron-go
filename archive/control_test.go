@@ -25,17 +25,17 @@ func TestControl_PollForResponse(t *testing.T) {
 		correlations.Store(int64(1), control)
 		id, err := control.PollForResponse(1, 0)
 		assert.Zero(t, id)
-        assert.EqualError(t, err, `timeout waiting for correlationID 1`)
+		assert.EqualError(t, err, `timeout waiting for correlationID 1`)
 	})
 
 	t.Run("returns the error response", func(t *testing.T) {
 		control, image := newTestControl(t)
 		mockPollResponses(t, image,
 			&codecs.ControlResponse{
-				Code:             codecs.ControlResponseCode.ERROR,
-				CorrelationId:    1,
-				ErrorMessage:     []byte(`b0rk`),
-				RelevantId:       3,
+				Code:          codecs.ControlResponseCode.ERROR,
+				CorrelationId: 1,
+				ErrorMessage:  []byte(`b0rk`),
+				RelevantId:    3,
 			},
 		)
 		correlations.Store(int64(1), control)
@@ -50,10 +50,10 @@ func TestControl_PollForResponse(t *testing.T) {
 			&codecs.ControlResponse{Code: codecs.ControlResponseCode.OK},
 			&codecs.ControlResponse{Code: codecs.ControlResponseCode.OK},
 			&codecs.ControlResponse{
-				Code:             codecs.ControlResponseCode.ERROR,
-				CorrelationId:    1,
-				ErrorMessage:     []byte(`b0rk`),
-				RelevantId:       3,
+				Code:          codecs.ControlResponseCode.ERROR,
+				CorrelationId: 1,
+				ErrorMessage:  []byte(`b0rk`),
+				RelevantId:    3,
 			},
 		)
 		correlations.Store(int64(1), control)
@@ -66,10 +66,10 @@ func TestControl_PollForResponse(t *testing.T) {
 		control, image := newTestControl(t)
 		mockPollResponses(t, image,
 			&codecs.ControlResponse{
-				Code:             codecs.ControlResponseCode.ERROR,
-				CorrelationId:    1,
-				ErrorMessage:     []byte(`b0rk`),
-				RelevantId:       3,
+				Code:          codecs.ControlResponseCode.ERROR,
+				CorrelationId: 1,
+				ErrorMessage:  []byte(`b0rk`),
+				RelevantId:    3,
 			},
 			&codecs.ControlResponse{Code: codecs.ControlResponseCode.OK},
 		)
@@ -196,16 +196,18 @@ func encode(t *testing.T, data encodable) *atomic.Buffer {
 
 func newTestControl(t *testing.T) (*Control, *aeron.MockImage) {
 	image := aeron.NewMockImage(t)
+	image.On("IsClosed").Return(false).Maybe()
 	c := &Control{
 		Subscription: newTestSub(image),
 	}
 	c.archive = &Archive{
 		Listeners: &ArchiveListeners{},
-		Options:   &Options{
-			Timeout: 100*time.Millisecond,
+		Options: &Options{
+			Timeout:      100 * time.Millisecond,
 			IdleStrategy: idlestrategy.Yielding{},
 		},
 	}
+	c.errorFragmentHandler = c.errorResponseFragmentHandler
 	c.fragmentAssembler = aeron.NewControlledFragmentAssembler(
 		c.onFragment, aeron.DefaultFragmentAssemblyBufferLength,
 	)

@@ -97,6 +97,9 @@ type CodecIds struct {
 
 var codecIds CodecIds
 
+// pingTemplateId identifies the archive control session liveness Ping (sent by 1.53+ archives)
+var pingTemplateId = (&codecs.Ping{}).SbeTemplateId()
+
 func init() {
 	var controlResponse codecs.ControlResponse
 	var challenge codecs.Challenge
@@ -206,6 +209,8 @@ func controlFragmentHandler(context interface{}, buffer *atomic.Buffer, offset i
 	case codecIds.recordingSubscriptionDescriptor:
 		logger.Debugf("controlFragmentHandler: ignoring RecordingSubscriptionDescriptor type %d", hdr.TemplateId)
 
+	case pingTemplateId:
+		// Archive session liveness heartbeat (1.53+), nothing to do
 	default:
 		// This can happen when testing/adding new functionality
 		fmt.Printf("controlFragmentHandler: Unexpected message type %d\n", hdr.TemplateId)
@@ -501,10 +506,6 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 				pollContext.control.archive.Listeners.ErrorListener(err2)
 			}
 		}
-		if pollContext.control.archive.Listeners.RecordingSignalListener != nil {
-			pollContext.control.archive.Listeners.RecordingSignalListener(rse)
-		}
-
 		if rse.ControlSessionId == pollContext.control.archive.SessionID {
 			// We can call the async callback if it exists
 			if pollContext.control.archive.Listeners.RecordingSignalListener != nil {
@@ -512,6 +513,8 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 			}
 		}
 
+	case pingTemplateId:
+		// Archive session liveness heartbeat (1.53+), nothing to do
 	default:
 		fmt.Printf("errorResponseFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
 	}
@@ -757,7 +760,10 @@ func DescriptorFragmentHandler(context interface{}, buffer *atomic.Buffer, offse
 		// Check this was for us
 		if controlResponse.ControlSessionId == control.archive.SessionID {
 			// RECORDING_UNKNOWN expected if there are no more results
-			if controlResponse.CorrelationId == pollContext.correlationID && controlResponse.Code == codecs.ControlResponseCode.RECORDING_UNKNOWN {
+			// SUBSCRIPTION_UNKNOWN is the equivalent terminator for ListRecordingSubscriptions
+			if controlResponse.CorrelationId == pollContext.correlationID &&
+				(controlResponse.Code == codecs.ControlResponseCode.RECORDING_UNKNOWN ||
+					controlResponse.Code == codecs.ControlResponseCode.SUBSCRIPTION_UNKNOWN) {
 				// Set our state to let the caller of Poll() which triggered this know they have something
 				// We're basically finished so prepare our OOB return values and log some info if we can
 				logger.Debugf("descriptorFragmentHandler/controlResponse: received for sessionID:%d, correlationID:%d", controlResponse.ControlSessionId, controlResponse.CorrelationId)

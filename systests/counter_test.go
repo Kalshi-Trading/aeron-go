@@ -41,6 +41,7 @@ type CounterTestSuite struct {
 }
 
 func (s *CounterTestSuite) SetupTest() {
+	driver.SkipIfUnavailable(s.T())
 	mediaDriver, err := driver.StartMediaDriver()
 	s.Require().NoError(err, "Couldn't start Media Driver")
 	s.mediaDriver = mediaDriver
@@ -105,15 +106,15 @@ func (s *CounterTestSuite) TestShouldBeAbleToAddCounter() {
 	s.Assert().Equal(counter.RegistrationId(), s.clientA.CounterReader().GetCounterRegistrationId(counter.Id()))
 	s.Assert().Equal(s.clientA.ClientID(), s.clientA.CounterReader().GetCounterOwnerId(counter.Id()))
 
-	GetCounterFromChanOrFail(counter.Id(), chanA, s.Suite)
-	GetCounterFromChanOrFail(counter.Id(), chanB, s.Suite)
+	GetCounterFromChanOrFail(counter.Id(), chanA, &s.Suite)
+	GetCounterFromChanOrFail(counter.Id(), chanB, &s.Suite)
 	availableCounterHandlerClientA.AssertCalled(s.T(), "Handle",
 		mock.Anything, counter.RegistrationId(), counter.Id())
 	availableCounterHandlerClientB.AssertCalled(s.T(), "Handle",
 		mock.Anything, counter.RegistrationId(), counter.Id())
 }
 
-func GetCounterFromChanOrFail(counterId int32, ch chan int32, s suite.Suite) {
+func GetCounterFromChanOrFail(counterId int32, ch chan int32, s *suite.Suite) {
 	for {
 		select {
 		case id := <-ch:

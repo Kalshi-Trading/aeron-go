@@ -28,6 +28,7 @@ type ChannelValidationTestSuite struct {
 }
 
 func (suite *ChannelValidationTestSuite) SetupSuite() {
+	driver.SkipIfUnavailable(suite.T())
 	mediaDriver, err := driver.StartMediaDriver()
 	suite.Require().NoError(err, "Couldn't start Media Driver")
 	suite.mediaDriver = mediaDriver
