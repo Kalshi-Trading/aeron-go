@@ -331,19 +331,15 @@ func TestClientProcessKillSessionTimeout(t *testing.T) {
 	s := newStack(t)
 	live := s.connect(1, senderOpts{})
 	live.sendAcked(t, 50, 30*time.Second)
-	obs, err := aeron.Connect(aeron.NewContext().AeronDir(clientDir))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = obs.Close() })
-	live.obs = obs
-	obsLdr, err := aeron.Connect(aeron.NewContext().AeronDir(s.leader(live).aeronDir()))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = obsLdr.Close() })
-	live.obsLdr = obsLdr
 
 	idle := s.clientProc(t, 10, "-count", "20", "-hold")
 	idleID := sessionID(t, idle, live.idle)
 	idle.waitLine(t, "ACKED 20", 30*time.Second, live.idle)
-	busy := s.clientProc(t, 11, "-count", "1000000", "-size", "300")
+	// A SIGKILL can land between a concurrent publication's tail increment and its frame commit, and that
+	// blocks every publication sharing the log until the driver's publication unblock timeout (15s, Java
+	// NetworkPublication.checkForBlockedPublisher), longer than the session timeout. The killed client therefore uses
+	// its own ExclusivePublication so the survivor's ingress can't be blocked by it.
+	busy := s.clientProc(t, 11, "-exclusive", "-count", "1000000", "-size", "300")
 	busyID := sessionID(t, busy, live.idle)
 	for end := time.Now().Add(500 * time.Millisecond); time.Now().Before(end); time.Sleep(time.Millisecond) {
 		live.idle()

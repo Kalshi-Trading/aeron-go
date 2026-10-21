@@ -361,8 +361,6 @@ type client struct {
 	results map[int64]int
 	lastKA  time.Time
 	kaLog   []string
-	obs     *aeron.Aeron
-	obsLdr  *aeron.Aeron
 }
 
 // idle polls and keeps the session alive (Java clients must send keep-alives within the session timeout).
@@ -371,24 +369,7 @@ func (c *client) idle() {
 	if !c.AC.IsClosed() && time.Since(c.lastKA) > 500*time.Millisecond {
 		c.lastKA = time.Now()
 		ok, err := c.AC.SendKeepAlive()
-		pos := ""
-		if c.obs != nil {
-			pub := c.AC.IngressPublication()
-			sid := fmt.Sprintf(" %d %d ", pub.SessionID(), pub.StreamID())
-			c.obs.CounterReader().Scan(func(ct counters.Counter) {
-				if strings.HasPrefix(ct.Label, "snd-pos") && strings.Contains(ct.Label, sid) {
-					pos = fmt.Sprintf(" pub-pos=%d snd-pos=%d", pub.Position(), ct.Value)
-				}
-			})
-		}
-		if c.obsLdr != nil {
-			c.obsLdr.CounterReader().Scan(func(ct counters.Counter) {
-				if strings.HasPrefix(ct.Label, "sub-pos") && strings.Contains(ct.Label, " 9601 ") {
-					pos += fmt.Sprintf(" ldr[%s]=%d", strings.Fields(ct.Label)[2], ct.Value)
-				}
-			})
-		}
-		c.kaLog = append(c.kaLog, fmt.Sprintf("%s ok=%v err=%v%s", time.Now().Format("15:04:05.000"), ok, err, pos))
+		c.kaLog = append(c.kaLog, fmt.Sprintf("%s ok=%v err=%v", time.Now().Format("15:04:05.000"), ok, err))
 	}
 }
 
