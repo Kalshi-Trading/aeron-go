@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sync"
 	"syscall"
 	"unsafe"
 
@@ -30,13 +29,10 @@ import (
 type File struct {
 	mmap unsafe.Pointer
 	size int
+	mm   mapper.MMap
 }
 
 var logger = logging.MustGetLogger("memmap")
-
-// We keep this map so that we can get back the original handle from the memory address.
-// map[unsafe.Pointer]mapper.MMap
-var memories = sync.Map{}
 
 // GetFileSize is a helper function to retrieve file size
 func GetFileSize(filename string) int64 {
@@ -135,14 +131,15 @@ func (mmap *File) GetMemorySize() int {
 	return mmap.size
 }
 
-// Close attempts to unmap the mapped memory region
+// Close unmaps the mapped memory region. Closing an already closed File is a no-op, so it can never unmap a newer
+// mapping that the kernel placed at the same address.
 func (mmap *File) Close() (err error) {
-	mm, ok := memories.LoadAndDelete(mmap.mmap)
-	if !ok {
+	mm := mmap.mm
+	if mm == nil {
 		return nil
 	}
-	m := mm.(mapper.MMap)
-	return m.Unmap()
+	mmap.mm = nil
+	return mm.Unmap()
 }
 
 func doMap(f *os.File, offset int64, length int) (*File, error) {
@@ -155,8 +152,7 @@ func doMap(f *os.File, offset int64, length int) (*File, error) {
 	mmap := new(File)
 	mmap.mmap = unsafe.Pointer(&mm[0])
 	mmap.size = length
-
-	memories.Store(mmap.mmap, mm)
+	mmap.mm = mm
 
 	return mmap, err
 }

@@ -18,7 +18,7 @@ RACE_FLAGS      ?= -race
 
 E2E_CHECKERS    := go-subscriber go-recorder go-publisher go-replayer go-mdc-publisher go-replay-merge
 
-.PHONY: all build vet test race jar docker-mirror e2e e2e-up e2e-test e2e-down e2e-docker e2e-bin
+.PHONY: all build vet test race jar docker-mirror e2e e2e-up e2e-test e2e-down e2e-docker e2e-bin e2e-chaos
 
 all: build vet test
 
@@ -98,6 +98,14 @@ e2e-test:
 e2e:
 	$(MAKE) e2e-up
 	$(MAKE) e2e-test; status=$$?; $(MAKE) e2e-down; exit $$status
+
+# Robustness/fault-injection suite (systests/chaos): kills and restarts its own driver/archive containers in
+# docker/chaos.compose.yml, so it is not part of e2e. AERON_CHAOS_LOSS_RATE sets the lossy driver's drop rate.
+CHAOS_COMPOSE ?= docker compose -f docker/chaos.compose.yml
+e2e-chaos: jar
+	$(CHAOS_COMPOSE) up -d --build --wait
+	AERON_E2E=1 AERON_E2E_CHAOS=1 $(GO) test -count=1 -p 1 -timeout 20m -v ./systests/chaos/; status=$$?; \
+	$(CHAOS_COMPOSE) down -v; exit $$status
 
 # The Go clients in containers (docker compose --profile e2e), failing if any checker fails.
 e2e-docker:
