@@ -1,0 +1,31 @@
+# Single-node Java 1.53.3 cluster running io.aeron.samples.cluster.EchoServiceNode, for the Go
+# examples/cluster_echo_client. Use together with the shared compose file:
+#   docker compose -f docker/docker-compose.yml -f docker/cluster.compose.yml up -d --build archiving-driver echo-cluster
+# Ingress: aeron:udp endpoint localhost:9002 (ClusterConfig PORT_BASE 9000, member 0, offset 2).
+# The node runs its own media driver in /dev/shm/aeron-echo-cluster-0-driver; Go clients connect
+# through the archiving-driver (AERON_DIR=/dev/shm/aeron-compose) over UDP.
+services:
+  echo-cluster:
+    build: .
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    shm_size: 2g
+    working_dir: /data/cluster
+    volumes:
+      - /dev/shm:/dev/shm
+    tmpfs:
+      - /data/cluster:uid=1000,gid=1000,exec
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-echo-cluster
+        -Daeron.dir.delete.on.start=true
+        -Daeron.cluster.tutorial.nodeId=0
+        -Daeron.cluster.tutorial.hostnames=localhost
+        -Daeron.cluster.ingress.channel=aeron:udp
+        -Daeron.threading.mode=SHARED
+    command: ["io.aeron.samples.cluster.EchoServiceNode"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-echo-cluster-0-driver/cnc.dat"]
+      interval: 1s
+      retries: 60
