@@ -427,7 +427,19 @@ func newConsumer(t *testing.T, a *aeron.Aeron, kind consumerKind, channel string
 	})
 	require.NoError(t, err)
 	for _, d := range dests {
-		require.NoError(t, sub.AddDestination(d))
+		// The Java driver closes a released subscription's receive endpoint asynchronously on its receiver thread,
+		// so re-binding the same destination straight after a Close can briefly fail with "Address already in use".
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			err := sub.AddDestination(d)
+			if err == nil {
+				break
+			}
+			if !strings.Contains(err.Error(), "Address already in use") || time.Now().After(deadline) {
+				require.NoError(t, err)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 	}
 	c.sub = sub
 	t.Cleanup(func() { _ = sub.Close() })

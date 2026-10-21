@@ -41,8 +41,12 @@ func TestStoppedPublisherIsTimedOut(t *testing.T) {
 			awaitDriverForgets(t, a, session, stream, ready.int("clientId"), 20*time.Second)
 			p.signal(syscall.SIGCONT)
 
+			// Which of the two fires first depends on whether the conductor or the driver's ON_CLIENT_TIMEOUT
+			// notices first after SIGCONT; both clients use the driver's client liveness timeout as their service
+			// interval timeout.
 			errEvent := p.await("error", 20*time.Second, func(e event) bool {
-				return strings.HasPrefix(e.str("type"), "ClientTimeout")
+				return strings.HasPrefix(e.str("type"), "ClientTimeout") ||
+					strings.HasPrefix(e.str("type"), "ConductorServiceTimeout")
 			})
 			t.Logf("%s publisher error: %v", l, errEvent)
 			p.await("fatal", 20*time.Second, nil)

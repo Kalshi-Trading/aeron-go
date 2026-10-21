@@ -252,9 +252,8 @@ func checkResult(a *aeron.Aeron, result int64) error {
 	case aeron.NotConnected, aeron.BackPressured, aeron.AdminAction:
 		return nil
 	}
-	if a.IsClosed() && a.TerminalError() != nil {
-		emit("terminated", "type", errType(a.TerminalError()), "message", a.TerminalError().Error())
-	}
+	// Give the conductor time to report why the publication closed through the error handler before exiting.
+	time.Sleep(time.Second)
 	return fmt.Errorf("offer failed: %d", result)
 }
 

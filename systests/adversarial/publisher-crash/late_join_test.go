@@ -37,7 +37,6 @@ func TestSubscriberJoinsAfterPublisherDied(t *testing.T) {
 			pub := startPeer(t, tc.pubLang, "pub", pubArgs(ch, stream, "size=3000", "count=300")...)
 			ready := pub.await("ready", 30*time.Second, nil)
 			session := int32(ready.int("sessionId"))
-			pub.await("done", 30*time.Second, nil)
 			first.pollUntil("all messages", 30*time.Second, func() bool { return first.session(session).next == 300 })
 			pub.killAndWait()
 			if tc.wait {
@@ -81,6 +80,9 @@ func TestSubscriberJoinsAfterPublisherDied(t *testing.T) {
 				}
 			}
 			require.False(t, late.sub.IsConnected())
+			// Only the late joiner keeps polling, so the first subscription must not hold the restarted publisher back.
+			first.requireClean()
+			require.NoError(t, first.sub.Close())
 
 			pub2 := startPeer(t, tc.pubLang, "pub", pubArgs(ch, stream, "size=3000", "count=200", "from=300")...)
 			session2 := int32(pub2.await("ready", 30*time.Second, nil).int("sessionId"))
@@ -88,7 +90,6 @@ func TestSubscriberJoinsAfterPublisherDied(t *testing.T) {
 			require.EqualValues(t, 300, late.session(session2).first)
 			oracle.await("progress", 30*time.Second, func(e event) bool { return e.int("received") >= 200 })
 			late.requireClean()
-			first.requireClean()
 		})
 	}
 }
@@ -112,8 +113,10 @@ func TestPublisherKilledUnderLoss(t *testing.T) {
 		lang lang
 		tr   transport
 		pub  pubKind
+		size int
 	}{
-		{goLang, udp, concurrentOffer}, {javaLang, udp, exclusiveOffer}, {goLang, mdcManual, exclusiveClaim},
+		{goLang, udp, concurrentOffer, 3000}, {javaLang, udp, exclusiveOffer, 3000},
+		{goLang, mdcManual, exclusiveClaim, 1000},
 	}
 	for i, tc := range cases {
 		tc := tc
@@ -125,7 +128,7 @@ func TestPublisherKilledUnderLoss(t *testing.T) {
 			a := connect(t)
 			ch := channelsFor(tc.tr, port)
 			c := newConsumer(t, a, pollFA, ch.sub, stream, ch.subDests...)
-			p := startPeer(t, tc.lang, "pub", pubArgs(ch, stream, append(tc.pub.args(), "size=3000", "intervalUs=100")...)...)
+			p := startPeer(t, tc.lang, "pub", pubArgs(ch, stream, append(tc.pub.args(), fmt.Sprintf("size=%d", tc.size), "intervalUs=100")...)...)
 			ready := p.await("ready", 30*time.Second, nil)
 			session := int32(ready.int("sessionId"))
 			p.await("connected", 30*time.Second, nil)

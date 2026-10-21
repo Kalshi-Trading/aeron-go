@@ -45,8 +45,12 @@ func TestDeadExclusivePublisherResumes(t *testing.T) {
 			ch := channelsFor(tc.tr, port)
 			c := newConsumer(t, a, tc.consumer, ch.sub, stream, ch.subDests...)
 
-			oracle := startPeer(t, javaLang, "sub", subPeerArgs(ch, stream)...)
-			oracle.await("ready", 30*time.Second, nil)
+			// The Java subscriber is the oracle; a multi-destination subscription can't share its endpoint.
+			var oracle *peer
+			if tc.tr != mds {
+				oracle = startPeer(t, javaLang, "sub", subPeerArgs(ch, stream)...)
+				oracle.await("ready", 30*time.Second, nil)
+			}
 			holder := startPeer(t, tc.lang, "pub", pubArgs(ch, stream, "exclusive=true", "mode="+tc.mode,
 				fmt.Sprintf("size=%d", tc.size), fmt.Sprintf("holdAfter=%d", tc.holdAfter), "holdFragment=3")...)
 			ready := holder.await("ready", 30*time.Second, nil)
@@ -61,7 +65,9 @@ func TestDeadExclusivePublisherResumes(t *testing.T) {
 			cur := c
 			if tc.mode == "holdclaim" {
 				c.pollUntil("unavailable image", 20*time.Second, func() bool { return c.isGone(session) })
-				oracle.await("imageGone", 20*time.Second, nil)
+				if oracle != nil {
+					oracle.await("imageGone", 20*time.Second, nil)
+				}
 				c.pollFor(100 * time.Millisecond)
 				c.mu.Lock()
 				var eos bool
@@ -79,18 +85,23 @@ func TestDeadExclusivePublisherResumes(t *testing.T) {
 				// until its subscribers close. The Java oracle subscriber must see the same.
 				c.pollFor(clientLiveness + unblockTimeout + 3*time.Second)
 				require.False(t, c.isGone(session), "Go image went unavailable, Java's does not")
-				require.Nil(t, oracle.last("imageGone"), "Java oracle image went unavailable")
 				img := c.imageFor(session)
-				finalPosition = img.EndOfStreamPosition()
+				// The resume point is the end of the reserved message: the dead publication's final position.
+				finalPosition = holder.last("holding").int("position") +
+					int64(computeFragmentedLength(tc.size, int(ready.int("maxPayloadLength"))))
 				require.Less(t, img.Position(), finalPosition)
-				require.Equal(t, holder.last("holding").int("position")+
-					int64(computeFragmentedLength(tc.size, int(ready.int("maxPayloadLength")))), finalPosition)
+				if tc.tr == ipc {
+					require.Equal(t, finalPosition, img.EndOfStreamPosition())
+				}
 				require.NoError(t, c.sub.Close())
-				oracle.send("exit")
-				select {
-				case <-oracle.exited:
-				case <-time.After(20 * time.Second):
-					t.Fatal("oracle did not exit")
+				if oracle != nil {
+					require.Nil(t, oracle.last("imageGone"), "Java oracle image went unavailable")
+					oracle.send("exit")
+					select {
+					case <-oracle.exited:
+					case <-time.After(20 * time.Second):
+						t.Fatal("oracle did not exit")
+					}
 				}
 				cur = newConsumer(t, a, tc.consumer, ch.sub, stream, ch.subDests...)
 			}

@@ -212,6 +212,7 @@ public final class CrashTool
     {
         if (result == Publication.CLOSED || result == Publication.MAX_POSITION_EXCEEDED)
         {
+            LockSupport.parkNanos(1_000_000_000L);
             throw new IllegalStateException("offer failed: " + result);
         }
     }
@@ -229,7 +230,7 @@ public final class CrashTool
             stats.computeIfAbsent(header.sessionId(), (k) -> new Stats()).onMessage(buffer, offset, length, header));
         long total = 0;
         long lastProgressMs = 0;
-        while (true)
+        while (!aeron.isClosed())
         {
             final int n = sub.poll(handler, 64);
             if (n == 0)
