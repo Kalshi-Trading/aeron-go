@@ -40,7 +40,7 @@ type Int32Field struct {
 func (fld *Int32Field) Wrap(buffer *atomic.Buffer, offset int) int {
 	atomic.BoundsCheck(int32(offset), 4, buffer.Capacity())
 
-	fld.offset = unsafe.Pointer(uintptr(buffer.Ptr()) + uintptr(offset))
+	fld.offset = buffer.PtrAt(int32(offset), 4)
 	return 4
 }
 
@@ -65,7 +65,7 @@ type Int64Field struct {
 func (fld *Int64Field) Wrap(buffer *atomic.Buffer, offset int) int {
 	atomic.BoundsCheck(int32(offset), 8, buffer.Capacity())
 
-	fld.offset = unsafe.Pointer(uintptr(buffer.Ptr()) + uintptr(offset))
+	fld.offset = buffer.PtrAt(int32(offset), 8)
 	return 8
 }
 
@@ -89,9 +89,9 @@ func (fld *Int64Field) CAS(curValue, newValue int64) bool {
 
 // StringField is string field for flyweight
 type StringField struct {
-	lenOffset  unsafe.Pointer
-	dataOffset unsafe.Pointer
-	fly        Flyweight
+	buffer   *atomic.Buffer
+	lenIndex int32
+	fly      Flyweight
 }
 
 func (fld *StringField) Wrap(buffer *atomic.Buffer, offset int, fly Flyweight, align bool) int {
@@ -103,36 +103,29 @@ func (fld *StringField) Wrap(buffer *atomic.Buffer, offset int, fly Flyweight, a
 		offsetAdjustment = int(off) - offset
 	}
 
-	atomic.BoundsCheck(off, 4, buffer.Capacity())
-
-	fld.lenOffset = unsafe.Add(buffer.Ptr(), off)
-	l := *(*int32)(fld.lenOffset)
-
+	l := buffer.GetInt32(off)
 	atomic.BoundsCheck(off+4, l, buffer.Capacity())
 
+	fld.buffer = buffer
+	fld.lenIndex = off
 	fld.fly = fly
-	fld.dataOffset = buffer.PtrAt(off+4, l)
 	return 4 + int(l) + offsetAdjustment
 }
 
+// Get returns the string; panics with *atomic.IndexOutOfBoundsError if the stored length is out of bounds.
 func (fld *StringField) Get() string {
-	length := *(*int32)(fld.lenOffset)
-
-	bArr := make([]byte, length)
-	for ix := 0; ix < int(length); ix++ {
-		uptr := unsafe.Pointer(uintptr(fld.dataOffset) + uintptr(ix))
-		bArr[ix] = *(*uint8)(uptr)
-	}
-
-	return string(bArr)
+	length := fld.buffer.GetInt32(fld.lenIndex)
+	return fld.buffer.GetStringWithoutLengthAscii(fld.lenIndex+4, length)
 }
 
+// Set writes value and adjusts the flyweight size. It panics with *atomic.IndexOutOfBoundsError, leaving the
+// buffer unchanged, if value does not fit in the wrapped buffer.
 func (fld *StringField) Set(value string) {
 	length := int32(len(value))
-	prevLen := *(*int32)(fld.lenOffset)
-	*(*int32)(fld.lenOffset) = length
-
-	util.Memcpy(fld.dataOffset, unsafe.Pointer(unsafe.StringData(value)), length)
+	fld.buffer.BoundsCheck(fld.lenIndex+4, length)
+	prevLen := fld.buffer.GetInt32(fld.lenIndex)
+	fld.buffer.PutInt32(fld.lenIndex, length)
+	fld.buffer.PutBytesSlice(fld.lenIndex+4, unsafe.Slice(unsafe.StringData(value), len(value)))
 
 	size := fld.fly.Size()
 	size -= int(prevLen)

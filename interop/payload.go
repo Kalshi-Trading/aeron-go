@@ -113,9 +113,14 @@ func Verify(msg []byte, expectedSeq int64, sizes Sizes) string {
 
 // ExpectedDigest is the SHA-256 a receiver reports after receiving messages [0, count).
 func ExpectedDigest(sizes Sizes, count int64) string {
+	return ExpectedDigestFrom(sizes, 0, count)
+}
+
+// ExpectedDigestFrom is the SHA-256 a receiver reports after receiving messages [first, first+count).
+func ExpectedDigestFrom(sizes Sizes, first, count int64) string {
 	h := sha256.New()
 	buf := make([]byte, sizes.Max())
-	for i := int64(0); i < count; i++ {
+	for i := first; i < first+count; i++ {
 		msg := buf[:sizes.Length(i)]
 		Fill(msg, i)
 		h.Write(msg)
@@ -139,6 +144,8 @@ type Result struct {
 type Verifier struct {
 	Sizes         Sizes
 	CheckReserved bool
+	// First is the sequence number of the first expected message (e.g. a replay from a mid position).
+	First int64
 
 	count, errors, bytes int64
 	firstError           string
@@ -165,7 +172,7 @@ func (v *Verifier) OnFragment(buffer *atomic.Buffer, offset int32, length int32,
 
 // OnMessage verifies one whole message.
 func (v *Verifier) OnMessage(msg []byte, position int64, sessionID int32, reservedValue int64) {
-	expected := v.count
+	expected := v.First + v.count
 	if err := Verify(msg, expected, v.Sizes); err != "" {
 		v.error(err)
 	} else if v.CheckReserved && reservedValue != ReservedValue(expected) {

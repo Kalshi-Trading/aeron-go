@@ -64,6 +64,9 @@ func (l *DistinctErrorLog) Buffer() *atomic.Buffer { return l.buffer }
 
 // Record records an observation of err, returning false if the buffer has no space for a new distinct error.
 func (l *DistinctErrorLog) Record(err error) bool {
+	if err == nil {
+		return false
+	}
 	now := l.clock()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -78,11 +81,11 @@ func (l *DistinctErrorLog) Record(err error) bool {
 		l.buffer.PutInt64Ordered(offset+LastObservationTimestampOffset, now)
 		return true
 	}
-	length := EncodedErrorOffset + int32(len(encoded))
 	offset := l.nextOffset
-	if offset+length > l.buffer.Capacity() {
+	if int64(offset)+int64(EncodedErrorOffset)+int64(len(encoded)) > int64(l.buffer.Capacity()) {
 		return false
 	}
+	length := EncodedErrorOffset + int32(len(encoded))
 	if len(encoded) > 0 {
 		b := []byte(encoded)
 		l.buffer.PutBytesArray(offset+EncodedErrorOffset, &b, 0, int32(len(b)))

@@ -12,12 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// An example replayed subscriber
+// basic_replay_merge is a port of Java's ReplayMergeSubscriber: it replays the latest recording of
+// -samplechannel/-samplestream from its start position and merges onto the live stream, which is added as a
+// destination of a manual multi-destination subscription. Pair it with basic_recording_publisher.
 package main
 
 import (
 	"flag"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
@@ -26,9 +31,14 @@ import (
 	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/lirm/aeron-go/aeron/logging"
 	"github.com/lirm/aeron-go/archive"
-	"github.com/lirm/aeron-go/archive/codecs"
 	"github.com/lirm/aeron-go/archive/examples"
 	"github.com/lirm/aeron-go/archive/replaymerge"
+)
+
+var (
+	exitAfter         = flag.Int("exit", 0, "exit after receiving this many messages (0 = run until interrupted)")
+	replayDestination = flag.String("replaydestination", "aeron:udp?endpoint=localhost:0",
+		"replay destination; port 0 is resolved before the replay is requested")
 )
 
 var logID = "basic_replay_merge"
@@ -37,143 +47,97 @@ var logger = logging.MustGetLogger(logID)
 func main() {
 	flag.Parse()
 
-	sampleChannel := *examples.Config.MdcChannel
-	sampleStream := int32(*examples.Config.SampleStream)
-	responseStream := sampleStream + 2
+	// As per Java: the live destination is the recorded sample channel.
+	liveDestination := *examples.Config.SampleChannel
+	streamID := int32(*examples.Config.SampleStream)
+	fmt.Printf("Subscribing to live %s, and replay %s on stream id %d\n", liveDestination, *replayDestination, streamID)
 
 	timeout := time.Duration(time.Millisecond.Nanoseconds() * *examples.Config.DriverTimeout)
 	context := aeron.NewContext().
 		AeronDir(*examples.Config.AeronPrefix).
 		MediaDriverTimeout(timeout).
-		AvailableImageHandler(func(image aeron.Image) {
-			logger.Infof("Image available: %+v", image)
-		}).
-		UnavailableImageHandler(func(image aeron.Image) {
-			logger.Infof("Image unavailable: %+v", image)
-		}).
-		ErrorHandler(func(err error) {
-			logger.Warning(err)
-		})
+		AvailableImageHandler(examples.PrintAvailableImage).
+		UnavailableImageHandler(examples.PrintUnavailableImage)
 
 	options := archive.DefaultOptions()
 	options.RequestChannel = *examples.Config.RequestChannel
 	options.RequestStream = int32(*examples.Config.RequestStream)
 	options.ResponseChannel = *examples.Config.ResponseChannel
-	options.ResponseStream = responseStream
-
-	t := false
-	examples.Config.Verbose = &t
+	options.ResponseStream = int32(*examples.Config.ResponseStream)
 	if *examples.Config.Verbose {
-		fmt.Printf("Setting loglevel: archive.DEBUG/aeron.INFO\n")
 		options.ArchiveLoglevel = logging.DEBUG
 		options.AeronLoglevel = logging.DEBUG
 		logging.SetLevel(logging.DEBUG, logID)
-	} else {
-		logging.SetLevel(logging.NOTICE, logID)
 	}
 
 	arch, err := archive.NewArchive(options, context)
 	if err != nil {
-		logger.Fatalf("Failed to connect to media driver: %s\n", err.Error())
+		logger.Fatalf("Failed to connect to the archive: %s", err)
 	}
 	defer arch.Close()
 
-	// Enable recording events although the defaults will only log in debug mode
-	arch.EnableRecordingEvents()
-
-	recording, err := FindLatestRecording(arch, sampleChannel, sampleStream)
+	descriptor, err := examples.FindLatestRecording(arch, liveDestination, streamID)
 	if err != nil {
-		logger.Fatalf(err.Error())
+		logger.Fatal(err)
+	}
+	if descriptor == nil {
+		logger.Fatalf("No recordings found for channel %s and stream id %d", liveDestination, streamID)
 	}
 
-	subChannelUri, _ := aeron.ParseChannelUri("aeron:udp")
-	subChannelUri.SetControlMode(aeron.MdcControlModeManual)
-	subChannelUri.SetSessionID(recording.SessionId)
-	subChannel := subChannelUri.String()
+	replayChannel := fmt.Sprintf("aeron:udp?session-id=%d", descriptor.SessionId)
+	subscriptionChannel := fmt.Sprintf("aeron:udp?control-mode=manual|session-id=%d", descriptor.SessionId)
 
-	logger.Infof("Subscribing to channel:%s, stream:%d", subChannel, sampleStream)
-	subscription, err := arch.AddSubscription(subChannel, sampleStream)
+	// The multi-destination subscription that ReplayMerge adds the replay and live destinations to.
+	subscription, err := arch.AddSubscription(subscriptionChannel, streamID)
 	if err != nil {
 		logger.Fatal(err)
 	}
 	defer subscription.Close()
 
-	counter := 0
-	printHandler := func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
-		bytes := buffer.GetBytesArray(offset, length)
-		logger.Infof("Message: %s", bytes)
-		counter++
-	}
-
-	idleStrategy := idlestrategy.Sleeping{SleepFor: time.Millisecond * 100}
-
-	liveDestination := sampleChannel
-
-	// An ephemeral port: ReplayMerge resolves the bound port before requesting the replay.
-	replayDestination := "aeron:udp?endpoint=localhost:0"
-
-	replayChannelUri, _ := aeron.ParseChannelUri("aeron:udp")
-	replayChannelUri.SetSessionID(recording.SessionId)
-	replayChannel := replayChannelUri.String()
-
-	logger.Infof(
-		"ReplayMerge(subChannel:%s,%d,replayChannel:%s,replayDestination:%s,liveDestination:%s)",
-		subscription.Channel(),
-		subscription.StreamID(),
-		replayChannel,
-		replayDestination,
-		liveDestination,
-	)
-	merge, err := replaymerge.NewReplayMergeWithDefaults(
-		subscription,
-		arch,
-		replayChannel,
-		replayDestination,
-		liveDestination,
-		recording.RecordingId,
-		0,
-	)
+	merge, err := replaymerge.NewReplayMergeWithDefaults(subscription, arch, replayChannel, *replayDestination,
+		liveDestination, descriptor.RecordingId, descriptor.StartPosition)
 	if err != nil {
-		logger.Fatalf(err.Error())
+		logger.Fatal(err)
 	}
 	defer merge.Close()
 
-	for !merge.IsMerged() {
-		fragmentsRead, err := merge.Poll(printHandler, 10)
-		if err != nil {
-			logger.Fatalf("replay merge failed: %s: %s", err, merge)
+	isLive := false
+	received := 0
+	handler := aeron.NewFragmentAssembler(func(buffer *atomic.Buffer, offset, length int32, header *logbuffer.Header) {
+		streamState := "replay"
+		if isLive {
+			streamState = "live"
 		}
-		arch.RecordingEventsPoll()
-		idleStrategy.Idle(fragmentsRead)
+		fmt.Printf("Message to %s stream %d from session %d (%d@%d) <<%s>>\n", streamState, streamID,
+			header.SessionId(), length, offset, string(buffer.GetBytesArray(offset, length)))
+		received++
+	}, aeron.DefaultFragmentAssemblyBufferLength)
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	idleStrategy := idlestrategy.Yielding{}
+loop:
+	for *exitAfter == 0 || received < *exitAfter {
+		select {
+		case <-stop:
+			break loop
+		default:
+		}
+		if merge.HasFailed() {
+			logger.Fatalf("ReplayMerge has failed, %s", merge)
+		}
+		if merge.IsMerged() && !isLive {
+			fmt.Println("===========")
+			fmt.Println("ReplayMerge has joined live stream.")
+			fmt.Println("===========")
+			isLive = true
+		}
+		fragments, err := merge.Poll(handler.OnFragment, 10)
+		if err != nil {
+			logger.Fatalf("ReplayMerge has failed: %s, %s", err, merge)
+		}
+		idleStrategy.Idle(fragments)
 	}
-	logger.Infof("Merged with live stream after %d messages: %s", counter, merge)
-
-	// Once merged the replay has been stopped and removed and the image continues on the live destination.
-	image := merge.Image()
-	for !image.IsClosed() {
-		fragmentsRead := image.Poll(printHandler, 10)
-		arch.RecordingEventsPoll()
-		idleStrategy.Idle(fragmentsRead)
-	}
-}
-
-// FindLatestRecording to lookup the last recording
-func FindLatestRecording(arch *archive.Archive, channel string, stream int32) (*codecs.RecordingDescriptor, error) {
-	descriptors, err := arch.ListRecordingsForUri(0, 100, "", stream)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if len(descriptors) == 0 {
-		return nil, fmt.Errorf("no recordings found")
-	}
-
-	descriptor := descriptors[len(descriptors)-1]
-	if descriptor.StopPosition == 0 {
-		return nil, fmt.Errorf("recording length zero")
-	}
-
-	// Return the last recordingID
-	return descriptor, nil
+	fmt.Println("Shutting down...")
+	fmt.Printf("Received %d messages\n", received)
 }

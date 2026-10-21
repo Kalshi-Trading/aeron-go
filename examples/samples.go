@@ -85,16 +85,24 @@ func IsTerminalOfferResult(result int64) bool {
 	return result == aeron.PublicationClosed || result == aeron.MaxPositionExceeded
 }
 
-// PrintAvailableImage mirrors SamplesUtil.printAvailableImage. aeron.Image does not expose its
-// subscription, channel, stream id or source identity (see docs/API_AUDIT.md), so fewer fields are shown.
+// PrintAvailableImage mirrors SamplesUtil.printAvailableImage.
 func PrintAvailableImage(image aeron.Image) {
-	fmt.Printf("Available image subscriptionId=%d sessionId=%d term-length=%d correlationId=%d\n",
-		image.SubscriptionRegistrationID(), image.SessionID(), image.TermBufferLength(), image.CorrelationID())
+	channel, streamID := imageSubscription(image)
+	fmt.Printf("Available image on %s streamId=%d sessionId=%d mtu=%d term-length=%d from %s\n",
+		channel, streamID, image.SessionID(), image.MtuLength(), image.TermBufferLength(), image.SourceIdentity())
 }
 
 // PrintUnavailableImage mirrors SamplesUtil.printUnavailableImage.
 func PrintUnavailableImage(image aeron.Image) {
-	fmt.Printf("Unavailable image subscriptionId=%d sessionId=%d\n", image.SubscriptionRegistrationID(), image.SessionID())
+	channel, streamID := imageSubscription(image)
+	fmt.Printf("Unavailable image on %s streamId=%d sessionId=%d\n", channel, streamID, image.SessionID())
+}
+
+func imageSubscription(image aeron.Image) (string, int32) {
+	if sub := image.Subscription(); sub != nil {
+		return sub.Channel(), sub.StreamID()
+	}
+	return "", aeron.NullValue
 }
 
 // PrintStringMessage mirrors SamplesUtil.printAsciiMessage.

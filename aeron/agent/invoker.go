@@ -27,8 +27,9 @@ func (i *Invoker) Start() {
 	}
 	i.isStarted = true
 	if err := i.agent.OnStart(); err != nil {
-		i.isRunning = true
-		i.handleError(err)
+		if i.errorHandler != nil {
+			i.errorHandler(err)
+		}
 		i.Close()
 		return
 	}

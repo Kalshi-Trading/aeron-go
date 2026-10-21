@@ -143,10 +143,11 @@ func getBufferBuilder(builders map[int32]*BufferBuilder, sessionID int32, initia
 	return builder
 }
 
-// newAssemblerBufferBuilder clamps out of range initial lengths rather than failing, as the assembler
+// newAssemblerBufferBuilder treats an out of range initial length (negative or above
+// BufferBuilderMaxCapacity) as 0, i.e. allocate lazily, rather than failing, as the assembler
 // constructors do not return errors; the buffer grows as needed regardless.
 func newAssemblerBufferBuilder(initialBufferLength int32) *BufferBuilder {
-	if initialBufferLength < 0 {
+	if initialBufferLength < 0 || initialBufferLength > BufferBuilderMaxCapacity {
 		initialBufferLength = 0
 	}
 	builder, _ := NewBufferBuilder(initialBufferLength)

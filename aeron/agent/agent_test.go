@@ -115,3 +115,36 @@ func TestComposite(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+type failStartAgent struct{ countingAgent }
+
+func (a *failStartAgent) OnStart() error { return errors.New("start failed") }
+
+// Agrona AgentInvoker.start passes an onStart failure straight to the error handler without
+// incrementing the error counter, then closes the agent.
+func TestInvokerStartFailureDoesNotCountError(t *testing.T) {
+	a := &failStartAgent{countingAgent{name: "f"}}
+	c := &counter{}
+	var errs []error
+	inv := NewInvoker(func(err error) { errs = append(errs, err) }, c, a)
+	inv.Start()
+	if c.n.Load() != 0 || len(errs) != 1 || !inv.IsClosed() || inv.IsRunning() || a.closed.Load() != 1 {
+		t.Fatalf("counter=%d errs=%v closed=%v running=%v", c.n.Load(), errs, inv.IsClosed(), inv.IsRunning())
+	}
+}
+
+type countingIdler struct{ calls []int }
+
+func (c *countingIdler) Idle(n int) { c.calls = append(c.calls, n) }
+
+// Agrona AgentRunner does not call the idle strategy when doWork throws.
+func TestRunnerDoesNotIdleAfterError(t *testing.T) {
+	a := &countingAgent{name: "e", failEvery: 2, stopAt: 4}
+	idler := &countingIdler{}
+	r := NewRunner(idler, func(error) {}, nil, a)
+	r.Run()
+	// work 1 ok, 2 fails, 3 ok, 4 terminates: idle only after 1 and 3.
+	if len(idler.calls) != 2 {
+		t.Fatalf("idle calls=%v", idler.calls)
+	}
+}
