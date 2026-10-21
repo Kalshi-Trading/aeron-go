@@ -7,7 +7,8 @@
 #
 # The consensus module waits for one service (aeron.cluster.service.count=1) to ack on the IPC control
 # channel; the Go service runs on the host sharing /dev/shm. Cluster/archive state lives in the
-# cluster-data volume so `docker compose restart cluster-node` exercises snapshot recovery.
+# host bind mount (CLUSTER_SVC_DATA, default /tmp/aeron-cluster-svc-data, must be writable by UID) so
+# `docker compose restart cluster-node` exercises snapshot recovery.
 services:
   cluster-node:
     build: .
@@ -17,7 +18,7 @@ services:
     shm_size: 2g
     volumes:
       - /dev/shm:/dev/shm
-      - cluster-data:/data/cluster
+      - ${CLUSTER_SVC_DATA:-/tmp/aeron-cluster-svc-data}:/data/cluster
     environment:
       AERON_PROPS: >-
         -Daeron.dir=/dev/shm/aeron-cluster-svc
@@ -47,10 +48,3 @@ services:
       interval: 1s
       retries: 30
 
-volumes:
-  cluster-data:
-    # tmpfs owned by uid 1000 so the non-root container user can write
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
-      o: "uid=1000,gid=1000,size=1g"

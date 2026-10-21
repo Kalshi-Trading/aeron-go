@@ -122,14 +122,16 @@ func (cmf *ClusterMarkFile) DecodeStrings() []string {
 	return result
 }
 
-func (cmf *ClusterMarkFile) SetArchiveStreamId(v int32)         { cmf.flyweight.ArchiveStreamId.Set(v) }
-func (cmf *ClusterMarkFile) SetServiceStreamId(v int32)         { cmf.flyweight.ServiceStreamId.Set(v) }
-func (cmf *ClusterMarkFile) SetConsensusModuleStreamId(v int32) { cmf.flyweight.ConsensusModuleStreamId.Set(v) }
-func (cmf *ClusterMarkFile) SetIngressStreamId(v int32)         { cmf.flyweight.IngressStreamId.Set(v) }
-func (cmf *ClusterMarkFile) SetMemberId(v int32)                { cmf.flyweight.MemberId.Set(v) }
-func (cmf *ClusterMarkFile) SetServiceId(v int32)               { cmf.flyweight.ServiceId.Set(v) }
-func (cmf *ClusterMarkFile) SetClusterId(v int32)               { cmf.flyweight.ClusterId.Set(v) }
-func (cmf *ClusterMarkFile) SetCandidateTermId(v int64)         { cmf.flyweight.CandidateTermId.Set(v) }
+func (cmf *ClusterMarkFile) SetArchiveStreamId(v int32) { cmf.flyweight.ArchiveStreamId.Set(v) }
+func (cmf *ClusterMarkFile) SetServiceStreamId(v int32) { cmf.flyweight.ServiceStreamId.Set(v) }
+func (cmf *ClusterMarkFile) SetConsensusModuleStreamId(v int32) {
+	cmf.flyweight.ConsensusModuleStreamId.Set(v)
+}
+func (cmf *ClusterMarkFile) SetIngressStreamId(v int32) { cmf.flyweight.IngressStreamId.Set(v) }
+func (cmf *ClusterMarkFile) SetMemberId(v int32)        { cmf.flyweight.MemberId.Set(v) }
+func (cmf *ClusterMarkFile) SetServiceId(v int32)       { cmf.flyweight.ServiceId.Set(v) }
+func (cmf *ClusterMarkFile) SetClusterId(v int32)       { cmf.flyweight.ClusterId.Set(v) }
+func (cmf *ClusterMarkFile) SetCandidateTermId(v int64) { cmf.flyweight.CandidateTermId.Set(v) }
 
 // SignalReady stores the activity timestamp then publishes the semantic version with release semantics.
 func (cmf *ClusterMarkFile) SignalReady(activityTimestampMs int64) {
