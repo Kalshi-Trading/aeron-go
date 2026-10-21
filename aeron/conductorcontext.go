@@ -94,7 +94,7 @@ func (cc *ClientConductor) onHeartbeatCounterFound(counterID int32) {
 
 // preTouchLogBuffers faults in every page of the log buffers (LogBuffers.preTouch).
 func preTouchLogBuffers(lb *logbuffer.LogBuffers) {
-	pageSize := lb.Meta().PageSize.Get()
+	pageSize := lb.Meta().PageSize()
 	if pageSize <= 0 {
 		pageSize = 4 * 1024
 	}

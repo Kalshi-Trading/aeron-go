@@ -1498,7 +1498,11 @@ func DefaultImageFactory(sessionID int32, corrID int64, logFilename string, subR
 	image := NewImage(sessionID, corrID, logbuffer.Wrap(logFilename))
 	image.subscriptionRegistrationID = subRegId
 	image.sourceIdentity = sourceIdentity
+	image.logFileName = logFilename
 	image.subscriberPosition = NewPosition(counterValuesBuffer, subscriberPositionID)
+	image.joinPosition = image.subscriberPosition.get()
+	logger.Debugf("OnAvailableImage: new image position: %v -> %d",
+		image.subscriberPosition, image.subscriberPosition.get())
 	return image
 }
 

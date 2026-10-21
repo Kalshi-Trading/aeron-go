@@ -357,7 +357,11 @@ func (proxy *Proxy) CatalogHeaderRequest(version int32, length int32, nextRecord
 // ReplicateRequest packet and offer
 func (proxy *Proxy) ReplicateRequest(correlationID int64, srcRecordingID int64, dstRecordingID int64, srcControlStreamID int32, srcControlChannel string, liveDestination string) error {
 	// Create a packet and send it
-	bytes, err := codecs.ReplicateRequestPacket(proxy.marshaller, proxy.archive.Options.RangeChecking, proxy.archive.SessionID, correlationID, srcRecordingID, dstRecordingID, srcControlStreamID, srcControlChannel, liveDestination)
+	// Java 1.53.3 sends every replicate variant as ReplicateRequest2.
+	params := NewReplicationParams()
+	params.DstRecordingID = dstRecordingID
+	params.LiveDestination = liveDestination
+	bytes, err := codecs.ReplicateRequest2FullPacket(proxy.marshaller, proxy.archive.Options.RangeChecking, proxy.archive.SessionID, correlationID, params.toCodec(srcRecordingID, srcControlStreamID, srcControlChannel))
 	if err != nil {
 		return err
 	}
@@ -538,7 +542,13 @@ func (proxy *Proxy) KeepAliveRequest(correlationID int64) error {
 // TaggedReplicateRequest packet and offer
 func (proxy *Proxy) TaggedReplicateRequest(correlationID int64, srcRecordingID int64, dstRecordingID int64, channelTagID int64, subscriptionTagID int64, srcControlStreamID int32, srcControlChannel string, liveDestination string) error {
 	// Create a packet and send it
-	bytes, err := codecs.TaggedReplicateRequestPacket(proxy.marshaller, proxy.archive.Options.RangeChecking, proxy.archive.SessionID, correlationID, srcRecordingID, dstRecordingID, channelTagID, subscriptionTagID, srcControlStreamID, srcControlChannel, liveDestination)
+	// Java 1.53.3 sends every replicate variant as ReplicateRequest2.
+	params := NewReplicationParams()
+	params.DstRecordingID = dstRecordingID
+	params.ChannelTagID = channelTagID
+	params.SubscriptionTagID = subscriptionTagID
+	params.LiveDestination = liveDestination
+	bytes, err := codecs.ReplicateRequest2FullPacket(proxy.marshaller, proxy.archive.Options.RangeChecking, proxy.archive.SessionID, correlationID, params.toCodec(srcRecordingID, srcControlStreamID, srcControlChannel))
 	if err != nil {
 		return err
 	}

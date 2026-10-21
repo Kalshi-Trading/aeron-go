@@ -1,113 +1,176 @@
-// Copyright (C) 2021-2022 Talos, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+Copyright 2016 Stanislav Liberman
 
-// An example recorded publisher
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+// basic_recording_publisher is a port of io.aeron.samples.archive.RecordedBasicPublisher: it asks
+// the archive to record -samplechannel/-samplestream, publishes -messages "Hello World! <n>"
+// messages (one every -interval), waits for the recording to catch up and stops the recording.
 package main
 
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/idlestrategy"
+	"github.com/lirm/aeron-go/aeron/counters"
 	"github.com/lirm/aeron-go/aeron/logging"
 	"github.com/lirm/aeron-go/archive"
 	"github.com/lirm/aeron-go/archive/examples"
 )
 
-var logID = "basic_recording_publisher"
-var logger = logging.MustGetLogger(logID)
+var interval = flag.Duration("interval", time.Second, "delay between messages")
 
 func main() {
 	flag.Parse()
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
-	timeout := time.Duration(time.Millisecond.Nanoseconds() * *examples.Config.DriverTimeout)
-	context := aeron.NewContext()
-	context.AeronDir(*examples.Config.AeronPrefix)
-	context.MediaDriverTimeout(timeout)
+	// ssc=true (spies-simulate-connection) lets the archive's local spy count as a subscriber, so
+	// offers succeed without a live network subscriber.
+	channel := *examples.Config.SampleChannel
+	if !strings.Contains(channel, "ssc=") {
+		channel += "|ssc=true"
+	}
+	stream := int32(*examples.Config.SampleStream)
+	fmt.Printf("Publishing to %s on stream id %d\n", channel, stream)
 
+	arch := connect()
+	defer arch.Close()
+
+	if _, err := arch.StartRecording(channel, stream, true, false); err != nil {
+		log.Fatalf("StartRecording failed: %v", err)
+	}
+	defer func() {
+		if err := arch.StopRecording(channel, stream); err != nil {
+			log.Printf("StopRecording failed: %v", err)
+		}
+	}()
+
+	publication, err := arch.AddPublication(channel, stream)
+	if err != nil {
+		log.Fatalf("AddPublication failed: %v", err)
+	}
+	defer publication.Close()
+
+	counterID, recordingID, err := awaitRecordingCounter(arch, publication.SessionID(), 10*time.Second)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("Recording started: recordingId = %d\n", recordingID)
+
+	buffer := atomic.MakeBuffer(make([]byte, 256))
+	messages := *examples.Config.Messages
+loop:
+	for i := 0; i < messages; i++ {
+		msg := []byte(fmt.Sprintf("Hello World! %d", i))
+		buffer.PutBytesArray(0, &msg, 0, int32(len(msg)))
+		fmt.Printf("Offering %d/%d - ", i, messages)
+		if result := publication.Offer(buffer, 0, int32(len(msg)), nil); result > 0 {
+			fmt.Println("yay!")
+		} else {
+			fmt.Println(offerFailure(result))
+		}
+		if _, err := arch.PollForErrorResponse(); err != nil {
+			log.Fatal(err)
+		}
+		select {
+		case <-stop:
+			break loop
+		case <-time.After(*interval):
+		}
+	}
+
+	if err := awaitRecordingPosition(arch, counterID, recordingID, publication.Position(), 10*time.Second); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("Done sending. recordingId=%d position=%d\n", recordingID, publication.Position())
+}
+
+func offerFailure(result int64) string {
+	switch result {
+	case aeron.BackPressured:
+		return "Offer failed due to back pressure"
+	case aeron.NotConnected:
+		return "Offer failed because publisher is not connected to a subscriber"
+	case aeron.AdminAction:
+		return "Offer failed because of an administration action in the system"
+	case aeron.PublicationClosed:
+		return "Offer failed because publication is closed"
+	default:
+		return fmt.Sprintf("Offer failed due to unknown reason: %d", result)
+	}
+}
+
+func connect() *archive.Archive {
+	context := aeron.NewContext().
+		AeronDir(*examples.Config.AeronPrefix).
+		MediaDriverTimeout(time.Duration(*examples.Config.DriverTimeout) * time.Millisecond)
 	options := archive.DefaultOptions()
 	options.RequestChannel = *examples.Config.RequestChannel
 	options.RequestStream = int32(*examples.Config.RequestStream)
 	options.ResponseChannel = *examples.Config.ResponseChannel
 	options.ResponseStream = int32(*examples.Config.ResponseStream)
-
 	if *examples.Config.Verbose {
-		fmt.Printf("Setting loglevel: archive.DEBUG/aeron.INFO\n")
 		options.ArchiveLoglevel = logging.DEBUG
 		options.AeronLoglevel = logging.DEBUG
-		logging.SetLevel(logging.DEBUG, logID)
-	} else {
-		logging.SetLevel(logging.NOTICE, logID)
-
 	}
-
 	arch, err := archive.NewArchive(options, context)
 	if err != nil {
-		logger.Fatalf("Failed to connect to media driver: %s\n", err.Error())
+		log.Fatalf("Failed to connect to archive: %v", err)
 	}
-	defer arch.Close()
+	return arch
+}
 
-	channel := *examples.Config.MdcChannel + "|ssc=true"
-	stream := int32(*examples.Config.SampleStream)
-
-	if _, err := arch.StartRecording(channel, stream, true, true); err != nil {
-		logger.Errorf("StartRecording failed: %s\n", err.Error())
-		os.Exit(1)
-	}
-	logger.Infof("StartRecording succeeded\n")
-
-	publication, err := arch.AddPublication(channel, stream)
-	if err != nil {
-		logger.Fatal(err)
-	}
-	logger.Infof("Publication found %v", publication)
-	defer publication.Close()
-
-	// FIXME:counters unimplemented in aeron-go
-	// The Java RecordedBasicPublisher polls the counters to wait until
-	// the recording has actually started.
-	// For now we'll just delay a bit to let that get established
-	// There may be a way to use the NewImageHandler here as well
-	idler := idlestrategy.Sleeping{SleepFor: time.Millisecond * 100}
-	idler.Idle(0)
-
-	for counter := 0; counter < *examples.Config.Messages; counter++ {
-		message := fmt.Sprintf("this is a message %d", counter)
-		srcBuffer := atomic.MakeBuffer(([]byte)(message))
-		ret := publication.Offer(srcBuffer, 0, int32(len(message)), nil)
-		switch ret {
-		case aeron.NotConnected:
-			logger.Warningf("%d, Not connected (yet)", counter)
-
-		case aeron.BackPressured:
-			logger.Warningf("%d: back pressured", counter)
-		default:
-			if ret < 0 {
-				logger.Warningf("%d: Unrecognized code: %d", counter, ret)
-			} else {
-				logger.Noticef("%d: success!", counter)
-			}
+// awaitRecordingCounter waits for the archive's RecordingPos counter for sessionID and returns
+// (counterID, recordingID), as RecordingPos.findCounterIdBySession does in Java.
+func awaitRecordingCounter(arch *archive.Archive, sessionID int32, timeout time.Duration) (int32, int64, error) {
+	reader := arch.Aeron().CounterReader()
+	deadline := time.Now().Add(timeout)
+	for {
+		if counterID := archive.FindCounterIdBySession(reader, sessionID); counterID != counters.NullCounterId {
+			return counterID, archive.GetRecordingId(reader, counterID), nil
 		}
-
-		if !publication.IsConnected() {
-			logger.Warningf("no subscribers detected")
+		if _, err := arch.PollForErrorResponse(); err != nil {
+			return 0, 0, err
 		}
-		time.Sleep(time.Second)
+		if time.Now().After(deadline) {
+			return 0, 0, fmt.Errorf("timed out waiting for recording of session %d", sessionID)
+		}
+		time.Sleep(time.Millisecond)
 	}
-	os.Exit(1)
+}
+
+// awaitRecordingPosition waits until the recording has caught up with position.
+func awaitRecordingPosition(arch *archive.Archive, counterID int32, recordingID, position int64, timeout time.Duration) error {
+	reader := arch.Aeron().CounterReader()
+	deadline := time.Now().Add(timeout)
+	for reader.GetCounterValue(counterID) < position {
+		if !archive.IsRecordingActive(reader, counterID, recordingID) {
+			return fmt.Errorf("recording has stopped unexpectedly: %d", recordingID)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for recording %d to reach %d", recordingID, position)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return nil
 }

@@ -63,6 +63,7 @@ type ReceivingConductor interface {
 	releaseSubscription(regID int64, images []Image) error
 	AddRcvDestination(registrationID int64, endpointChannel string) error
 	RemoveRcvDestination(registrationID int64, endpointChannel string) error
+	rejectImage(imageCorrelationID int64, position int64, reason string) error
 }
 
 // Subscription is the object responsible for receiving messages from media driver. It is specific to a channel and
@@ -125,10 +126,14 @@ func (sub *Subscription) ChannelStatus() int {
 	if sub.IsClosed() {
 		return ChannelStatusNoIdAllocated
 	}
-	if sub.channelStatusID == -1 { // IPC channels don't have a channel status counter
+	switch sub.channelStatusID {
+	case 0:
+		return ChannelStatusInitializing
+	case ChannelStatusNoIdAllocated: // IPC channels don't have a channel status counter
 		return ChannelStatusActive
+	default:
+		return int(sub.conductor.CounterReader().GetCounterValue(sub.channelStatusID))
 	}
-	return int(sub.conductor.CounterReader().GetCounterValue(sub.channelStatusID))
 }
 
 // ChannelStatusId returns the counter ID used to represent the channel status of this Subscription.
@@ -141,6 +146,9 @@ func (sub *Subscription) ChannelStatusId() int32 {
 func (sub *Subscription) Close() error {
 	if sub.isClosed.CompareAndSet(false, true) {
 		images := sub.images.Empty()
+		for _, image := range images {
+			closeImage(image)
+		}
 		return sub.conductor.releaseSubscription(sub.registrationID, images)
 	}
 
@@ -237,33 +245,31 @@ func (sub *Subscription) hasImage(sessionID int32) bool {
 	return false
 }
 
-//go:norace
-func (sub *Subscription) addImage(image Image) *[]Image {
-
-	images := sub.images.Get()
-
-	sub.images.Set(append(images, image))
-
-	return &images
+// addImage publishes a new copy of the image list with the image appended (copy-on-write) so that concurrent
+// pollers never observe a mutation of the array they are iterating. Returns the previous list.
+func (sub *Subscription) addImage(img Image) []Image {
+	if i, ok := img.(*image); ok {
+		i.subscription = sub
+	}
+	return sub.images.add(img)
 }
 
-//go:norace
+// removeImage publishes a new copy of the image list without the image with the given correlation id
+// (copy-on-write), marks the removed image as closed and returns it, or nil if not found.
 func (sub *Subscription) removeImage(correlationID int64) Image {
-
-	img := sub.images.Get()
-	for ix, image := range img {
-		if image.CorrelationID() == correlationID {
-			logger.Debugf("Removing image %v for subscription %d", image, sub.registrationID)
-
-			img[ix] = img[len(img)-1]
-			img = img[:len(img)-1]
-
-			sub.images.Set(img)
-
-			return image
-		}
+	image := sub.images.remove(correlationID)
+	if image != nil {
+		logger.Debugf("Removing image %v for subscription %d", image, sub.registrationID)
+		closeImage(image)
 	}
-	return nil
+	return image
+}
+
+// closeImage marks an image closed without releasing its log buffers, which happens after lingering.
+func closeImage(image Image) {
+	if c, ok := image.(interface{ markClosed() }); ok {
+		c.markClosed()
+	}
 }
 
 // RegistrationID returns the registration id.

@@ -31,9 +31,10 @@ import (
 )
 
 type fakeImage struct {
-	sessionID int32
-	position  int64
-	closed    bool
+	aeron.Image // methods not used by the test panic
+	sessionID   int32
+	position    int64
+	closed      bool
 }
 
 func (i *fakeImage) IsClosed() bool                                         { return i.closed }
