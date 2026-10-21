@@ -343,3 +343,36 @@ func errorFrame(sessionID, streamID int32, receiverID int64, code int32, msg str
 	copy(b[40:], msg)
 	return b
 }
+
+// The Java 1.53.3 driver reports a bind failure as ON_ERROR GENERIC_ERROR for the offending command (only legacy
+// drivers use CHANNEL_ENDPOINT_ERROR). The client must surface it as a RegistrationError with that code, not
+// re-route it as a channel endpoint error.
+func TestAddressInUseIsRegistrationError(t *testing.T) {
+	dir := aeronDir(t)
+	rec := &recorder{}
+	a := connect(t, dir, rec)
+
+	taken, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	_, err = a.AddSubscription("aeron:udp?endpoint="+taken.LocalAddr().String(), 4444)
+	var reg *aeron.RegistrationError
+	if !errors.As(err, &reg) {
+		t.Fatalf("expected RegistrationError, got %T %v", err, err)
+	}
+	t.Logf("registration error: %v (code=%s)", reg, reg.ErrorCode())
+	if reg.ErrorCode() != aeron.ErrorCodeGenericError || !strings.Contains(reg.Error(), "Address already in use") {
+		t.Errorf("unexpected error %v code=%s", reg, reg.ErrorCode())
+	}
+	time.Sleep(200 * time.Millisecond)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for _, e := range rec.errs {
+		var ce *aeron.ChannelEndpointError
+		if errors.As(e, &ce) {
+			t.Errorf("unexpected channel endpoint error %v", e)
+		}
+	}
+}

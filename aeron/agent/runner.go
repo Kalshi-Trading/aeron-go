@@ -70,8 +70,7 @@ func (r *Runner) Run() {
 				r.isRunning.Store(false)
 			}
 			r.handleError(err)
-		}
-		if r.isRunning.Load() {
+		} else {
 			r.idleStrategy.Idle(n)
 		}
 	}

@@ -87,17 +87,9 @@ var ErrImageClosed = errors.New("ReplayMerge Image closed unexpectedly")
 // ErrArchiveNotConnected is returned when the archive control response stream is no longer connected.
 var ErrArchiveNotConnected = errors.New("archive is not connected")
 
-// ArchiveError is an ERROR control response received from the archive for this control session.
-type ArchiveError struct {
-	CorrelationID int64
-	ErrorCode     int32
-	Message       string
-}
-
-func (e *ArchiveError) Error() string {
-	return fmt.Sprintf("archive response for correlationId=%d, errorCode=%d, error: %s",
-		e.CorrelationID, e.ErrorCode, e.Message)
-}
+// ArchiveError is the error returned for an ERROR control response received for this control session. It is the
+// archive client's ArchiveException, as Java's ReplayMerge throws ArchiveException(message, errorCode, correlationId).
+type ArchiveError = archive.ArchiveException
 
 // ReplayMerge replays a recorded stream from a starting position and merges with the live stream for a full history
 // of a stream.
@@ -280,8 +272,9 @@ func newReplayMerge(
 
 // Close stops any active replay and removes the replay destination from the subscription unless already merged.
 // This operation will NOT remove the live destination if it has been added, so it can be used for live consumption.
-// Close is idempotent; errors removing the destination or stopping the replay are returned but the ReplayMerge is
-// closed regardless.
+// Like Java, the replay destination is removed asynchronously, so Close does not wait on the driver. Close is
+// idempotent; errors removing the destination or stopping the replay are returned but the ReplayMerge is closed
+// regardless.
 func (rm *ReplayMerge) Close() error {
 	state := rm.state
 	if StateClosed == state {
@@ -291,7 +284,7 @@ func (rm *ReplayMerge) Close() error {
 	var errs []error
 	if !rm.archive.isAeronClosed() {
 		if StateMerged != state {
-			if err := rm.subscription.RemoveDestination(rm.replayDestination); err != nil {
+			if _, err := rm.subscription.AsyncRemoveDestination(rm.replayDestination); err != nil {
 				errs = append(errs, err)
 			}
 		}
@@ -562,14 +555,14 @@ func (rm *ReplayMerge) attemptLiveJoin(nowMs int64) (int, error) {
 				if rm.image != nil {
 					position := rm.image.Position()
 					if rm.shouldAddLiveDestination(position) {
-						if err := rm.subscription.AddDestination(rm.liveDestination); err != nil {
+						if _, err := rm.subscription.AsyncAddDestination(rm.liveDestination); err != nil {
 							return 0, fmt.Errorf("failed to add live destination '%s': %w", rm.liveDestination, err)
 						}
 						rm.timeOfLastProgressMs = nowMs
 						rm.positionOfLastProgress = position
 						rm.isLiveAdded = true
 					} else if rm.shouldStopAndRemoveReplay(position) {
-						if err := rm.subscription.RemoveDestination(rm.replayDestination); err != nil {
+						if _, err := rm.subscription.AsyncRemoveDestination(rm.replayDestination); err != nil {
 							return 0, fmt.Errorf(
 								"failed to remove replay destination '%s': %w", rm.replayDestination, err)
 						}
@@ -667,11 +660,11 @@ func (rm *ReplayMerge) pollForResponse(correlationID int64) (bool, error) {
 		rm.polledResponse = response
 		if response.ControlSessionId == rm.archive.controlSessionID() {
 			if response.Code == codecs.ControlResponseCode.ERROR {
-				return false, &ArchiveError{
-					CorrelationID: response.CorrelationId,
-					ErrorCode:     int32(response.RelevantId),
-					Message:       string(response.ErrorMessage),
-				}
+				return false, archive.NewArchiveException(
+					fmt.Sprintf("archive response for correlationId=%d, error: %s",
+						response.CorrelationId, response.ErrorMessage),
+					archive.ArchiveErrorCode(response.RelevantId),
+					response.CorrelationId)
 			}
 			return response.CorrelationId == correlationID, nil
 		}
