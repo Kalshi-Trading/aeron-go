@@ -27,7 +27,7 @@ messages, `-len` message length, `-frags` fragment limit, `-idle busy|yield|slee
 | `errorstat` | ErrorStat | distinct errors from the CnC error log |
 | `lossstat` | LossStat | `loss-report.dat` as CSV |
 | `backlogstat` | BacklogStat | publisher/sender/receiver/subscriber backlog per stream |
-| `cluster_echo_client` | cluster EchoService client | needs `docker/cluster.compose.yml` echo-cluster; `bin/cluster_echo_client -m 10` |
+| `cluster_echo_client` | cluster EchoService client | needs `docker/cluster.compose.yml` cluster-node-0; `bin/cluster_echo_client -m 10` |
 | `cluster` (service) | cluster EchoService | Go clustered service |
 | `../archive/examples/basic_recording_publisher` | archive RecordedBasicPublisher | `-prefix $AERON_DIR -messages 10` |
 | `../archive/examples/basic_replayed_subscriber` | archive ReplayedBasicSubscriber | replays the latest recording; `-exit 10` |
@@ -45,6 +45,7 @@ stream-counter parsing used by the stat tools lives in `examples/internal/cnc` u
 ```sh
 AERON_E2E=1 go test -count=1 -v ./examples/e2e
 # cluster echo too:
-docker compose -f docker/docker-compose.yml -f docker/cluster.compose.yml up -d --build archiving-driver echo-cluster
+docker compose -f docker/docker-compose.yml up -d --build archiving-driver
+docker compose -f docker/cluster.compose.yml up -d --build cluster-node-0
 AERON_E2E=1 AERON_E2E_CLUSTER=1 go test -count=1 -v ./examples/e2e
 ```

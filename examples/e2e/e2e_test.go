@@ -265,7 +265,7 @@ func TestArchiveReplayThroughput(t *testing.T) {
 func TestClusterEchoClient(t *testing.T) {
 	dir := setup(t)
 	if os.Getenv("AERON_E2E_CLUSTER") != "1" {
-		t.Skip("set AERON_E2E_CLUSTER=1 with docker/cluster.compose.yml echo-cluster running")
+		t.Skip("set AERON_E2E_CLUSTER=1 with docker/cluster.compose.yml cluster-node-0 running")
 	}
 	out := run(t, time.Minute, "cluster_echo_client", "-p", dir, "-m", "5")
 	mustContain(t, out, "Connected: sessionId=", "<<Hello Cluster! 4>>", "Done: 5 messages echoed")

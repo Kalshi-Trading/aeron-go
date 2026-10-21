@@ -39,31 +39,19 @@ var (
 )
 
 type listener struct {
+	client.NoOpEgressEvents
 	echoes [][]byte
 }
 
-func (l *listener) OnConnect(ac *client.AeronCluster) {
-	fmt.Printf("Connected: sessionId=%d leaderMemberId=%d leadershipTermId=%d\n",
-		ac.ClusterSessionId(), ac.LeaderMemberId(), ac.LeadershipTermId())
-}
-
-func (l *listener) OnDisconnect(ac *client.AeronCluster, details string) {
-	fmt.Printf("Disconnected: sessionId=%d (%s)\n", ac.ClusterSessionId(), details)
-}
-
-func (l *listener) OnMessage(_ *client.AeronCluster, timestamp int64, buffer *atomic.Buffer, offset int32,
+func (l *listener) OnMessage(clusterSessionId int64, timestamp int64, buffer *atomic.Buffer, offset int32,
 	length int32, _ *logbuffer.Header) {
 	msg := buffer.GetBytesArray(offset, length)
-	fmt.Printf("Echo received: timestamp=%d <<%s>>\n", timestamp, msg)
+	fmt.Printf("Echo received: sessionId=%d timestamp=%d <<%s>>\n", clusterSessionId, timestamp, msg)
 	l.echoes = append(l.echoes, msg)
 }
 
-func (l *listener) OnNewLeader(_ *client.AeronCluster, leadershipTermId int64, leaderMemberId int32) {
+func (l *listener) OnNewLeader(_ int64, leadershipTermId int64, leaderMemberId int32, _ string) {
 	fmt.Printf("New leader: memberId=%d leadershipTermId=%d\n", leaderMemberId, leadershipTermId)
-}
-
-func (l *listener) OnError(_ *client.AeronCluster, details string) {
-	fmt.Printf("Error: %s\n", details)
 }
 
 func main() {
@@ -73,24 +61,23 @@ func main() {
 	ctx, cancel := examples.SignalContext()
 	defer cancel()
 
-	opts := client.NewOptions()
-	opts.IngressChannel = "aeron:udp"
-	opts.IngressEndpoints = *ingressEndpoints
-	opts.EgressChannel = *egressChannel
 	l := &listener{}
-	ac, err := client.NewAeronCluster(examples.NewContext(), opts, l)
+	clusterCtx := client.NewContext()
+	clusterCtx.AeronDirectoryName = *examples.ExamplesConfig.AeronPrefix
+	clusterCtx.IngressChannel = "aeron:udp"
+	clusterCtx.IngressEndpoints = *ingressEndpoints
+	clusterCtx.EgressChannel = *egressChannel
+	clusterCtx.MessageTimeout = *timeout
+	clusterCtx.EgressListener = l
+	ac, err := client.Connect(clusterCtx)
 	if err != nil {
-		log.Fatalf("Failed to create cluster client: %v", err)
+		log.Fatalf("Failed to connect to cluster at %s: %v", *ingressEndpoints, err)
 	}
 	defer ac.Close()
-
-	deadline := time.Now().Add(*timeout)
-	for !ac.IsConnected() {
-		if ctx.Err() != nil || time.Now().After(deadline) {
-			log.Fatalf("Failed to connect to cluster at %s", *ingressEndpoints)
-		}
-		opts.IdleStrategy.Idle(ac.Poll())
-	}
+	fmt.Printf("Connected: sessionId=%d leaderMemberId=%d leadershipTermId=%d\n",
+		ac.ClusterSessionId(), ac.LeaderMemberId(), ac.LeadershipTermId())
+	idle := examples.NewIdleStrategy()
+	var deadline time.Time
 
 	buffer := atomic.MakeBuffer(make([]byte, 256))
 	messages := *examples.ExamplesConfig.Messages
@@ -102,13 +89,13 @@ func main() {
 			if ctx.Err() != nil || time.Now().After(deadline) {
 				log.Fatalf("Failed to offer message %d", i)
 			}
-			opts.IdleStrategy.Idle(ac.Poll())
+			idle.Idle(ac.PollEgress())
 		}
 		for len(l.echoes) <= i {
 			if ctx.Err() != nil || time.Now().After(deadline) {
 				log.Fatalf("Timed out waiting for echo of message %d", i)
 			}
-			opts.IdleStrategy.Idle(ac.Poll())
+			idle.Idle(ac.PollEgress())
 		}
 		if !bytes.Equal(l.echoes[i], msg) {
 			log.Fatalf("Echo mismatch: sent %q received %q", msg, l.echoes[i])
