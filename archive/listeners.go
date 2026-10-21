@@ -70,49 +70,8 @@ func (l RecordingEventsListenerFuncs) OnStop(recordingId, startPosition, stopPos
 	}
 }
 
-// RecordingDescriptorConsumer is the Go counterpart of io.aeron.archive.client.RecordingDescriptorConsumer.
-type RecordingDescriptorConsumer interface {
-	OnRecordingDescriptor(
-		controlSessionId, correlationId, recordingId,
-		startTimestamp, stopTimestamp, startPosition, stopPosition int64,
-		initialTermId, segmentFileLength, termBufferLength, mtuLength, sessionId, streamId int32,
-		strippedChannel, originalChannel, sourceIdentity string)
-}
-
-// RecordingDescriptorConsumerFunc adapts a function to RecordingDescriptorConsumer.
-type RecordingDescriptorConsumerFunc func(
-	controlSessionId, correlationId, recordingId,
-	startTimestamp, stopTimestamp, startPosition, stopPosition int64,
-	initialTermId, segmentFileLength, termBufferLength, mtuLength, sessionId, streamId int32,
-	strippedChannel, originalChannel, sourceIdentity string)
-
-// OnRecordingDescriptor calls f.
-func (f RecordingDescriptorConsumerFunc) OnRecordingDescriptor(
-	controlSessionId, correlationId, recordingId,
-	startTimestamp, stopTimestamp, startPosition, stopPosition int64,
-	initialTermId, segmentFileLength, termBufferLength, mtuLength, sessionId, streamId int32,
-	strippedChannel, originalChannel, sourceIdentity string) {
-	f(controlSessionId, correlationId, recordingId, startTimestamp, stopTimestamp, startPosition, stopPosition,
-		initialTermId, segmentFileLength, termBufferLength, mtuLength, sessionId, streamId,
-		strippedChannel, originalChannel, sourceIdentity)
-}
-
-// RecordingSubscriptionDescriptorConsumer is the Go counterpart of
-// io.aeron.archive.client.RecordingSubscriptionDescriptorConsumer.
-type RecordingSubscriptionDescriptorConsumer interface {
-	OnSubscriptionDescriptor(controlSessionId, correlationId, subscriptionId int64, streamId int32,
-		strippedChannel string)
-}
-
-// RecordingSubscriptionDescriptorConsumerFunc adapts a function to RecordingSubscriptionDescriptorConsumer.
-type RecordingSubscriptionDescriptorConsumerFunc func(controlSessionId, correlationId, subscriptionId int64,
-	streamId int32, strippedChannel string)
-
-// OnSubscriptionDescriptor calls f.
-func (f RecordingSubscriptionDescriptorConsumerFunc) OnSubscriptionDescriptor(controlSessionId, correlationId,
-	subscriptionId int64, streamId int32, strippedChannel string) {
-	f(controlSessionId, correlationId, subscriptionId, streamId, strippedChannel)
-}
+// RecordingDescriptorConsumer and RecordingSubscriptionDescriptorConsumer (archive_catalog.go) are the Go
+// counterparts of the Java consumers and receive a freshly decoded descriptor.
 
 // ControlEventListener is the Go counterpart of io.aeron.archive.client.ControlEventListener.
 type ControlEventListener interface {
@@ -133,8 +92,8 @@ func (f ControlEventListenerFunc) OnResponse(controlSessionId, correlationId, re
 // ControlResponseListener is the Go counterpart of io.aeron.archive.client.ControlResponseListener: a
 // listener for control responses and recording descriptors on a control session.
 type ControlResponseListener interface {
-	RecordingDescriptorConsumer
 	ControlEventListener
+	OnRecordingDescriptor(descriptor *codecs.RecordingDescriptor)
 }
 
 // recordingSignalListenerConsumer bridges the legacy ArchiveListeners.RecordingSignalListener callback.

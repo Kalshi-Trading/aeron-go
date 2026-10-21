@@ -62,4 +62,7 @@ const (
 	ErrorCodeUnknownHost                    = 9
 	ErrorCodeResourceTemporarilyUnavailable = 10
 	ErrorCodeGenericError                   = 11
+	ErrorCodeStorageSpace                   = 12
+	ErrorCodeImageRejected                  = 13
+	ErrorCodePublicationRevoked             = 14
 )

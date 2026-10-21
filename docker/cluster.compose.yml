@@ -1,0 +1,114 @@
+# Java Aeron 1.53.3 cluster (io.aeron.samples.cluster.EchoServiceNode) for cluster client E2E tests.
+#
+#   docker compose -f docker/cluster.compose.yml up -d --build client-driver cluster-node-0           # 1 node
+#   docker compose -f docker/cluster.compose.yml --profile three up -d --build                        # 3 nodes
+#   export AERON_DIR=/dev/shm/aeron-cluster-client
+#
+# examples/cluster_echo_client (and its E2E test) talks to cluster-node-0 over UDP from any driver, e.g. the
+# shared archiving-driver: docker compose -f docker/docker-compose.yml up -d --build archiving-driver
+#                          docker compose -f docker/cluster.compose.yml up -d --build cluster-node-0
+#
+# Go clients use the client-driver (aeron dir /dev/shm/aeron-cluster-client) so cluster nodes can be killed
+# without taking down the client's driver. Each node runs its own ClusteredMediaDriver in
+# /dev/shm/aeron-cluster-<n>-driver. EchoServiceNode port layout: 9000 + 100*n + offset, so ingress endpoints are
+#   1 node : 0=localhost:9002
+#   3 nodes: 0=localhost:9002,1=localhost:9102,2=localhost:9202
+x-node: &node
+  image: aeron-java-cluster:1.53.3
+  build: .
+  network_mode: host
+  ipc: host
+  user: "${UID:-1000}:${GID:-1000}"
+  volumes:
+    - /dev/shm:/dev/shm
+  working_dir: /data
+  tmpfs:
+    - /data:uid=${UID:-1000},gid=${GID:-1000},exec
+  command: ["io.aeron.samples.cluster.EchoServiceNode"]
+  stop_grace_period: 2s
+
+services:
+  client-driver:
+    image: aeron-java-cluster:1.53.3
+    build: .
+    network_mode: host
+    ipc: host
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - /dev/shm:/dev/shm
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-cluster-client
+        -Daeron.dir.delete.on.start=true
+        -Daeron.threading.mode=SHARED
+        -Daeron.client.liveness.timeout=10000000000
+    command: ["io.aeron.driver.MediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-cluster-client/cnc.dat"]
+      interval: 1s
+      retries: 30
+
+  # Single node cluster (default profile).
+  cluster-node-0:
+    <<: *node
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-cluster
+        -Daeron.dir.delete.on.start=true
+        -Daeron.threading.mode=SHARED
+        -Daeron.archive.threading.mode=SHARED
+        -Daeron.cluster.authorisation.service.supplier=ALLOW_ALL
+        -Daeron.cluster.ingress.channel=aeron:udp
+        -Daeron.cluster.session.timeout=10s
+        -Daeron.cluster.tutorial.nodeId=0
+        -Daeron.cluster.tutorial.hostnames=localhost
+
+  # Three node cluster: --profile three (do not run together with cluster-node-0, they share ports).
+  node0:
+    <<: *node
+    profiles: ["three"]
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-cluster
+        -Daeron.dir.delete.on.start=true
+        -Daeron.threading.mode=SHARED
+        -Daeron.archive.threading.mode=SHARED
+        -Daeron.cluster.authorisation.service.supplier=ALLOW_ALL
+        -Daeron.cluster.ingress.channel=aeron:udp
+        -Daeron.cluster.leader.heartbeat.timeout=2s
+        -Daeron.cluster.leader.heartbeat.interval=100ms
+        -Daeron.cluster.session.timeout=10s
+        -Daeron.cluster.tutorial.nodeId=0
+        -Daeron.cluster.tutorial.hostnames=localhost,localhost,localhost
+  node1:
+    <<: *node
+    profiles: ["three"]
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-cluster
+        -Daeron.dir.delete.on.start=true
+        -Daeron.threading.mode=SHARED
+        -Daeron.archive.threading.mode=SHARED
+        -Daeron.cluster.authorisation.service.supplier=ALLOW_ALL
+        -Daeron.cluster.ingress.channel=aeron:udp
+        -Daeron.cluster.leader.heartbeat.timeout=2s
+        -Daeron.cluster.leader.heartbeat.interval=100ms
+        -Daeron.cluster.session.timeout=10s
+        -Daeron.cluster.tutorial.nodeId=1
+        -Daeron.cluster.tutorial.hostnames=localhost,localhost,localhost
+  node2:
+    <<: *node
+    profiles: ["three"]
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-cluster
+        -Daeron.dir.delete.on.start=true
+        -Daeron.threading.mode=SHARED
+        -Daeron.archive.threading.mode=SHARED
+        -Daeron.cluster.authorisation.service.supplier=ALLOW_ALL
+        -Daeron.cluster.ingress.channel=aeron:udp
+        -Daeron.cluster.leader.heartbeat.timeout=2s
+        -Daeron.cluster.leader.heartbeat.interval=100ms
+        -Daeron.cluster.session.timeout=10s
+        -Daeron.cluster.tutorial.nodeId=2
+        -Daeron.cluster.tutorial.hostnames=localhost,localhost,localhost

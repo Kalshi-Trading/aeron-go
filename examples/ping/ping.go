@@ -14,12 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// ping is a port of io.aeron.samples.Ping: it measures round-trip latency against pong.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"runtime/pprof"
 	"time"
@@ -27,145 +30,130 @@ import (
 	"github.com/HdrHistogram/hdrhistogram-go"
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
+	"github.com/lirm/aeron-go/aeron/idlestrategy"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
-	"github.com/lirm/aeron-go/aeron/logging"
 	"github.com/lirm/aeron-go/examples"
 )
 
-var logger = logging.MustGetLogger("examples")
-
 func main() {
-
 	flag.Parse()
+	examples.SetupLogging()
+	ctx, cancel := examples.SignalContext()
+	defer cancel()
 
-	if !*examples.ExamplesConfig.LoggingOn {
-		logging.SetLevel(logging.INFO, "aeron")
-		logging.SetLevel(logging.INFO, "memmap")
-		logging.SetLevel(logging.INFO, "driver")
-		logging.SetLevel(logging.INFO, "counters")
-		logging.SetLevel(logging.INFO, "logbuffers")
-		logging.SetLevel(logging.INFO, "buffer")
-		logging.SetLevel(logging.INFO, "examples")
+	if *examples.ExamplesConfig.ProfilerEnabled {
+		f, err := os.Create(fmt.Sprintf("ping-%d.pprof", time.Now().Unix()))
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := pprof.StartCPUProfile(f); err == nil {
+			defer pprof.StopCPUProfile()
+		}
 	}
 
-	to := time.Duration(time.Millisecond.Nanoseconds() * *examples.ExamplesConfig.DriverTo)
-	ctx := aeron.NewContext().AeronDir(*examples.ExamplesConfig.AeronPrefix).MediaDriverTimeout(to)
+	pingChannel, pingStream := *examples.PingPongConfig.PingChannel, int32(*examples.PingPongConfig.PingStreamID)
+	pongChannel, pongStream := *examples.PingPongConfig.PongChannel, int32(*examples.PingPongConfig.PongStreamID)
+	fmt.Printf("Publishing Ping at %s on stream id %d\n", pingChannel, pingStream)
+	fmt.Printf("Subscribing Pong at %s on stream id %d\n", pongChannel, pongStream)
+	fmt.Printf("Message length of %d bytes\n", *examples.ExamplesConfig.Size)
 
-	a, err := aeron.Connect(ctx)
+	a, err := aeron.Connect(examples.NewContext())
 	if err != nil {
-		logger.Fatalf("Failed to connect to media driver: %s\n", err.Error())
+		log.Fatalf("Failed to connect to media driver: %v", err)
 	}
 	defer a.Close()
 
-	subscription, err := a.AddSubscription(*examples.PingPongConfig.PongChannel, int32(*examples.PingPongConfig.PongStreamID))
+	sub, err := a.AddSubscription(pongChannel, pongStream)
 	if err != nil {
-		logger.Fatal(err)
+		log.Fatalf("Failed to add pong subscription: %v", err)
 	}
-	defer subscription.Close()
-	logger.Infof("Subscription found %v", subscription)
-
-	publication, err := a.AddPublication(*examples.PingPongConfig.PingChannel, int32(*examples.PingPongConfig.PingStreamID))
+	defer sub.Close()
+	var pub *aeron.Publication
+	if *examples.ExamplesConfig.Exclusive {
+		pub, err = a.AddExclusivePublication(pingChannel, pingStream)
+	} else {
+		pub, err = a.AddPublication(pingChannel, pingStream)
+	}
 	if err != nil {
-		logger.Fatal(err)
+		log.Fatalf("Failed to add ping publication: %v", err)
 	}
-	defer publication.Close()
-	logger.Infof("Publication found %v", publication)
+	defer pub.Close()
 
-	for !publication.IsConnected() {
-		logger.Debug("Publication isn't connected")
-		time.Sleep(time.Millisecond * 300)
-	}
-	logger.Info("Publication connected")
-
-	if *examples.ExamplesConfig.ProfilerEnabled {
-		fname := fmt.Sprintf("ping-%d.pprof", time.Now().Unix())
-		logger.Infof("Profiling enabled. Will use: %s", fname)
-		f, err := os.Create(fname)
-		if err == nil {
-			pprof.StartCPUProfile(f)
-			defer pprof.StopCPUProfile()
-		} else {
-			logger.Errorf("Failed to create profile file with %v", err)
+	fmt.Println("Waiting for new image from Pong...")
+	for !sub.IsConnected() || !pub.IsConnected() {
+		if ctx.Err() != nil {
+			return
 		}
+		time.Sleep(time.Millisecond)
 	}
 
-	hist := hdrhistogram.New(1, 1000000000, 3)
-
-	handler := func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
-		sent := buffer.GetInt64(offset)
-		now := time.Now().UnixNano()
-
-		hist.RecordValue(now - sent)
-
-		if logger.IsEnabledFor(logging.DEBUG) {
-			logger.Debugf("Received message at offset %d, length %d, position %d, termId %d, frame len %d",
-				offset, length, header.Offset(), header.TermId(), header.FrameLength())
-		}
+	size := *examples.ExamplesConfig.Size
+	if size < 8 {
+		size = 8
 	}
+	hist := hdrhistogram.New(1, 10_000_000_000, 3)
+	p := &pinger{pub: pub, sub: sub, hist: hist, idler: examples.NewIdleStrategy(),
+		buffer: atomic.MakeBuffer(make([]byte, size))}
 
-	srcBuffer := atomic.MakeBuffer(make([]byte, *examples.ExamplesConfig.Size))
-
-	warmupIt := 1000
-	logger.Infof("Sending %d messages of %d bytes for warmup", warmupIt, srcBuffer.Capacity())
-	for i := 0; i < warmupIt; i++ {
-		now := time.Now().UnixNano()
-		srcBuffer.PutInt64(0, now)
-
-		for true {
-			ret := publication.Offer(srcBuffer, 0, srcBuffer.Capacity(), nil)
-			if ret > 0 {
-				break
-			} else {
-				panic(fmt.Sprintf("Failed to offer message of %d bytes due to %d", srcBuffer.Capacity(), ret))
-			}
-		}
-
-		for true {
-			ret := subscription.Poll(handler, 10)
-			if ret > 0 {
-				break
-			} else if ret < 0 {
-				panic(fmt.Sprintf("Failed to poll due to %d", ret))
-			}
-		}
+	for i := 0; i < *examples.ExamplesConfig.WarmupIterations && ctx.Err() == nil; i++ {
+		fmt.Printf("Warming up the media driver with %d messages of length %d bytes\n",
+			*examples.ExamplesConfig.WarmupMessages, *examples.ExamplesConfig.Size)
+		p.roundTrips(ctx, *examples.ExamplesConfig.WarmupMessages)
 	}
 	hist.Reset()
-
-	cnt := atomic.Int{}
-
-	logger.Infof("Sending %d messages of %d bytes", *examples.ExamplesConfig.Messages, srcBuffer.Capacity())
-	for ; int(cnt.Get()) < *examples.ExamplesConfig.Messages; cnt.Add(1) {
-		now := time.Now().UnixNano()
-		srcBuffer.PutInt64(0, now)
-
-		for publication.Offer(srcBuffer, 0, srcBuffer.Capacity(), nil) < 0 {
-		}
-
-		for subscription.Poll(handler, 10) <= 0 {
-		}
-	}
-
+	fmt.Printf("Pinging %d messages\n", *examples.ExamplesConfig.Messages)
+	start := time.Now()
+	p.roundTrips(ctx, *examples.ExamplesConfig.Messages)
+	fmt.Printf("Histogram of RTT latencies in microseconds (%d round trips in %v).\n", hist.TotalCount(), time.Since(start))
 	OutputPercentileDistribution(os.Stdout, hist, 1000.0)
 }
 
+type pinger struct {
+	pub    *aeron.Publication
+	sub    *aeron.Subscription
+	hist   *hdrhistogram.Histogram
+	idler  idlestrategy.Idler
+	buffer *atomic.Buffer
+}
+
+func (p *pinger) roundTrips(ctx context.Context, count int) {
+	length := p.buffer.Capacity()
+	handler := func(buffer *atomic.Buffer, offset int32, _ int32, _ *logbuffer.Header) {
+		sent := buffer.GetInt64(offset)
+		_ = p.hist.RecordValue(time.Now().UnixNano() - sent)
+	}
+	for i := 0; i < count && ctx.Err() == nil; i++ {
+		p.buffer.PutInt64(0, time.Now().UnixNano())
+		for {
+			result := p.pub.Offer(p.buffer, 0, length, nil)
+			if result > 0 {
+				break
+			}
+			if examples.IsTerminalOfferResult(result) {
+				log.Fatal(examples.OfferResultString(result))
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			p.idler.Idle(0)
+		}
+		for ctx.Err() == nil {
+			fragments := p.sub.Poll(handler, 1)
+			if fragments > 0 {
+				break
+			}
+			p.idler.Idle(fragments)
+		}
+	}
+}
+
+// OutputPercentileDistribution prints the histogram like HdrHistogram's outputPercentileDistribution.
 func OutputPercentileDistribution(out io.Writer, h *hdrhistogram.Histogram, scalingFactor float64) {
-
-	fmt.Print("Value     Percentile TotalCount 1/(1-Percentile)\n\n")
-
-	//Value     Percentile TotalCount 1/(1-Percentile)
+	fmt.Fprint(out, "Value     Percentile TotalCount 1/(1-Percentile)\n\n")
 	for _, b := range h.CumulativeDistribution() {
 		pct := b.Quantile / 100.0
-		io.WriteString(out, fmt.Sprintf("%12.3f %2.12f  %10d  %14.2f\n",
-			float64(b.ValueAt)/scalingFactor,
-			pct,
-			b.Count,
-			1/(1-pct)))
+		fmt.Fprintf(out, "%12.3f %2.12f  %10d  %14.2f\n", float64(b.ValueAt)/scalingFactor, pct, b.Count, 1/(1-pct))
 	}
-
-	io.WriteString(out, fmt.Sprintf("#[Mean    = %12.3f, StdDeviation   = %12.3f]\n",
-		h.Mean()/scalingFactor,
-		h.StdDev()/scalingFactor))
-	io.WriteString(out, fmt.Sprintf("#[Max     = %12.3f, Total count    = %12d]\n",
-		float64(h.Max())/scalingFactor,
-		h.TotalCount()))
+	fmt.Fprintf(out, "#[Mean    = %12.3f, StdDeviation   = %12.3f]\n", h.Mean()/scalingFactor, h.StdDev()/scalingFactor)
+	fmt.Fprintf(out, "#[Max     = %12.3f, Total count    = %12d]\n", float64(h.Max())/scalingFactor, h.TotalCount())
 }

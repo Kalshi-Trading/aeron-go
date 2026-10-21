@@ -118,11 +118,13 @@ func (control *Control) onError(err error) {
 	}
 }
 
+// onSignal hands a copy of the (reused) scratch event to the shared dispatchRecordingSignal.
 func (control *Control) onSignal(s *codecs.RecordingSignalEvent) {
-	if control.archive != nil && control.archive.Listeners != nil && control.archive.Listeners.RecordingSignalListener != nil {
-		event := *s
-		control.archive.Listeners.RecordingSignalListener(&event)
+	if control.archive == nil || control.archive.Listeners == nil {
+		return
 	}
+	event := *s
+	dispatchRecordingSignal(control.archive, &event)
 }
 
 func (control *Control) archiveSessionID() int64 {
@@ -270,6 +272,9 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 		if control.decode(s) && s.ControlSessionId == sessionID {
 			control.onSignal(s)
 		}
+
+	case codecIds.ping:
+		// Liveness message from the archive's control session, nothing to do.
 	}
 	return term.ControlledPollActionContinue
 }
@@ -312,6 +317,9 @@ func (control *Control) onFragment(buffer *atomic.Buffer, offset int32, length i
 		if control.decode(s) && s.ControlSessionId == control.archiveSessionID() {
 			control.onSignal(s)
 		}
+
+	case codecIds.ping:
+		// Liveness message from the archive's control session, nothing to do.
 	}
 	return term.ControlledPollActionContinue
 }
@@ -397,6 +405,9 @@ func (control *Control) responseFragmentHandler(buffer *atomic.Buffer, offset in
 			control.onSignal(s)
 		}
 
+	case codecIds.ping:
+		// Liveness message from the archive's control session, nothing to do.
+
 	default:
 		// Descriptors from abandoned list requests, challenges and unknown templates are skipped.
 		logger.Debugf("PollForResponse: ignoring templateId %d", control.decoder.templateId())
@@ -457,6 +468,9 @@ func (control *Control) descriptorFragmentHandler(buffer *atomic.Buffer, offset 
 		if control.decode(s) && s.ControlSessionId == control.sessionID {
 			control.onSignal(s)
 		}
+
+	case codecIds.ping:
+		// Liveness message from the archive's control session, nothing to do.
 	}
 	return term.ControlledPollActionContinue
 }

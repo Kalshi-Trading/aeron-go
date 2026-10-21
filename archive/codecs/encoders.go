@@ -637,29 +637,21 @@ func TaggedReplicateRequestPacket(marshaller *SbeGoMarshaller, rangeChecking boo
 }
 
 func ReplicateRequest2Packet(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, srcRecordingId int64, dstRecordingId int64, stopPosition int64, channelTagId int64, srcControlStreamId int32, srcControlChannel string, liveDestination string, replicationChannel string) ([]byte, error) {
-	var request ReplicateRequest2
-	request.ControlSessionId = controlSessionId
-	request.CorrelationId = correlationId
-	request.SrcRecordingId = srcRecordingId
-	request.DstRecordingId = dstRecordingId
-	request.StopPosition = stopPosition
-	request.ChannelTagId = channelTagId
-	request.SrcControlStreamId = srcControlStreamId
-	request.SrcControlChannel = []uint8(srcControlChannel)
-	request.LiveDestination = []uint8(liveDestination)
-	request.ReplicationChannel = []uint8(replicationChannel)
-
-	// Marshal it
-	header := MessageHeader{BlockLength: request.SbeBlockLength(), TemplateId: request.SbeTemplateId(), SchemaId: request.SbeSchemaId(), Version: request.SbeSchemaVersion()}
-	buffer := new(bytes.Buffer)
-	if err := header.Encode(marshaller, buffer); err != nil {
-		return nil, err
-	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
-		return nil, err
-	}
-
-	return buffer.Bytes(), nil
+	// Unset optional fields must carry the Aeron NULL_VALUE (-1), not zero: a zero
+	// replicationSessionId or subscriptionTagId is a valid value to the archive.
+	return ReplicateRequest2FullPacket(marshaller, rangeChecking, controlSessionId, correlationId, &ReplicateRequest2Params{
+		SrcRecordingId:       srcRecordingId,
+		DstRecordingId:       dstRecordingId,
+		StopPosition:         stopPosition,
+		ChannelTagId:         channelTagId,
+		SubscriptionTagId:    -1,
+		SrcControlStreamId:   srcControlStreamId,
+		FileIoMaxLength:      -1,
+		ReplicationSessionId: -1,
+		SrcControlChannel:    srcControlChannel,
+		LiveDestination:      liveDestination,
+		ReplicationChannel:   replicationChannel,
+	})
 }
 
 func PurgeRecordingRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {

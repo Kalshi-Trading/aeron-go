@@ -507,7 +507,7 @@ func TestListRecordings(t *testing.T) {
 	} else if !res {
 		t.Logf("StopRecordingByIdentity(%d) failed", recordingID)
 	}
-	if err := archive.PurgeRecording(recordingID); err != nil {
+	if _, err := archive.PurgeRecording(recordingID); err != nil {
 		t.Logf("PurgeRecording(%d) failed: %s", recordingID, err.Error())
 	}
 	publication.Close()

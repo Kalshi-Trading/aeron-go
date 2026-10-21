@@ -42,7 +42,6 @@ type RecordingDescriptorPoller struct {
 	consumer             RecordingDescriptorConsumer
 
 	controlResponse codecs.ControlResponse
-	descriptor      codecs.RecordingDescriptor
 	signalEvent     codecs.RecordingSignalEvent
 }
 
@@ -123,13 +122,14 @@ func (p *RecordingDescriptorPoller) onFragment(buffer *atomic.Buffer, offset, le
 			return action
 		}
 	case codecIds.recordingDescriptor:
-		if err := p.decoder.decode(&p.descriptor); err != nil {
+		d := new(codecs.RecordingDescriptor)
+		if err := p.decoder.decode(d); err != nil {
 			p.err = err
 			return term.ControlledPollActionBreak
 		}
-		if p.descriptor.ControlSessionId == p.controlSessionId && p.descriptor.CorrelationId == p.correlationId {
+		if d.ControlSessionId == p.controlSessionId && d.CorrelationId == p.correlationId {
 			if p.consumer != nil {
-				DispatchDescriptor(&p.descriptor, p.consumer)
+				p.consumer(d)
 			}
 			p.remainingRecordCount--
 			if p.remainingRecordCount <= 0 {

@@ -227,7 +227,8 @@ func TestRecordingDescriptorPoller(t *testing.T) {
 		signals := &signalRecorder{}
 		p := NewRecordingDescriptorPoller(newFrameSub(t, frames), nil, signals, testSession, 3)
 		var ids []int64
-		p.Reset(1, 3, RecordingDescriptorConsumerFunc(func(_, _, recordingId, _, _, _, _ int64, _, _, _, _, _, streamId int32, stripped, original, _ string) {
+		p.Reset(1, 3, RecordingDescriptorConsumer(func(d *codecs.RecordingDescriptor) {
+			recordingId, streamId, stripped, original := d.RecordingId, d.StreamId, string(d.StrippedChannel), string(d.OriginalChannel)
 			ids = append(ids, recordingId)
 			assert.EqualValues(t, 1001, streamId)
 			assert.Equal(t, "aeron:ipc", stripped)
@@ -243,7 +244,8 @@ func TestRecordingDescriptorPoller(t *testing.T) {
 
 		// The next request picks up the fragmented descriptor that was left in the stream
 		ids = nil
-		p.Reset(1, 1, RecordingDescriptorConsumerFunc(func(_, _, recordingId, _, _, _, _ int64, _, _, _, _, _, _ int32, _, _, _ string) {
+		p.Reset(1, 1, RecordingDescriptorConsumer(func(d *codecs.RecordingDescriptor) {
+			recordingId := d.RecordingId
 			ids = append(ids, recordingId)
 		}))
 		_, err := p.Poll()
@@ -259,7 +261,7 @@ func TestRecordingDescriptorPoller(t *testing.T) {
 			response(testSession, 1, 0, codecs.ControlResponseCode.RECORDING_UNKNOWN, ""))
 		p := NewRecordingDescriptorPoller(newFrameSub(t, frames), nil, nil, testSession, 10)
 		count := 0
-		p.Reset(1, 5, RecordingDescriptorConsumerFunc(func(_, _, _, _, _, _, _ int64, _, _, _, _, _, _ int32, _, _, _ string) { count++ }))
+		p.Reset(1, 5, RecordingDescriptorConsumer(func(*codecs.RecordingDescriptor) { count++ }))
 		_, err := p.Poll()
 		require.NoError(t, err)
 		assert.True(t, p.IsDispatchComplete())
@@ -294,7 +296,8 @@ func TestRecordingSubscriptionDescriptorPoller(t *testing.T) {
 		response(testSession, 1, 0, codecs.ControlResponseCode.SUBSCRIPTION_UNKNOWN, ""))
 	p := NewRecordingSubscriptionDescriptorPoller(newFrameSub(t, frames), nil, nil, testSession, 10)
 	var subs []int64
-	p.Reset(1, 5, RecordingSubscriptionDescriptorConsumerFunc(func(_, _, subscriptionId int64, streamId int32, channel string) {
+	p.Reset(1, 5, RecordingSubscriptionDescriptorConsumer(func(d *codecs.RecordingSubscriptionDescriptor) {
+		subscriptionId, streamId, channel := d.SubscriptionId, d.StreamId, string(d.StrippedChannel)
 		subs = append(subs, subscriptionId)
 		assert.Equal(t, "b", channel)
 		assert.EqualValues(t, 3, streamId)
@@ -354,7 +357,8 @@ func (r *responseRecorder) OnResponse(_, correlationId, _ int64, _ codecs.Contro
 	r.responses = append(r.responses, correlationId)
 }
 
-func (r *responseRecorder) OnRecordingDescriptor(_, _, recordingId, _, _, _, _ int64, _, _, _, _, _, _ int32, _, _, _ string) {
+func (r *responseRecorder) OnRecordingDescriptor(d *codecs.RecordingDescriptor) {
+	recordingId := d.RecordingId
 	r.descriptors = append(r.descriptors, recordingId)
 }
 

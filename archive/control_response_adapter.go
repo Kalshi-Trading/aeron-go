@@ -34,7 +34,6 @@ type ControlResponseAdapter struct {
 	err                     error
 
 	controlResponse codecs.ControlResponse
-	descriptor      codecs.RecordingDescriptor
 	signalEvent     codecs.RecordingSignalEvent
 }
 
@@ -68,15 +67,6 @@ func (a *ControlResponseAdapter) Poll() (int, error) {
 	return n, a.err
 }
 
-// DispatchDescriptor dispatches a decoded RecordingDescriptor to a RecordingDescriptorConsumer.
-func DispatchDescriptor(d *codecs.RecordingDescriptor, consumer RecordingDescriptorConsumer) {
-	consumer.OnRecordingDescriptor(
-		d.ControlSessionId, d.CorrelationId, d.RecordingId,
-		d.StartTimestamp, d.StopTimestamp, d.StartPosition, d.StopPosition,
-		d.InitialTermId, d.SegmentFileLength, d.TermBufferLength, d.MtuLength, d.SessionId, d.StreamId,
-		string(d.StrippedChannel), string(d.OriginalChannel), string(d.SourceIdentity))
-}
-
 func dispatchSignal(s *codecs.RecordingSignalEvent, consumer RecordingSignalConsumer) {
 	consumer.OnSignal(s.ControlSessionId, s.CorrelationId, s.RecordingId, s.SubscriptionId, s.Position, s.Signal)
 }
@@ -101,11 +91,12 @@ func (a *ControlResponseAdapter) onFragment(buffer *atomic.Buffer, offset, lengt
 		r := &a.controlResponse
 		a.listener.OnResponse(r.ControlSessionId, r.CorrelationId, r.RelevantId, r.Code, string(r.ErrorMessage))
 	case codecIds.recordingDescriptor:
-		if err := a.decoder.decode(&a.descriptor); err != nil {
+		d := new(codecs.RecordingDescriptor)
+		if err := a.decoder.decode(d); err != nil {
 			a.setErr(err)
 			return
 		}
-		DispatchDescriptor(&a.descriptor, a.listener)
+		a.listener.OnRecordingDescriptor(d)
 	case codecIds.recordingSignalEvent:
 		if err := a.decoder.decode(&a.signalEvent); err != nil {
 			a.setErr(err)

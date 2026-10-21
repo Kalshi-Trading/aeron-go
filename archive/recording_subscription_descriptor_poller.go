@@ -42,7 +42,6 @@ type RecordingSubscriptionDescriptorPoller struct {
 	consumer                   RecordingSubscriptionDescriptorConsumer
 
 	controlResponse codecs.ControlResponse
-	descriptor      codecs.RecordingSubscriptionDescriptor
 	signalEvent     codecs.RecordingSignalEvent
 }
 
@@ -129,15 +128,14 @@ func (p *RecordingSubscriptionDescriptorPoller) onFragment(buffer *atomic.Buffer
 			return action
 		}
 	case codecIds.recordingSubscriptionDescriptor:
-		if err := p.decoder.decode(&p.descriptor); err != nil {
+		d := new(codecs.RecordingSubscriptionDescriptor)
+		if err := p.decoder.decode(d); err != nil {
 			p.err = err
 			return term.ControlledPollActionBreak
 		}
-		d := &p.descriptor
 		if d.ControlSessionId == p.controlSessionId && d.CorrelationId == p.correlationId {
 			if p.consumer != nil {
-				p.consumer.OnSubscriptionDescriptor(d.ControlSessionId, d.CorrelationId, d.SubscriptionId,
-					d.StreamId, string(d.StrippedChannel))
+				p.consumer(d)
 			}
 			p.remainingSubscriptionCount--
 			if p.remainingSubscriptionCount <= 0 {

@@ -96,6 +96,7 @@ type Listener interface {
 	OnAvailableCounter(correlationID int64, counterID int32)
 	OnUnavailableCounter(correlationID int64, counterID int32)
 	OnClientTimeout(clientID int64)
+	OnStaticCounter(correlationID int64, counterID int32)
 	OnPublicationError(buffer *atomic.Buffer, offset int32, length int32)
 }
 
@@ -223,6 +224,13 @@ func (adapter *ListenerAdapter) ReceiveMessages() int {
 			msg.Wrap(buffer, int(offset))
 
 			adapter.listener.OnUnavailableCounter(msg.correlationID.Get(), msg.counterID.Get())
+		case Events.OnStaticCounter:
+			logger.Debugf("received ON_STATIC_COUNTER")
+
+			var msg counterUpdate
+			msg.Wrap(buffer, int(offset))
+
+			adapter.listener.OnStaticCounter(msg.correlationID.Get(), msg.counterID.Get())
 		case Events.OnClientTimeout:
 			logger.Debugf("received ON_CLIENT_TIMEOUT")
 
@@ -234,7 +242,8 @@ func (adapter *ListenerAdapter) ReceiveMessages() int {
 			logger.Debugf("received ON_PUBLICATION_ERROR")
 			adapter.listener.OnPublicationError(buffer, offset, length)
 		default:
-			// Java silently ignores unhandled events (e.g. ON_STATIC_COUNTER for other clients).
+			// Java silently ignores unhandled events (e.g. ON_STATIC_COUNTER / ON_NEXT_AVAILABLE_SESSION_ID for other clients,
+			// or ON_PUBLICATION_ERROR broadcast after an image is rejected).
 			logger.Debugf("received unhandled %d", msgTypeID)
 		}
 	}

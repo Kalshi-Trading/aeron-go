@@ -242,7 +242,8 @@ func TestE2E_RecordingEventsAndSignals(t *testing.T) {
 	descriptorPoller := NewRecordingDescriptorPoller(arch.Control.Subscription, nil, nil, arch.SessionID, 10)
 	listCorrelationId := nextCorrelationID()
 	var listed []int64
-	descriptorPoller.Reset(listCorrelationId, 1000, RecordingDescriptorConsumerFunc(func(_, _, id, _, _, _, _ int64, _, _, _, _, _, _ int32, _, _, _ string) {
+	descriptorPoller.Reset(listCorrelationId, 1000, RecordingDescriptorConsumer(func(d *codecs.RecordingDescriptor) {
+		id := d.RecordingId
 		listed = append(listed, id)
 	}))
 	require.NoError(t, arch.Proxy.ListRecordingsRequest(listCorrelationId, 0, 1000))
@@ -266,7 +267,8 @@ func TestE2E_RecordingEventsAndSignals(t *testing.T) {
 	assert.EqualValues(t, aeron.NullValue, responsePoller.RelevantId(), "stopped recording has no active position")
 
 	// DELETE
-	require.NoError(t, arch.PurgeRecording(replicaId))
+	_, err = arch.PurgeRecording(replicaId)
+	require.NoError(t, err)
 	waitFor("DELETE signal", hasSignal(replicaId, codecs.RecordingSignal.DELETE))
 	t.Logf("recording %d signals: %v", recordingId, signalsFor(recordingId))
 	t.Logf("polled events: %v", polledEvents)
