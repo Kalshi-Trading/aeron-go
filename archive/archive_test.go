@@ -269,7 +269,7 @@ func TestAsyncEvents(t *testing.T) {
 	// START signal on the control session and RecordingStarted on the events channel
 	waitForCounters(t, 1, 1, 0, 0)
 
-	if err := archive.StopRecordingByPublication(*publication); err != nil {
+	if err := archive.StopRecordingByPublication(publication); err != nil {
 		t.Log(err)
 		t.FailNow()
 	}
@@ -317,7 +317,7 @@ func TestPollForErrorEvents(t *testing.T) {
 	// PollForErrorResponse should simply return successfully with the START recording signal arriving
 	waitForCounters(t, 1, 0, 0, 0)
 
-	if err := archive.StopRecordingByPublication(*publication); err != nil {
+	if err := archive.StopRecordingByPublication(publication); err != nil {
 		t.Log(err)
 		t.FailNow()
 	}
@@ -381,7 +381,7 @@ func TestStartStopRecordingByPublication(t *testing.T) {
 	idler := idlestrategy.Sleeping{SleepFor: time.Millisecond * 100}
 	idler.Idle(0)
 
-	if err := archive.StopRecordingByPublication(*publication); err != nil {
+	if err := archive.StopRecordingByPublication(publication); err != nil {
 		t.Log(err)
 		t.FailNow()
 	}
@@ -529,10 +529,17 @@ func TestStartStopReplay(t *testing.T) {
 	defer publication.Close()
 	t.Logf("Publication found %v", publication)
 
-	recordings, err := archive.ListRecordingsForUri(0, 100, "aeron", testCases[0].sampleStream)
-	if err != nil {
-		t.Log(err)
-		t.FailNow()
+	// The recording is created asynchronously once the archive sees the publication's image.
+	var recordings []*codecs.RecordingDescriptor
+	for deadline := time.Now().Add(5 * time.Second); len(recordings) == 0 && time.Now().Before(deadline); {
+		recordings, err = archive.ListRecordingsForUri(0, 100, "aeron", testCases[0].sampleStream)
+		if err != nil {
+			t.Log(err)
+			t.FailNow()
+		}
+		if len(recordings) == 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	if len(recordings) == 0 {
 		t.Log("No recordings!")

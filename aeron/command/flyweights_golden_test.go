@@ -479,3 +479,15 @@ func TestFlyweightAtNonZeroOffset(t *testing.T) {
 	assert.Equal(t, byte(0), raw[99])
 	assert.EqualValues(t, 3, buf.GetInt32(100+24+4))
 }
+
+func TestPublicationErrorFrameValidateLength(t *testing.T) {
+	buf, _ := newBuffer()
+	var pe PublicationErrorFrame
+	pe.Wrap(buf, 0)
+	pe.SetErrorMessage("rejected")
+	assert.NoError(t, pe.ValidateLength(pe.Length()))
+	assert.Error(t, pe.ValidateLength(pe.Length()-1), "message truncated")
+	assert.Error(t, pe.ValidateLength(pubErrErrorMessageOffset), "missing message length")
+	buf.PutInt32(pubErrErrorMessageOffset, -1)
+	assert.Error(t, pe.ValidateLength(pe.Length()), "negative message length")
+}

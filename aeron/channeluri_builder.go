@@ -32,19 +32,19 @@ import (
 type ChannelUriStringBuilder struct {
 	prefix                string
 	media                 string
-	endpoint              string
-	networkInterface      string
-	controlEndpoint       string
-	controlMode           string
-	tags                  string
-	alias                 string
-	cc                    string
-	fc                    string
-	mediaRcvTsOffset      string
-	channelRcvTsOffset    string
-	channelSndTsOffset    string
-	responseCorrelationId string
-	responseEndpoint      string
+	endpoint              *string
+	networkInterface      *string
+	controlEndpoint       *string
+	controlMode           *string
+	tags                  *string
+	alias                 *string
+	cc                    *string
+	fc                    *string
+	mediaRcvTsOffset      *string
+	channelRcvTsOffset    *string
+	channelSndTsOffset    *string
+	responseCorrelationId *string
+	responseEndpoint      *string
 
 	reliable *bool
 	sparse   *bool
@@ -184,7 +184,7 @@ func (b *ChannelUriStringBuilder) Validate() error {
 	if b.media == "" {
 		return errors.New("media type is mandatory")
 	}
-	if b.media == UdpMedia && b.endpoint == "" && b.controlEndpoint == "" {
+	if b.media == UdpMedia && b.endpoint == nil && b.controlEndpoint == nil {
 		return errors.New("either 'endpoint' or 'control' must be specified for UDP.")
 	}
 	anyNonNil := b.initialTermId != nil || b.termId != nil || b.termOffset != nil
@@ -231,47 +231,47 @@ func (b *ChannelUriStringBuilder) GetMedia() string { return b.media }
 
 // Endpoint sets the endpoint address (host:port) for UDP.
 func (b *ChannelUriStringBuilder) Endpoint(endpoint string) *ChannelUriStringBuilder {
-	b.endpoint = endpoint
+	b.endpoint = &endpoint
 	return b
 }
 
 // GetEndpoint returns the endpoint.
-func (b *ChannelUriStringBuilder) GetEndpoint() string { return b.endpoint }
+func (b *ChannelUriStringBuilder) GetEndpoint() string { return strValue(b.endpoint) }
 
 // NetworkInterface sets the interface (address[:port][/prefix]) for UDP.
 func (b *ChannelUriStringBuilder) NetworkInterface(networkInterface string) *ChannelUriStringBuilder {
-	b.networkInterface = networkInterface
+	b.networkInterface = &networkInterface
 	return b
 }
 
 // GetNetworkInterface returns the interface.
-func (b *ChannelUriStringBuilder) GetNetworkInterface() string { return b.networkInterface }
+func (b *ChannelUriStringBuilder) GetNetworkInterface() string { return strValue(b.networkInterface) }
 
 // ControlEndpoint sets the MDC/response control endpoint.
 func (b *ChannelUriStringBuilder) ControlEndpoint(controlEndpoint string) *ChannelUriStringBuilder {
-	b.controlEndpoint = controlEndpoint
+	b.controlEndpoint = &controlEndpoint
 	return b
 }
 
 // GetControlEndpoint returns the control endpoint.
-func (b *ChannelUriStringBuilder) GetControlEndpoint() string { return b.controlEndpoint }
+func (b *ChannelUriStringBuilder) GetControlEndpoint() string { return strValue(b.controlEndpoint) }
 
-// ControlMode sets the control mode: "manual", "dynamic" or "response" ("" to unset).
+// ControlMode sets the control mode: "manual", "dynamic" or "response" (use Unset to clear it).
 func (b *ChannelUriStringBuilder) ControlMode(controlMode string) *ChannelUriStringBuilder {
-	if controlMode != "" && controlMode != MdcControlModeManual && controlMode != MdcControlModeDynamic &&
+	if controlMode != MdcControlModeManual && controlMode != MdcControlModeDynamic &&
 		controlMode != ControlModeResponse {
 		return b.failf("invalid control mode: %s", controlMode)
 	}
-	b.controlMode = controlMode
+	b.controlMode = &controlMode
 	return b
 }
 
 // GetControlMode returns the control mode.
-func (b *ChannelUriStringBuilder) GetControlMode() string { return b.controlMode }
+func (b *ChannelUriStringBuilder) GetControlMode() string { return strValue(b.controlMode) }
 
 // Tags sets the raw tags param, e.g. "1001,1002".
 func (b *ChannelUriStringBuilder) Tags(tags string) *ChannelUriStringBuilder {
-	b.tags = tags
+	b.tags = &tags
 	return b
 }
 
@@ -286,7 +286,7 @@ func (b *ChannelUriStringBuilder) ChannelAndEntityTags(channelTag int64, entityT
 }
 
 // GetTags returns the tags param.
-func (b *ChannelUriStringBuilder) GetTags() string { return b.tags }
+func (b *ChannelUriStringBuilder) GetTags() string { return strValue(b.tags) }
 
 // IsSessionIdTagged sets whether the session id is rendered as a tag reference ("tag:<id>").
 func (b *ChannelUriStringBuilder) IsSessionIdTagged(isSessionIdTagged bool) *ChannelUriStringBuilder {
@@ -299,25 +299,25 @@ func (b *ChannelUriStringBuilder) GetIsSessionIdTagged() bool { return b.isSessi
 
 // Alias sets the alias param.
 func (b *ChannelUriStringBuilder) Alias(alias string) *ChannelUriStringBuilder {
-	b.alias = alias
+	b.alias = &alias
 	return b
 }
 
 // GetAlias returns the alias.
-func (b *ChannelUriStringBuilder) GetAlias() string { return b.alias }
+func (b *ChannelUriStringBuilder) GetAlias() string { return strValue(b.alias) }
 
 // CongestionControl sets the cc param, e.g. "static" or "cubic".
 func (b *ChannelUriStringBuilder) CongestionControl(congestionControl string) *ChannelUriStringBuilder {
-	b.cc = congestionControl
+	b.cc = &congestionControl
 	return b
 }
 
 // GetCongestionControl returns the cc param.
-func (b *ChannelUriStringBuilder) GetCongestionControl() string { return b.cc }
+func (b *ChannelUriStringBuilder) GetCongestionControl() string { return strValue(b.cc) }
 
 // FlowControl sets the raw fc param, e.g. "max", "min,g:/2,t:5s" or "tagged,g:100/2".
 func (b *ChannelUriStringBuilder) FlowControl(flowControl string) *ChannelUriStringBuilder {
-	b.fc = flowControl
+	b.fc = &flowControl
 	return b
 }
 
@@ -358,7 +358,7 @@ func (b *ChannelUriStringBuilder) TaggedFlowControl(
 }
 
 // GetFlowControl returns the fc param.
-func (b *ChannelUriStringBuilder) GetFlowControl() string { return b.fc }
+func (b *ChannelUriStringBuilder) GetFlowControl() string { return strValue(b.fc) }
 
 // Reliable sets the reliable param.
 func (b *ChannelUriStringBuilder) Reliable(reliable bool) *ChannelUriStringBuilder {
@@ -592,7 +592,7 @@ func (b *ChannelUriStringBuilder) GetReceiverWindowLength() (int32, bool) {
 }
 
 func validateTimestampOffset(name string, offset string) error {
-	if offset != "" && offset != ReservedOffset {
+	if offset != ReservedOffset {
 		if _, err := strconv.ParseInt(offset, 10, 32); err != nil {
 			return fmt.Errorf("%s must be a number or the value '%s' found: %s", name, ReservedOffset, offset)
 		}
@@ -605,25 +605,27 @@ func (b *ChannelUriStringBuilder) MediaReceiveTimestampOffset(offset string) *Ch
 	if err := validateTimestampOffset("mediaReceiveTimestampOffset", offset); err != nil {
 		return b.fail(err)
 	}
-	b.mediaRcvTsOffset = offset
+	b.mediaRcvTsOffset = &offset
 	return b
 }
 
 // GetMediaReceiveTimestampOffset returns media-rcv-ts-offset.
-func (b *ChannelUriStringBuilder) GetMediaReceiveTimestampOffset() string { return b.mediaRcvTsOffset }
+func (b *ChannelUriStringBuilder) GetMediaReceiveTimestampOffset() string {
+	return strValue(b.mediaRcvTsOffset)
+}
 
 // ChannelReceiveTimestampOffset sets channel-rcv-ts-offset: a number or "reserved".
 func (b *ChannelUriStringBuilder) ChannelReceiveTimestampOffset(offset string) *ChannelUriStringBuilder {
 	if err := validateTimestampOffset("channelReceiveTimestampOffset", offset); err != nil {
 		return b.fail(err)
 	}
-	b.channelRcvTsOffset = offset
+	b.channelRcvTsOffset = &offset
 	return b
 }
 
 // GetChannelReceiveTimestampOffset returns channel-rcv-ts-offset.
 func (b *ChannelUriStringBuilder) GetChannelReceiveTimestampOffset() string {
-	return b.channelRcvTsOffset
+	return strValue(b.channelRcvTsOffset)
 }
 
 // ChannelSendTimestampOffset sets channel-snd-ts-offset: a number or "reserved".
@@ -631,21 +633,23 @@ func (b *ChannelUriStringBuilder) ChannelSendTimestampOffset(offset string) *Cha
 	if err := validateTimestampOffset("channelSendTimestampOffset", offset); err != nil {
 		return b.fail(err)
 	}
-	b.channelSndTsOffset = offset
+	b.channelSndTsOffset = &offset
 	return b
 }
 
 // GetChannelSendTimestampOffset returns channel-snd-ts-offset.
-func (b *ChannelUriStringBuilder) GetChannelSendTimestampOffset() string { return b.channelSndTsOffset }
+func (b *ChannelUriStringBuilder) GetChannelSendTimestampOffset() string {
+	return strValue(b.channelSndTsOffset)
+}
 
 // ResponseEndpoint sets response-endpoint.
 func (b *ChannelUriStringBuilder) ResponseEndpoint(responseEndpoint string) *ChannelUriStringBuilder {
-	b.responseEndpoint = responseEndpoint
+	b.responseEndpoint = &responseEndpoint
 	return b
 }
 
 // GetResponseEndpoint returns response-endpoint.
-func (b *ChannelUriStringBuilder) GetResponseEndpoint() string { return b.responseEndpoint }
+func (b *ChannelUriStringBuilder) GetResponseEndpoint() string { return strValue(b.responseEndpoint) }
 
 // ResponseCorrelationId sets response-correlation-id to a correlation id (>= -1), typically the registration id of
 // the subscription the response publication should respond to.
@@ -655,19 +659,21 @@ func (b *ChannelUriStringBuilder) ResponseCorrelationId(correlationId int64) *Ch
 
 // ResponseCorrelationIdString sets response-correlation-id from a string: a number >= -1 or "prototype".
 func (b *ChannelUriStringBuilder) ResponseCorrelationIdString(correlationId string) *ChannelUriStringBuilder {
-	if correlationId != "" && correlationId != PrototypeCorrelationId {
+	if correlationId != PrototypeCorrelationId {
 		v, err := strconv.ParseInt(correlationId, 10, 64)
 		if err != nil || v < -1 {
 			return b.failf("responseCorrelationId must be a number greater than or equal to -1, "+
 				"or the value '%s' found: %s", PrototypeCorrelationId, correlationId)
 		}
 	}
-	b.responseCorrelationId = correlationId
+	b.responseCorrelationId = &correlationId
 	return b
 }
 
 // GetResponseCorrelationId returns response-correlation-id.
-func (b *ChannelUriStringBuilder) GetResponseCorrelationId() string { return b.responseCorrelationId }
+func (b *ChannelUriStringBuilder) GetResponseCorrelationId() string {
+	return strValue(b.responseCorrelationId)
+}
 
 // NakDelay sets nak-delay.
 func (b *ChannelUriStringBuilder) NakDelay(nakDelay time.Duration) *ChannelUriStringBuilder {
@@ -895,31 +901,31 @@ func (b *ChannelUriStringBuilder) Unset(name string) *ChannelUriStringBuilder {
 	case "media":
 		b.media = ""
 	case EndpointParamName:
-		b.endpoint = ""
+		b.endpoint = nil
 	case InterfaceParamName:
-		b.networkInterface = ""
+		b.networkInterface = nil
 	case MdcControlParamName:
-		b.controlEndpoint = ""
+		b.controlEndpoint = nil
 	case MdcControlModeParamName:
-		b.controlMode = ""
+		b.controlMode = nil
 	case TagsParamName:
-		b.tags = ""
+		b.tags = nil
 	case AliasParamName:
-		b.alias = ""
+		b.alias = nil
 	case CongestionControlParamName:
-		b.cc = ""
+		b.cc = nil
 	case FlowControlParamName:
-		b.fc = ""
+		b.fc = nil
 	case MediaRcvTimestampOffsetParamName:
-		b.mediaRcvTsOffset = ""
+		b.mediaRcvTsOffset = nil
 	case ChannelRcvTimestampOffsetParamName:
-		b.channelRcvTsOffset = ""
+		b.channelRcvTsOffset = nil
 	case ChannelSndTimestampOffsetParamName:
-		b.channelSndTsOffset = ""
+		b.channelSndTsOffset = nil
 	case ResponseEndpointParamName:
-		b.responseEndpoint = ""
+		b.responseEndpoint = nil
 	case ResponseCorrelationIdParamName:
-		b.responseCorrelationId = ""
+		b.responseCorrelationId = nil
 	case ReliableStreamParamName:
 		b.reliable = nil
 	case SparseParamName:
@@ -1022,11 +1028,11 @@ func (b *ChannelUriStringBuilder) render() string {
 	sb.WriteString(b.media)
 	sb.WriteByte('?')
 
-	appendStr(&sb, TagsParamName, b.tags)
-	appendStr(&sb, EndpointParamName, b.endpoint)
-	appendStr(&sb, InterfaceParamName, b.networkInterface)
-	appendStr(&sb, MdcControlParamName, b.controlEndpoint)
-	appendStr(&sb, MdcControlModeParamName, b.controlMode)
+	appendOptStr(&sb, TagsParamName, b.tags)
+	appendOptStr(&sb, EndpointParamName, b.endpoint)
+	appendOptStr(&sb, InterfaceParamName, b.networkInterface)
+	appendOptStr(&sb, MdcControlParamName, b.controlEndpoint)
+	appendOptStr(&sb, MdcControlModeParamName, b.controlMode)
 	appendSize(&sb, MtuLengthParamName, b.mtu)
 	appendSize(&sb, TermLengthParamName, b.termLength)
 	appendInt(&sb, InitialTermIdParamName, b.initialTermId)
@@ -1042,9 +1048,9 @@ func (b *ChannelUriStringBuilder) render() string {
 	appendInt(&sb, TtlParamName, b.ttl)
 	appendBool(&sb, ReliableStreamParamName, b.reliable)
 	appendDuration(&sb, LingerParamName, b.lingerNs)
-	appendStr(&sb, AliasParamName, b.alias)
-	appendStr(&sb, CongestionControlParamName, b.cc)
-	appendStr(&sb, FlowControlParamName, b.fc)
+	appendOptStr(&sb, AliasParamName, b.alias)
+	appendOptStr(&sb, CongestionControlParamName, b.cc)
+	appendOptStr(&sb, FlowControlParamName, b.fc)
 	appendInt(&sb, GroupTagParamName, b.groupTag)
 	appendBool(&sb, SparseParamName, b.sparse)
 	appendBool(&sb, EosParamName, b.eos)
@@ -1056,11 +1062,11 @@ func (b *ChannelUriStringBuilder) render() string {
 	appendSize(&sb, SocketRcvbufParamName, b.socketRcvbufLength)
 	appendInt(&sb, SocketTosParamName, b.socketTos)
 	appendSize(&sb, ReceiverWindowLengthParamName, b.receiverWindowLength)
-	appendStr(&sb, MediaRcvTimestampOffsetParamName, b.mediaRcvTsOffset)
-	appendStr(&sb, ChannelRcvTimestampOffsetParamName, b.channelRcvTsOffset)
-	appendStr(&sb, ChannelSndTimestampOffsetParamName, b.channelSndTsOffset)
-	appendStr(&sb, ResponseEndpointParamName, b.responseEndpoint)
-	appendStr(&sb, ResponseCorrelationIdParamName, b.responseCorrelationId)
+	appendOptStr(&sb, MediaRcvTimestampOffsetParamName, b.mediaRcvTsOffset)
+	appendOptStr(&sb, ChannelRcvTimestampOffsetParamName, b.channelRcvTsOffset)
+	appendOptStr(&sb, ChannelSndTimestampOffsetParamName, b.channelSndTsOffset)
+	appendOptStr(&sb, ResponseEndpointParamName, b.responseEndpoint)
+	appendOptStr(&sb, ResponseCorrelationIdParamName, b.responseCorrelationId)
 	appendDuration(&sb, NakDelayParamName, b.nakDelayNs)
 	appendDuration(&sb, UntetheredWindowLimitTimeoutParamName, b.untetheredWindowLimitTimeout)
 	appendDuration(&sb, UntetheredLingerTimeoutParamName, b.untetheredLingerTimeout)
@@ -1077,12 +1083,23 @@ func (b *ChannelUriStringBuilder) render() string {
 }
 
 func appendStr(sb *strings.Builder, name string, value string) {
-	if value != "" {
-		sb.WriteString(name)
-		sb.WriteByte('=')
-		sb.WriteString(value)
-		sb.WriteByte('|')
+	sb.WriteString(name)
+	sb.WriteByte('=')
+	sb.WriteString(value)
+	sb.WriteByte('|')
+}
+
+func appendOptStr(sb *strings.Builder, name string, value *string) {
+	if value != nil {
+		appendStr(sb, name, *value)
 	}
+}
+
+func strValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func appendInt[T int32 | int64](sb *strings.Builder, name string, value *T) {

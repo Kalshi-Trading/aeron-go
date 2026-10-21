@@ -2,6 +2,7 @@ package driver
 
 import (
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
@@ -445,4 +446,31 @@ func TestListenerAdapterSkipsOptionalCallbacks(t *testing.T) {
 		adapter.OnMessage(command.OnNextAvailableSessionID, buf, 0, command.NextAvailableSessionIDLength)
 	})
 	assert.Empty(t, listener.calls)
+}
+
+func TestProxyRejectsCommandLongerThanMaxMsgLength(t *testing.T) {
+	f := newRingFixture(t)
+	channel := "aeron:udp?endpoint=localhost:40123|alias=" + strings.Repeat("x", int(f.ring.MaxMsgLength()))
+	var err error
+	require.NotPanics(t, func() { _, err = f.proxy.AddPublication(channel, 1) })
+	require.ErrorContains(t, err, "exceeds maxMsgLength")
+	require.NotPanics(t, func() { _, err = f.proxy.AddSubscription(channel, 1) })
+	require.Error(t, err)
+	assert.Zero(t, f.ring.Size(), "nothing claimed or committed")
+	_, err = f.proxy.AddPublication("aeron:ipc", 1)
+	require.NoError(t, err, "ring still usable")
+}
+
+func TestListenerAdapterRoutesOnErrorByCodeOnly(t *testing.T) {
+	listener := &recordingListener{}
+	adapter := NewAdapter(listener, nil)
+	buf, off := atomic.MakeBuffer(make([]byte, 1024)), int32(0)
+	var er command.ErrorResponse
+	er.Wrap(buf, off)
+	er.SetOffendingCommandCorrelationID(7)
+	er.SetErrorCode(command.ErrorCodeGenericError)
+	er.SetErrorMessage("java.net.BindException: Address already in use")
+	adapter.OnMessage(command.OnError, buf, off, er.Length())
+	require.Equal(t, []string{"OnErrorResponse"}, listener.calls)
+	assert.Equal(t, []interface{}{int64(7), command.ErrorCodeGenericError, "java.net.BindException: Address already in use"}, listener.args[0])
 }
