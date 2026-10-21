@@ -364,6 +364,43 @@ func startOracle(t *testing.T, mode string, args ...string) *child {
 	return c
 }
 
+// startOracleReady starts the Java oracle and waits for its "ready" event. A Java client that gives up with "CnC
+// file not created" while the driver is up (seen once across several full runs, while Go clients on the same
+// driver connected fine; root cause not found) is logged with the driver directory listing and restarted once.
+func startOracleReady(t *testing.T, mode string, args ...string) *child {
+	t.Helper()
+	for attempt := 0; ; attempt++ {
+		o := startOracle(t, mode, args...)
+		deadline := time.Now().Add(60 * time.Second)
+		for time.Now().Before(deadline) {
+			for _, ev := range o.all() {
+				if ev["event"] == "ready" {
+					return o
+				}
+			}
+			select {
+			case <-o.done:
+				cnc := false
+				for _, ev := range o.all() {
+					cnc = cnc || (ev["event"] == "fatal" && strings.Contains(fmt.Sprint(ev["message"]), "CnC file not created"))
+				}
+				if !cnc || attempt > 0 {
+					o.awaitEvent("ready", time.Second) // fails the test with the events and stderr
+				}
+				out, _ := exec.Command("ls", "-la", aeronDir).CombinedOutput()
+				t.Logf("oracle %s: CnC file not created, retrying; %s: %s", o.name, aeronDir, out)
+			case <-time.After(50 * time.Millisecond):
+				continue
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			o.awaitEvent("ready", time.Second)
+			return o
+		}
+	}
+}
+
 func (c *child) all() []rmrun.Event {
 	c.mu.Lock()
 	defer c.mu.Unlock()

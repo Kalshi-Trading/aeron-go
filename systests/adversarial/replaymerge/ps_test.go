@@ -2,6 +2,7 @@ package replaymerge
 
 import (
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,8 +29,7 @@ func (e *env) oraclePS(count int64, extra ...string) *child {
 		"liveChannel=" + e.liveSubChannel(e.p.control+4), "replayChannel=aeron:udp?endpoint=localhost:0",
 		fmt.Sprintf("replayStream=%d", e.stream+50), "timeoutMs=120000",
 	}
-	o := startOracle(e.t, "ps", append(args, extra...)...)
-	o.awaitEvent("ready", 60*time.Second)
+	o := startOracleReady(e.t, "ps", append(args, extra...)...)
 	return o
 }
 
@@ -67,18 +67,26 @@ func TestPSLivePartitionRecovers(t *testing.T) {
 	o := e.oraclePS(total)
 	base := snapshot(t)
 	cfg := e.psConfig(total)
-	partitioned := false
+	// Partition only once both Go and Java are live, or the side still replaying never leaves live.
+	var goLive atomic.Bool
 	cfg.OnState = func(s ps.State, c *rmrun.Checker) {
-		if s == ps.StateLive && !partitioned {
-			partitioned = true
-			clear := netem(t, "loss 100%", e.p.live, e.p.control+4)
-			go func() {
-				time.Sleep(5 * time.Second)
-				clear()
-			}()
+		if s == ps.StateLive {
+			goLive.Store(true)
 		}
 	}
+	partitioned := make(chan struct{})
+	go func() {
+		defer close(partitioned)
+		o.awaitEvent("liveJoined", 60*time.Second)
+		for !goLive.Load() {
+			time.Sleep(time.Millisecond)
+		}
+		clear := netem(t, "loss 100%", e.p.live, e.p.control+4)
+		time.Sleep(5 * time.Second)
+		clear()
+	}()
 	r, err := rmrun.RunPersistentSubscription(e.c.Aeron, cfg, func(ev string, kv ...any) { t.Logf("go %s %v", ev, kv) })
+	<-partitioned
 	require.NoError(t, err)
 	requirePSExact(t, r, total)
 	require.True(t, statesContain(r.States, ps.StateLive, ps.StateReplay, ps.StateLive), "states %v", r.States)
@@ -174,7 +182,7 @@ func (fc psFaultCase) compare(t *testing.T) (javaOut, goOut psOutcome) {
 	if fc.racy {
 		for side, out := range map[string]psOutcome{"java": javaOut, "go": goOut} {
 			if out.failed {
-				require.Contains(t, out.reason, "INVALID_START_POSITION", "%s %+v", side, out)
+				require.Contains(t, out.reason, "earlier than last observed live position", "%s %+v", side, out)
 			} else {
 				require.Equal(t, fc.total, out.next, "%s %+v", side, out)
 			}

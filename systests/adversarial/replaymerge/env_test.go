@@ -96,8 +96,7 @@ func (e *env) oracleMerge(count int64, extra ...string) *child {
 			e.p.control),
 		"timeoutMs=90000",
 	}
-	o := startOracle(e.t, "replaymerge", append(args, extra...)...)
-	o.awaitEvent("ready", 60*time.Second)
+	o := startOracleReady(e.t, "replaymerge", append(args, extra...)...)
 	return o
 }
 
