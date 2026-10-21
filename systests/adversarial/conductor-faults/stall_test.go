@@ -35,7 +35,10 @@ func stalledOps() []stalledOp {
 			return func() error { _, err := c.AddCounterByLabel(1001, "adv-conductor-faults stalled"); return err }
 		}},
 		{"AddStaticCounter", func(t *testing.T, c *client) func() error {
-			return func() error { _, err := c.AddStaticCounterByLabel(1002, "adv-conductor-faults static", 98001); return err }
+			return func() error {
+				_, err := c.AddStaticCounterByLabel(1002, "adv-conductor-faults static", 98001)
+				return err
+			}
 		}},
 		{"AddDestination", func(t *testing.T, c *client) func() error {
 			pub, err := c.AddExclusivePublication("aeron:udp?control-mode=manual", nextStream())
@@ -213,4 +216,3 @@ func roundTrip(t *testing.T, pub aeron.Publisher, sub *aeron.Subscription, n int
 		require.True(t, time.Now().Before(deadline), "consume timed out at %d", next)
 	}
 }
-

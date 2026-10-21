@@ -239,15 +239,10 @@ func driverCounters(r *counters.Reader, clientID int64) []counters.Counter {
 	return out
 }
 
-// heartbeatCounter returns the id of clientID's heartbeat counter, or -1.
+// heartbeatCounter returns the id of clientID's heartbeat counter, or -1. The driver allocates it on the first
+// command it receives from the client (Java DriverConductor.getOrAddClient), keyed by the client id.
 func heartbeatCounter(r *counters.Reader, clientID int64) int32 {
-	id := int32(-1)
-	r.Scan(func(c counters.Counter) {
-		if c.TypeId == counters.HeartbeatTypeId && r.GetCounterRegistrationID(c.Id) == clientID {
-			id = c.Id
-		}
-	})
-	return id
+	return counters.FindHeartbeatCounterIDByRegistrationID(r, counters.HeartbeatTypeId, clientID)
 }
 
 // awaitNoClientCounters waits until the driver has freed every counter owned by clientID.
