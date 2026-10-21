@@ -31,6 +31,8 @@ type Context struct {
 
 	errorHandler func(error)
 
+	publicationErrorFrameHandler PublicationErrorFrameHandler
+
 	newPublicationHandler     NewPublicationHandler
 	newSubscriptionHandler    NewSubscriptionHandler
 	availableImageHandler     AvailableImageHandler

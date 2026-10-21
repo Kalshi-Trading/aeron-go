@@ -114,6 +114,7 @@ func Connect(ctx *Context) (*Aeron, error) {
 	}
 
 	aeron.conductor.errorHandler = ctx.errorHandler
+	aeron.conductor.publicationErrorFrameHandler = ctx.publicationErrorFrameHandler
 
 	aeron.conductor.Start(ctx.idleStrategy)
 
