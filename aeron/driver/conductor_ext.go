@@ -18,7 +18,6 @@ package driver
 
 import (
 	"fmt"
-	"net"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/util"
@@ -36,39 +35,12 @@ const (
 	EventOnNextAvailableSessionID int32 = 0x0F0D
 )
 
-// PublicationErrorFrame is a decoded ON_PUBLICATION_ERROR event, sent by the driver when a publication receives an
-// error frame from a remote receiver.
-type PublicationErrorFrame struct {
-	RegistrationID            int64
-	DestinationRegistrationID int64
-	SessionID                 int32
-	StreamID                  int32
-	ReceiverID                int64
-	GroupTag                  int64
-	ErrorCode                 int32
-	ErrorMessage              string
-	SourceAddress             *net.UDPAddr
-}
-
-func (f *PublicationErrorFrame) String() string {
-	return fmt.Sprintf("PublicationErrorFrame{registrationId=%d, destinationRegistrationId=%d, sessionId=%d, "+
-		"streamId=%d, receiverId=%d, groupTag=%d, sourceAddress=%v, errorCode=%d, errorMessage=%q}",
-		f.RegistrationID, f.DestinationRegistrationID, f.SessionID, f.StreamID, f.ReceiverID, f.GroupTag,
-		f.SourceAddress, f.ErrorCode, f.ErrorMessage)
-}
-
 // ExtendedListener receives the 1.53.3 driver events that are not part of Listener. A Listener passed to NewAdapter
 // that also implements ExtendedListener receives them; otherwise they are ignored (as Java ignores unknown events).
 type ExtendedListener interface {
 	OnStaticCounter(correlationID int64, counterID int32)
-	OnPublicationError(frame *PublicationErrorFrame)
 	OnNextAvailableSessionID(correlationID int64, sessionID int32)
 }
-
-const (
-	addressTypeIPv4 = 1
-	addressTypeIPv6 = 2
-)
 
 // dispatchExtendedEvent decodes and dispatches events not handled by the original adapter switch. It returns false
 // if the event type is unknown.
@@ -83,48 +55,10 @@ func dispatchExtendedEvent(listener Listener, msgTypeID int32, buffer *atomic.Bu
 		if ok && length >= 12 {
 			ext.OnNextAvailableSessionID(buffer.GetInt64(offset), buffer.GetInt32(offset+8))
 		}
-	case EventOnPublicationError:
-		if ok {
-			if frame := decodePublicationError(buffer, offset, length); frame != nil {
-				ext.OnPublicationError(frame)
-			}
-		}
 	default:
 		return false
 	}
 	return true
-}
-
-// Layout (PublicationErrorFrameFlyweight): registrationId i64, destinationRegistrationId i64, sessionId i32,
-// streamId i32, receiverId i64, groupTag i64, addressType i16, port u16, address [16]byte, errorCode i32,
-// errorMessage (i32 length + ascii).
-func decodePublicationError(buffer *atomic.Buffer, offset int32, length int32) *PublicationErrorFrame {
-	const errorMessageOffset = 8 + 8 + 4 + 4 + 8 + 8 + 2 + 2 + 16 + 4
-	if length < errorMessageOffset+4 {
-		return nil
-	}
-	f := &PublicationErrorFrame{
-		RegistrationID:            buffer.GetInt64(offset),
-		DestinationRegistrationID: buffer.GetInt64(offset + 8),
-		SessionID:                 buffer.GetInt32(offset + 16),
-		StreamID:                  buffer.GetInt32(offset + 20),
-		ReceiverID:                buffer.GetInt64(offset + 24),
-		GroupTag:                  buffer.GetInt64(offset + 32),
-		ErrorCode:                 buffer.GetInt32(offset + 60),
-	}
-	addressType := int16(buffer.GetUInt16(offset + 40))
-	port := int(buffer.GetUInt16(offset + 42))
-	switch addressType {
-	case addressTypeIPv4:
-		f.SourceAddress = &net.UDPAddr{IP: net.IP(buffer.GetBytesArray(offset+44, 4)), Port: port}
-	case addressTypeIPv6:
-		f.SourceAddress = &net.UDPAddr{IP: net.IP(buffer.GetBytesArray(offset+44, 16)), Port: port}
-	}
-	msgLen := buffer.GetInt32(offset + errorMessageOffset)
-	if msgLen > 0 && errorMessageOffset+4+msgLen <= length {
-		f.ErrorMessage = string(buffer.GetBytesArray(offset+errorMessageOffset+4, msgLen))
-	}
-	return f
 }
 
 // RemoveDestinationByID sends REMOVE_DESTINATION_BY_ID to remove a destination from a multi-destination publication

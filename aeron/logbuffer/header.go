@@ -20,7 +20,6 @@ import (
 	"unsafe"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/util"
 )
 
 type Header struct {
@@ -28,6 +27,9 @@ type Header struct {
 	offset              int32
 	initialTermID       int32
 	positionBitsToShift int32
+	// fragmentedFrameLength is the term occupancy of a reassembled message, 0 when not reassembled.
+	fragmentedFrameLength int32
+	context               interface{}
 }
 
 //go:norace
@@ -37,10 +39,9 @@ func (hdr *Header) Wrap(ptr unsafe.Pointer, length int32) *Header {
 }
 
 // Position calculates the current position to which the image has advanced on
-// reading this message.
+// reading this message. For a reassembled message this is the position after its last fragment.
 func (hdr *Header) Position() int64 {
-	resultingOffset := util.AlignInt32(hdr.Offset()+hdr.FrameLength(), FrameAlignment)
-	return computePosition(hdr.TermId(), resultingOffset, hdr.positionBitsToShift, hdr.InitialTermId())
+	return computePosition(hdr.TermId(), hdr.NextTermOffset(), hdr.positionBitsToShift, hdr.InitialTermId())
 }
 
 func (hdr *Header) Offset() int32 {

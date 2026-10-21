@@ -16,7 +16,6 @@
 package aeron
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -73,6 +72,8 @@ type Aeron struct {
 	toClientsBroadcastReceiver *broadcast.Receiver
 	toClientsCopyReceiver      *broadcast.CopyReceiver
 
+	invoker *ConductorAgentInvoker
+
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -85,6 +86,11 @@ const awaitingDriverSleep = 16 * time.Millisecond
 // Aeron.connect it waits up to the media driver timeout for the CnC file to appear and the driver to heartbeat,
 // returning a *DriverTimeoutError otherwise.
 func Connect(ctx *Context) (*Aeron, error) {
+	if !ctx.concluded {
+		if err := ctx.Conclude(); err != nil {
+			return nil, err
+		}
+	}
 	aeron := new(Aeron)
 	aeron.context = ctx
 	logger.Debugf("Connecting with context: %v", ctx)
@@ -104,21 +110,23 @@ func Connect(ctx *Context) (*Aeron, error) {
 
 	aeron.toClientsCopyReceiver = broadcast.NewCopyReceiver(aeron.toClientsBroadcastReceiver)
 
-	clientLivenessTo := time.Duration(aeron.counters.ClientLivenessTo.Get())
+	ctx.interServiceTo = time.Duration(aeron.counters.ClientLivenessTo.Get())
+	ctx.clientID = aeron.driverProxy.ClientID()
 
 	cc := &aeron.conductor
-	cc.Init(&aeron.driverProxy, aeron.toClientsCopyReceiver, clientLivenessTo, ctx.mediaDriverTo,
+	cc.Init(&aeron.driverProxy, aeron.toClientsCopyReceiver, ctx.interServiceTo, ctx.mediaDriverTo,
 		ctx.publicationConnectionTo, ctx.resourceLingerTo, aeron.counters)
 
 	cc.onAvailableImageHandler = ctx.availableImageHandler
 	cc.onUnavailableImageHandler = ctx.unavailableImageHandler
 	cc.onNewPublicationHandler = ctx.newPublicationHandler
 	cc.onNewSubscriptionHandler = ctx.newSubscriptionHandler
-	cc.publicationErrorFrameHandler = ctx.conductorOpts.publicationErrorFrameHandler
-	if ctx.conductorOpts.keepAliveInterval > 0 {
-		cc.keepAliveIntervalNs = ctx.conductorOpts.keepAliveInterval.Nanoseconds()
-	}
-	cc.closeLingerNs = ctx.conductorOpts.closeLinger.Nanoseconds()
+	cc.publicationErrorFrameHandler = ctx.publicationErrorFrameHandler
+	cc.keepAliveIntervalNs = ctx.keepAliveInterval.Nanoseconds()
+	cc.closeLingerNs = ctx.closeLingerDuration.Nanoseconds()
+	cc.clientName = ctx.clientName
+	cc.preTouchMappedMemory = ctx.preTouchMappedMemory
+	cc.subscriberErrorHandler = ctx.subscriberErrorHandler
 
 	if ctx.availableCounterHandler != nil {
 		cc.AddAvailableCounterHandler(ctx.availableCounterHandler)
@@ -126,41 +134,33 @@ func Connect(ctx *Context) (*Aeron, error) {
 	if ctx.unavailableCounterHandler != nil {
 		cc.AddUnavailableCounterHandler(ctx.unavailableCounterHandler)
 	}
-	if ctx.conductorOpts.closeHandler != nil {
-		cc.AddCloseHandler(ctx.conductorOpts.closeHandler)
+	if ctx.closeHandler != nil {
+		cc.AddCloseHandler(ctx.closeHandler)
 	}
 
 	cc.errorHandler = ctx.errorHandler
 
-	cc.Start(ctx.idleStrategy)
+	if ctx.useConductorAgentInvoker {
+		cc.initDutyCycleTimes()
+		aeron.invoker = &ConductorAgentInvoker{aeron: aeron}
+	} else {
+		cc.Start(ctx.idleStrategy)
+	}
 
 	return aeron, nil
 }
 
 func (aeron *Aeron) connectToDriver() error {
 	ctx := aeron.context
-	deadline := time.Now().Add(ctx.mediaDriverTo)
-	for {
-		meta, cnc, err := counters.MapFile(ctx.CncFileName())
-		if err == nil {
-			aeron.counters = meta
-			aeron.cncFile = cnc
-			aeron.toDriverRingBuffer.Init(aeron.counters.ToDriverBuf.Get())
-			heartbeatMs := aeron.toDriverRingBuffer.ConsumerHeartbeatTime()
-			nowMs := time.Now().UnixMilli()
-			if heartbeatMs != 0 && nowMs-heartbeatMs <= ctx.mediaDriverTo.Milliseconds() {
-				return nil
-			}
-			_ = cnc.Close()
-			aeron.counters, aeron.cncFile = nil, nil
-			if time.Now().After(deadline) {
-				return &DriverTimeoutError{Message: fmt.Sprintf("no driver heartbeat detected in %s", ctx.CncFileName())}
-			}
-		} else if time.Now().After(deadline) {
-			return &DriverTimeoutError{Message: fmt.Sprintf("CnC file not created: %s: %v", ctx.CncFileName(), err)}
-		}
-		time.Sleep(awaitingDriverSleep)
+	cnc, err := awaitCncFile(ctx.CncFileName(), ctx.mediaDriverTo)
+	if err != nil {
+		return &DriverTimeoutError{Message: err.Error()}
 	}
+	aeron.counters = cnc.meta
+	aeron.cncFile = cnc.file
+	ctx.filePageSize = cnc.filePageSize()
+	aeron.toDriverRingBuffer.Init(aeron.counters.ToDriverBuf.Get())
+	return nil
 }
 
 // Close closes the client: all publications, subscriptions and counters are closed, close handlers are invoked, the
@@ -186,11 +186,6 @@ func (aeron *Aeron) IsClosed() bool {
 // TerminalError returns the timeout error that terminated the client, or nil if closed normally / still open.
 func (aeron *Aeron) TerminalError() error {
 	return aeron.conductor.TerminalError()
-}
-
-// Context returns the context this client was connected with.
-func (aeron *Aeron) Context() *Context {
-	return aeron.context
 }
 
 // AddCloseHandler registers a handler invoked once when the client closes. Returns an id for RemoveCloseHandler.
@@ -399,14 +394,26 @@ func (aeron *Aeron) CounterReader() *counters.Reader {
 	return aeron.conductor.CounterReader()
 }
 
-// AddCounter allocates a client-owned counter, blocking until the driver confirms it.
+// AddCounter sends ADD_COUNTER without blocking and returns the registration id; poll GetCounter / FindCounter.
+// (Kept id-returning for compatibility; see AddCounterAndWait for the blocking Java-style form.)
 func (aeron *Aeron) AddCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
+	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (int64, error) {
+	return aeron.conductor.AsyncAddCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
+}
+
+// AddCounterByLabel sends ADD_COUNTER with an empty key without blocking and returns the registration id.
+func (aeron *Aeron) AddCounterByLabel(typeId int32, label string) (int64, error) {
+	return aeron.conductor.AsyncAddCounterByLabel(typeId, label)
+}
+
+// AddCounterAndWait allocates a client-owned counter, blocking until the driver confirms it (Java Aeron.addCounter).
+func (aeron *Aeron) AddCounterAndWait(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
 	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (*Counter, error) {
 	return aeron.conductor.AddCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
 }
 
-// AddCounterByLabel allocates a client-owned counter with an empty key, blocking until the driver confirms it.
-func (aeron *Aeron) AddCounterByLabel(typeId int32, label string) (*Counter, error) {
+// AddCounterByLabelAndWait allocates a counter with an empty key, blocking until the driver confirms it.
+func (aeron *Aeron) AddCounterByLabelAndWait(typeId int32, label string) (*Counter, error) {
 	return aeron.conductor.AddCounterByLabel(typeId, label)
 }
 
@@ -426,9 +433,7 @@ func (aeron *Aeron) GetCounter(registrationID int64) (*Counter, error) {
 	return aeron.conductor.GetCounter(registrationID)
 }
 
-// FindCounter is the pre-parity name of GetCounter.
-//
-// Deprecated: use GetCounter.
+// FindCounter is an alias of GetCounter.
 func (aeron *Aeron) FindCounter(registrationID int64) (*Counter, error) {
 	return aeron.conductor.GetCounter(registrationID)
 }

@@ -24,7 +24,6 @@ import (
 
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/counters"
-	"github.com/lirm/aeron-go/aeron/driver"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -446,8 +445,10 @@ func TestPublicationErrorFrameRouted(t *testing.T) {
 	preloadLogBuffers(t, tc, regID)
 	tc.OnNewPublication(StreamId1, SessionId1, 1, 2, "unused", regID, regID)
 
-	tc.OnPublicationError(&driver.PublicationErrorFrame{RegistrationID: regID, ErrorCode: 9, ErrorMessage: "bad"})
-	tc.OnPublicationError(&driver.PublicationErrorFrame{RegistrationID: regID + 100})
+	buf, n := encodePublicationErrorFrame(regID, 9, "bad")
+	tc.OnPublicationError(buf, 0, n)
+	buf, n = encodePublicationErrorFrame(regID+100, 9, "other")
+	tc.OnPublicationError(buf, 0, n)
 	tc.flush()
 	require.Len(t, frames, 1)
 	require.Equal(t, "bad", frames[0].ErrorMessage)
@@ -579,3 +580,14 @@ type idleStrategyForTest struct{}
 func (idleStrategyForTest) Idle(int) { time.Sleep(time.Millisecond) }
 
 var _ = mock.Anything
+
+func encodePublicationErrorFrame(regID int64, code int32, msg string) (*atomic.Buffer, int32) {
+	length := int32(pubErrErrorMessageOffset + 4 + len(msg))
+	buf := atomic.MakeBuffer(make([]byte, length))
+	buf.PutInt64(pubErrRegistrationIDOffset, regID)
+	buf.PutInt32(pubErrErrorCodeOffset, code)
+	buf.PutInt32(pubErrErrorMessageOffset, int32(len(msg)))
+	b := []byte(msg)
+	buf.PutBytesArray(pubErrErrorMessageOffset+4, &b, 0, int32(len(msg)))
+	return buf, length
+}

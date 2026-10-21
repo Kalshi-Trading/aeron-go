@@ -227,7 +227,7 @@ func TestMultiDestinationSubscription(t *testing.T) {
 
 func TestCountersAndCloseHandlers(t *testing.T) {
 	a := connect(t)
-	counter, err := a.AddCounterByLabel(1001, "conductor-e2e")
+	counter, err := a.AddCounterByLabelAndWait(1001, "conductor-e2e")
 	require.NoError(t, err)
 	counter.Counter().Set(42)
 	require.EqualValues(t, 42, a.CounterReader().GetCounterValue(counter.Id()))

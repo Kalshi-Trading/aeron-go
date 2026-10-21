@@ -57,6 +57,7 @@ func NewImage(sessionID int32, correlationID int64, logBuffers *logbuffer.LogBuf
 	image.positionBitsToShift = util.NumberOfTrailingZeroes(uint32(capacity))
 	image.header.SetInitialTermID(logBuffers.Meta().InitTermID.Get())
 	image.header.SetPositionBitsToShift(int32(image.positionBitsToShift))
+	image.header.SetContext(image)
 	image.isClosed.Set(false)
 
 	return image

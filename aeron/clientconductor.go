@@ -35,9 +35,6 @@ import (
 )
 
 const (
-	// DefaultKeepAliveInterval is the default interval between driver liveness checks / client heartbeats.
-	DefaultKeepAliveInterval = 500 * time.Millisecond
-
 	idleSleepNs           = int64(16 * time.Millisecond)
 	awaitingIdleSleep     = time.Millisecond
 	explicitCloseLingerNs = int64(time.Second)
@@ -227,6 +224,11 @@ type ClientConductor struct {
 	closeLingerNs           int64
 
 	heartbeatTimestamp *ctr.AtomicCounter
+
+	counterMetaDataBuffer  *atomic.Buffer
+	clientName             string
+	preTouchMappedMemory   bool
+	subscriberErrorHandler func(error)
 }
 
 // Init is the primary initialization method for ClientConductor
@@ -246,6 +248,7 @@ func (cc *ClientConductor) Init(driverProxy DriverProxy, bcast *broadcast.CopyRe
 	cc.keepAliveIntervalNs = DefaultKeepAliveInterval.Nanoseconds()
 
 	cc.counterValuesBuffer = counters.ValuesBuf.Get()
+	cc.counterMetaDataBuffer = counters.MetaDataBuf.Get()
 	cc.counterReader = ctr.NewReader(counters.ValuesBuf.Get(), counters.MetaDataBuf.Get())
 
 	cc.imageFactory = DefaultImageFactory
@@ -550,6 +553,7 @@ func (cc *ClientConductor) checkLiveness(nowNs int64) (int, error) {
 				logger.Warningf("unable to map heartbeat counter %d: %v", counterID, ctrErr)
 			} else {
 				cc.heartbeatTimestamp = hb
+				cc.onHeartbeatCounterFound(counterID)
 				hb.Set(nowMs)
 			}
 		}
@@ -611,7 +615,7 @@ func (cc *ClientConductor) closeImages(images []Image, handler UnavailableImageH
 		cc.linger(image, lingerNs)
 		if handler != nil {
 			img := image
-			cc.queueCallback(func() { handler(img) })
+			cc.queueCallback(func() { cc.callSubscriberHandler(handler, img) })
 		}
 	}
 }
@@ -623,7 +627,7 @@ func (cc *ClientConductor) mapLogBuffers(registrationID int64, logFileName strin
 				lb, err = nil, fmt.Errorf("failed to map log buffer %s: %v", logFileName, r)
 			}
 		}()
-		lb = logbuffer.Wrap(logFileName)
+		lb = cc.wrapLogBuffers(logFileName)
 		cc.logBuffersByID[registrationID] = lb
 	}
 	lb.IncRef()
@@ -1476,17 +1480,23 @@ func (cc *ClientConductor) OnNextAvailableSessionID(corrID int64, sessionID int3
 	}
 }
 
-func (cc *ClientConductor) OnPublicationError(frame *driver.PublicationErrorFrame) {
-	logger.Debugf("OnPublicationError: %v", frame)
+// OnPublicationError dispatches ON_PUBLICATION_ERROR to the publication error frame handler when the frame is for a
+// publication owned by this client.
+func (cc *ClientConductor) OnPublicationError(buffer *atomic.Buffer, offset int32, length int32) {
 	h := cc.publicationErrorFrameHandler
 	if h == nil {
 		return
 	}
+	var frame PublicationErrorFrame
+	if err := decodePublicationErrorFrame(buffer, offset, length, &frame); err != nil {
+		cc.queueError(err)
+		return
+	}
+	logger.Debugf("OnPublicationError: %v", &frame)
 	for _, res := range cc.resources {
 		if (res.kind == kindPublication || res.kind == kindExclusivePublication) &&
 			res.publication.originalRegID == frame.RegistrationID {
-			f := *frame
-			cc.queueCallback(func() { h(&f) })
+			cc.queueCallback(func() { h(&frame) })
 			return
 		}
 	}
@@ -1543,7 +1553,7 @@ func (cc *ClientConductor) OnAvailableImage(streamID int32, sessionID int32, log
 	}
 	sub.addImage(image)
 	if h := sub.AvailableImageHandler(); h != nil {
-		cc.queueCallback(func() { h(image) })
+		cc.queueCallback(func() { cc.callSubscriberHandler(h, image) })
 	}
 }
 
