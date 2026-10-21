@@ -58,7 +58,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-func publishN(t *testing.T, pub *aeron.Publication, from, n int) {
+func publishN(t *testing.T, pub aeron.Publisher, from, n int) {
 	t.Helper()
 	buf := atomic.MakeBuffer(make([]byte, e2ePayloadLength))
 	for i := from; i < from+n; i++ {

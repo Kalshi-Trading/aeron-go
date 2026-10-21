@@ -72,7 +72,7 @@ func (s *EchoService) OnTimerEvent(correlationId, timestamp int64) {
 	fmt.Printf("OnTimerEvent - correlationId=%d timestamp=%v\n", correlationId, timestamp)
 }
 
-func (s *EchoService) OnTakeSnapshot(publication *aeron.Publication) {
+func (s *EchoService) OnTakeSnapshot(publication *aeron.ExclusivePublication) {
 	fmt.Printf("OnTakeSnapshot - streamId=%d sessionId=%d messageCount=%d\n",
 		publication.StreamID(), publication.SessionID(), s.messageCount)
 	buf := atomic.MakeBuffer(make([]byte, 4))

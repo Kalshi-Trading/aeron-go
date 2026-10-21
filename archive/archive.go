@@ -357,7 +357,7 @@ func (archive *Archive) AddPublication(channel string, streamID int32) (*aeron.P
 //
 // Returns a channel, which can be used for either blocking or
 // non-blocking want for media driver confirmation
-func (archive *Archive) AddExclusivePublication(channel string, streamID int32) (*aeron.Publication, error) {
+func (archive *Archive) AddExclusivePublication(channel string, streamID int32) (*aeron.ExclusivePublication, error) {
 	return archive.aeron.AddExclusivePublication(channel, streamID)
 }
 

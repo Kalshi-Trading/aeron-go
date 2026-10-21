@@ -125,7 +125,7 @@ func (s *trackedSubscription) resolvedEndpoint() string {
 }
 
 type exclusivePublication struct {
-	pub *aeron.Publication
+	pub *aeron.ExclusivePublication
 }
 
 func (p *exclusivePublication) isConnected() bool {
@@ -282,7 +282,7 @@ func (c *realAeronClient) isClosed() bool {
 }
 
 // publication returns the underlying aeron publication for a resolved request publication.
-func publicationOf(p requestPublication) *aeron.Publication {
+func publicationOf(p requestPublication) *aeron.ExclusivePublication {
 	if e, ok := p.(*exclusivePublication); ok {
 		return e.pub
 	}

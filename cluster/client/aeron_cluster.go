@@ -70,7 +70,7 @@ type AeronCluster struct {
 	leaderMemberId              int32
 	subscription                *aeron.Subscription
 	egressImage                 aeron.Image
-	publication                 *aeron.Publication
+	publication                 aeron.Publisher
 	state                       clientState
 	stateDeadline               time.Time
 	bufferClaim                 logbuffer.Claim
@@ -86,7 +86,7 @@ type AeronCluster struct {
 
 func newAeronCluster(
 	ctx *Context,
-	publication *aeron.Publication,
+	publication aeron.Publisher,
 	subscription *aeron.Subscription,
 	egressImage aeron.Image,
 	clusterSessionId int64,
@@ -169,7 +169,7 @@ func (ac *AeronCluster) LeadershipTermId() int64 { return ac.leadershipTermId }
 func (ac *AeronCluster) LeaderMemberId() int32 { return ac.leaderMemberId }
 
 // IngressPublication to the current leader. Prefer Offer/TryClaim which prepend the session header.
-func (ac *AeronCluster) IngressPublication() *aeron.Publication { return ac.publication }
+func (ac *AeronCluster) IngressPublication() aeron.Publisher { return ac.publication }
 
 // EgressSubscription from the cluster.
 func (ac *AeronCluster) EgressSubscription() *aeron.Subscription { return ac.subscription }
@@ -309,7 +309,7 @@ func (ac *AeronCluster) OnNewLeader(clusterSessionId int64, leadershipTermId int
 
 	var err error
 	if ac.ctx.IngressEndpoints == "" {
-		var pub *aeron.Publication
+		var pub aeron.Publisher
 		if pub, err = ac.addNewLeaderIngressPublication(ac.ctx.IngressChannel); err == nil {
 			ac.publication = pub
 		}
@@ -342,7 +342,7 @@ func (ac *AeronCluster) TrackIngressPublicationResult(result int64) {
 	}
 }
 
-func (ac *AeronCluster) addNewLeaderIngressPublication(channel string) (*aeron.Publication, error) {
+func (ac *AeronCluster) addNewLeaderIngressPublication(channel string) (aeron.Publisher, error) {
 	streamId := ac.ctx.IngressStreamId
 	deadline := time.Now().Add(ac.ctx.MessageTimeout)
 	registrationId := int64(nullValue)

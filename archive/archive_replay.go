@@ -278,7 +278,7 @@ func (archive *Archive) replayViaResponseChannelLocked(recordingID int64, replay
 const driverPublisherLimitTypeID = 1
 
 // publicationLimit returns the value of the publisher limit counter of the publication, or -1 if not found.
-func (archive *Archive) publicationLimit(publication *aeron.Publication) int64 {
+func (archive *Archive) publicationLimit(publication aeron.Publisher) int64 {
 	reader := archive.aeron.CounterReader()
 	limit := int64(-1)
 	reader.ScanForType(driverPublisherLimitTypeID, func(counterID int32, _ *atomic.Buffer) bool {

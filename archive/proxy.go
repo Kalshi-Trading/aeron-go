@@ -26,7 +26,7 @@ import (
 
 // Proxy class for encapsulating encoding and sending of control protocol messages to an archive
 type Proxy struct {
-	Publication *aeron.Publication
+	Publication aeron.Publisher
 	archive     *Archive                // link to parent
 	marshaller  *codecs.SbeGoMarshaller // currently shared as we're not reentrant (but could be here)
 }

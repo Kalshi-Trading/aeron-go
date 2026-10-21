@@ -72,7 +72,7 @@ func (archive *Archive) TryStopRecordingByIdentity(recordingID int64) (bool, err
 
 // AddRecordedExclusivePublication adds an exclusive publication and starts a local recording of its
 // session, equivalent to AeronArchive.addRecordedExclusivePublication.
-func (archive *Archive) AddRecordedExclusivePublication(channel string, stream int32) (*aeron.Publication, error) {
+func (archive *Archive) AddRecordedExclusivePublication(channel string, stream int32) (*aeron.ExclusivePublication, error) {
 	publication, err := archive.aeron.AddExclusivePublication(channel, stream)
 	if err != nil {
 		return nil, err
