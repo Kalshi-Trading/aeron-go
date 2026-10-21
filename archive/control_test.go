@@ -207,6 +207,7 @@ func newTestControl(t *testing.T) (*Control, *aeron.MockImage) {
 			IdleStrategy: idlestrategy.Yielding{},
 		},
 	}
+	c.errorFragmentHandler = c.errorResponseFragmentHandler
 	c.fragmentAssembler = aeron.NewControlledFragmentAssembler(
 		c.onFragment, aeron.DefaultFragmentAssemblyBufferLength,
 	)
