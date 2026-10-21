@@ -39,13 +39,10 @@ type CopyReceiver struct {
 	scratchBuffer *atomic.Buffer
 }
 
-// NewCopyReceiver creates a CopyReceiver with a ScratchBufferLength scratch buffer. Any messages already
-// in the buffer are skipped so only messages transmitted after creation are delivered.
+// NewCopyReceiver creates a CopyReceiver with a ScratchBufferLength scratch buffer. Like Agrona, reception
+// starts from the receiver's position (the latest record when the Receiver was created).
 func NewCopyReceiver(receiver *Receiver) *CopyReceiver {
-	bcast := NewCopyReceiverWithScratch(receiver, atomic.MakeBuffer(make([]byte, ScratchBufferLength)))
-	for bcast.receiver.ReceiveNext() {
-	}
-	return bcast
+	return NewCopyReceiverWithScratch(receiver, atomic.MakeBuffer(make([]byte, ScratchBufferLength)))
 }
 
 // NewCopyReceiverWithScratch creates a CopyReceiver using the given scratch buffer and starts from the

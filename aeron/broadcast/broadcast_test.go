@@ -71,11 +71,18 @@ func TestLapping(t *testing.T) {
 func TestCopyReceiver(t *testing.T) {
 	tx, buf := setup(t, 1024)
 	src := atomic.MakeBuffer(make([]byte, 64))
-	tx.Transmit(1, src, 0, 8) // pre-existing, skipped
+	tx.Transmit(1, src, 0, 8) // older record, skipped by the Receiver
+	src.PutInt64(0, 55)
+	tx.Transmit(2, src, 0, 8) // latest record, delivered first as in Agrona CopyBroadcastReceiver
 	recv, _ := NewReceiver(buf)
 	cr := NewCopyReceiver(recv)
+	var first int64
+	var firstType int32
+	if n := cr.Receive(func(typ int32, b *atomic.Buffer, off, l int32) { firstType, first = typ, b.GetInt64(off) }); n != 1 || firstType != 2 || first != 55 {
+		t.Fatalf("latest record not delivered: n=%d type=%d val=%d", n, firstType, first)
+	}
 	if n := cr.Receive(func(int32, *atomic.Buffer, int32, int32) {}); n != 0 {
-		t.Fatal("pre-existing message delivered")
+		t.Fatal("unexpected message")
 	}
 	src.PutInt64(0, 77)
 	tx.Transmit(9, src, 0, 8)
