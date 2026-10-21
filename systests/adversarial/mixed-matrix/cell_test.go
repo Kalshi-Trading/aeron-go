@@ -52,6 +52,11 @@ type transport struct {
 
 const termParams = "term-length=1m"
 
+// minFC makes one-to-many senders pace the slowest receiver. Java's default for multicast and MDC is
+// MaxMulticastFlowControl, under which a slower receiver may legitimately lose data, so without it the
+// exactly-once/no-gap assertions would not hold in Java either.
+const minFC = "fc=min"
+
 var transports = []transport{
 	{"ipc", false, func(int, int) (string, []string, []subEndpoint) {
 		return "aeron:ipc?" + termParams, nil, []subEndpoint{{channel: "aeron:ipc"}}
@@ -62,16 +67,16 @@ var transports = []transport{
 	}},
 	{"multicast", false, func(p, _ int) (string, []string, []subEndpoint) {
 		ch := fmt.Sprintf("aeron:udp?endpoint=224.20.30.97:%d|interface=localhost", p)
-		return ch + "|" + termParams, nil, []subEndpoint{{channel: ch}}
+		return ch + "|" + minFC + "|" + termParams, nil, []subEndpoint{{channel: ch}}
 	}},
 	{"mdc-manual", false, func(p0, p1 int) (string, []string, []subEndpoint) {
 		d0, d1 := fmt.Sprintf("aeron:udp?endpoint=localhost:%d", p0), fmt.Sprintf("aeron:udp?endpoint=localhost:%d", p1)
-		return "aeron:udp?control-mode=manual|" + termParams, []string{d0, d1},
+		return "aeron:udp?control-mode=manual|" + minFC + "|" + termParams, []string{d0, d1},
 			[]subEndpoint{{channel: d0}, {channel: d1}}
 	}},
 	{"mdc-dynamic", false, func(p, _ int) (string, []string, []subEndpoint) {
 		sub := fmt.Sprintf("aeron:udp?control=localhost:%d|endpoint=localhost:0|control-mode=dynamic", p)
-		return fmt.Sprintf("aeron:udp?control=localhost:%d|control-mode=dynamic|%s", p, termParams), nil,
+		return fmt.Sprintf("aeron:udp?control=localhost:%d|control-mode=dynamic|%s|%s", p, minFC, termParams), nil,
 			[]subEndpoint{{channel: sub}}
 	}},
 	{"mds", true, func(p0, p1 int) (string, []string, []subEndpoint) {
@@ -79,7 +84,7 @@ var transports = []transport{
 		// an idle one) and to a plain unicast endpoint for the other consumers; MDS destinations bind their own
 		// sockets, exactly as in Java, so they cannot share an endpoint with another subscription
 		d0, d1 := fmt.Sprintf("aeron:udp?endpoint=localhost:%d", p0), fmt.Sprintf("aeron:udp?endpoint=localhost:%d", p1)
-		return "aeron:udp?control-mode=manual|" + termParams, []string{d0, d1}, []subEndpoint{{
+		return "aeron:udp?control-mode=manual|" + minFC + "|" + termParams, []string{d0, d1}, []subEndpoint{{
 			channel: "aeron:udp?control-mode=manual",
 			dests:   []string{d0, fmt.Sprintf("aeron:udp?endpoint=localhost:%d", p0+50)},
 		}, {channel: d1}}
@@ -344,14 +349,25 @@ func runCell(t *testing.T, rnd *rand.Rand, c cell) {
 	// next-1 exactly once, unless its image joined after the writer's first message (concurrent publisher
 	// joining a live shared session is always fine; a new session is joined at its initial position)
 	for _, w := range closed {
-		awaitTrue(t, fmt.Sprintf("anchor to receive writer %d up to %d", w.writer, w.next), 20*time.Second, func() bool {
+		received := func() bool {
 			for _, img := range anchor.Tracker.Images() {
 				if ws := img.Writers[w.writer]; img.SessionID == w.sessionID && ws != nil && ws.Next == w.next {
 					return true
 				}
 			}
 			return w.next == 0
-		})
+		}
+		for deadline := time.Now().Add(20 * time.Second); !received(); time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				var state []string
+				for _, img := range anchor.Tracker.Images() {
+					state = append(state, fmt.Sprintf("{image %d session %d join %d lastEnd %d writers %s avail %v unavail %v}",
+						img.CorrelationID, img.SessionID, img.JoinPosition, img.LastEnd, img.WriterSummary(),
+						img.Available, img.Unavailable))
+				}
+				t.Fatalf("anchor did not receive writer %+v; closed %+v; anchor %v", w, closed, state)
+			}
+		}
 		for _, img := range anchor.Tracker.Images() {
 			ws := img.Writers[w.writer]
 			if img.SessionID != w.sessionID || ws == nil || img.JoinPosition > w.firstPosition {

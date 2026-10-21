@@ -227,8 +227,9 @@ public final class MatrixPeer
             final long end = header.position();
             final long start = end - BitUtil.align(header.frameLength(), 32);
             final long expected = lastEnd < 0 ? joinPosition : lastEnd;
-            if (start != expected &&
-                !(start > expected && start % termLength == 0 && start - expected < termLength))
+            // forward jumps are padding: at term ends, or written by the driver's unblocker over the claim of a
+            // crashed publisher; message continuity is still checked per writer in onMessage
+            if (start < expected)
             {
                 error("fragment at " + start + " expected " + expected);
             }
@@ -285,7 +286,7 @@ public final class MatrixPeer
 
     private static void onAvailable(final Image image)
     {
-        IMAGES.put(image.correlationId(), new ImageState(image));
+        IMAGES.putIfAbsent(image.correlationId(), new ImageState(image)); // poll may see the image first
         emit("available", "sessionId", image.sessionId(), "correlationId", image.correlationId(),
             "joinPosition", image.joinPosition());
     }

@@ -128,6 +128,13 @@ func freshStack(t *testing.T) {
 	require.NoError(t, compose("up", "-d", "--wait", "adv-mm-driver"))
 	awaitDriver(t)
 	t.Cleanup(removePeers)
+	t.Cleanup(func() {
+		if t.Failed() {
+			out, _ := exec.Command("docker", "logs", "--tail", "40", driverName).CombinedOutput()
+			state, _ := exec.Command("docker", "inspect", "-f", "{{json .State}}", driverName).CombinedOutput()
+			t.Logf("driver state %s\ndriver log tail:\n%s", state, out)
+		}
+	})
 }
 
 func awaitDriver(t *testing.T) {
