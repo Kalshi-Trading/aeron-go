@@ -37,6 +37,7 @@ type flowSpec struct {
 	controlled bool     // poll with ControlledPoll
 	spy        bool     // add an extra aeron-spy: subscription on pubChannel
 	dests      []string // manual multi-destination subscription destinations
+	pubDests   []string // manual MDC publication destinations
 }
 
 // specs covers every publisher/subscriber kind the suite exercises; ports and streams are offset by base so loops and
@@ -61,6 +62,9 @@ func specs(base int) []flowSpec {
 			subChannel: "aeron:udp?control-mode=manual", dests: []string{"aeron:udp?endpoint=" + udp(base*10+6)},
 			stream: s + 5, exclusive: true, mode: offer, size: 64},
 		{name: "concurrent-ipc-tryclaim", pubChannel: "aeron:ipc", stream: s + 6, mode: tryClaim, size: 1024},
+		{name: "concurrent-mdc-manual-offer", pubChannel: "aeron:udp?control-mode=manual",
+			subChannel: "aeron:udp?endpoint=" + udp(base*10+7), pubDests: []string{"aeron:udp?endpoint=" + udp(base*10+7)},
+			stream: s + 7, mode: offer, size: 512},
 	}
 }
 
@@ -99,6 +103,9 @@ func startFlow(t *testing.T, a *aeron.Aeron, spec flowSpec) *flow {
 		f.pub, err = a.AddPublication(spec.pubChannel, spec.stream)
 	}
 	require.NoError(t, err, spec.name)
+	for _, d := range spec.pubDests {
+		require.NoError(t, f.pub.AddDestination(d), spec.name)
+	}
 	if spec.spy {
 		spy, err := a.AddSubscription("aeron-spy:"+spec.pubChannel, spec.stream)
 		require.NoError(t, err, spec.name)
