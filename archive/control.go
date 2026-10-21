@@ -206,6 +206,9 @@ func (control *Control) PollForErrorResponse() (int, error) {
 
 	control.Results.ErrorResponse = nil
 	if !control.Subscription.IsConnected() {
+		if control.archive != nil {
+			control.archive.setState(ArchiveStateDisconnected)
+		}
 		return received, ErrNotConnected
 	}
 
@@ -358,18 +361,39 @@ func (control *Control) PollForResponse(correlationID int64, sessionID int64) (i
 			}
 		}
 
-		if control.Subscription.IsClosed() {
-			return 0, fmt.Errorf("response channel from archive is not connected")
+		if ret > 0 {
+			continue
 		}
-
+		if err := control.checkForDisconnect(); err != nil {
+			return 0, err
+		}
 		if time.Since(start) > control.archive.Options.Timeout {
-			return 0, fmt.Errorf("timeout waiting for correlationID %d", correlationID)
+			return 0, control.timeoutError("awaiting response", correlationID)
 		}
-
-		if ret == 0 {
-			control.archive.Options.IdleStrategy.Idle(0)
-		}
+		control.archive.Options.IdleStrategy.Idle(0)
 	}
+}
+
+// checkForDisconnect mirrors Java AeronArchive.checkForDisconnect: once the control response subscription has
+// no connected image the archive is marked DISCONNECTED and an *ArchiveException is returned.
+func (control *Control) checkForDisconnect() error {
+	sub := control.Subscription
+	if sub.IsConnected() {
+		return nil
+	}
+	if control.archive != nil {
+		control.archive.setState(ArchiveStateDisconnected)
+	}
+	return NewArchiveException(
+		fmt.Sprintf("response channel from archive is not connected, channel=%s, streamId=%d, imageCount=%d",
+			sub.Channel(), sub.StreamID(), sub.ImageCount()),
+		ErrorCodeGeneric, aeron.NullValue)
+}
+
+// timeoutError mirrors the Java TimeoutException raised by AeronArchive.checkDeadline.
+func (control *Control) timeoutError(what string, correlationID int64) error {
+	return aeron.NewTimeoutError(aeron.CategoryError, fmt.Sprintf("%s - correlationId=%d messageTimeout=%s",
+		what, correlationID, control.archive.Options.Timeout))
 }
 
 func (control *Control) responseFragmentHandler(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) term.ControlledPollAction {
@@ -399,6 +423,19 @@ func (control *Control) responseFragmentHandler(buffer *atomic.Buffer, offset in
 		}
 		logger.Debugf("PollForResponse: ignoring response for correlationID=%d", r.CorrelationId)
 
+	case codecIds.challenge:
+		// Java's ControlResponsePoller completes on a Challenge with code NULL_VAL, so pollForResponse fails
+		// with "unexpected response code" instead of waiting for a response that will never arrive.
+		c := &control.challenge
+		if control.decode(c) && c.ControlSessionId == control.sessionID && c.CorrelationId == control.correlationID {
+			return control.completeWith(&codecs.ControlResponse{
+				ControlSessionId: c.ControlSessionId,
+				CorrelationId:    c.CorrelationId,
+				RelevantId:       aeron.NullValue,
+				Code:             codecs.ControlResponseCode.NullValue,
+			}, nil)
+		}
+
 	case codecIds.recordingSignalEvent:
 		s := &control.signalEvent
 		if control.decode(s) && s.ControlSessionId == control.sessionID {
@@ -409,7 +446,7 @@ func (control *Control) responseFragmentHandler(buffer *atomic.Buffer, offset in
 		// Liveness message from the archive's control session, nothing to do.
 
 	default:
-		// Descriptors from abandoned list requests, challenges and unknown templates are skipped.
+		// Descriptors from abandoned list requests, other challenges and unknown templates are skipped.
 		logger.Debugf("PollForResponse: ignoring templateId %d", control.decoder.templateId())
 	}
 	return term.ControlledPollActionContinue
@@ -508,15 +545,16 @@ func (control *Control) PollForDescriptors(correlationID int64, sessionID int64,
 			start = time.Now()
 		}
 
-		if control.Subscription.IsClosed() {
-			return fmt.Errorf("response channel from archive is not connected")
+		if fragments > 0 {
+			continue
+		}
+		if err := control.checkForDisconnect(); err != nil {
+			return err
 		}
 		if time.Since(start) > control.archive.Options.Timeout {
-			return fmt.Errorf("PollNextDescriptor timeout waiting for correlationID %d", correlationID)
+			return control.timeoutError("awaiting recording descriptors", correlationID)
 		}
-		if fragments == 0 {
-			control.archive.Options.IdleStrategy.Idle(0)
-		}
+		control.archive.Options.IdleStrategy.Idle(0)
 	}
 	return nil
 }

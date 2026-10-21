@@ -101,6 +101,9 @@ func (rea *RecordingEventsAdapter) poll(handler FragmentHandlerWithListeners, fr
 	if rea.archive != nil && rea.archive.Options != nil {
 		rea.decoder.rangeChecking = rea.archive.Options.RangeChecking
 	}
+	if rea.Subscription == nil {
+		return 0, nil
+	}
 	rea.handler = handler
 	rea.err = nil
 	n := rea.Subscription.Poll(rea.onFragmentFn, fragmentLimit)
