@@ -122,6 +122,7 @@ type counterStateDefn struct {
 	errorMessage       string
 	status             int
 	counter            *Counter
+	isStatic           bool
 }
 
 func (c *counterStateDefn) Init(time int64) {
@@ -176,6 +177,9 @@ type DriverProxy interface {
 		labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (int64, error)
 	AddCounterByLabel(typeId int32, label string) (int64, error)
 	RemoveCounter(registrationId int64) (int64, error)
+	AddStaticCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
+		labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32, registrationId int64) (int64, error)
+	AddStaticCounterByLabel(typeId int32, label string, registrationId int64) (int64, error)
 }
 
 // ImageFactory allows tests to use fake Images
@@ -757,7 +761,7 @@ func (cc *ClientConductor) FindCounter(registrationID int64) (*Counter, error) {
 	case RegistrationStatus.AwaitingMediaDriver:
 		return nil, timeoutExceeded(counterDef.timeOfRegistration, cc.driverTimeoutNs)
 	case RegistrationStatus.RegisteredMediaDriver:
-		counter, err := NewCounter(registrationID, cc, counterDef.counterId)
+		counter, err := cc.newCounterFromState(registrationID, counterDef)
 		if err != nil {
 			return nil, err
 		}
@@ -920,6 +924,7 @@ func (cc *ClientConductor) OnUnavailableCounter(registrationId int64, counterId 
 	cc.adminLock.Lock()
 	defer cc.adminLock.Unlock()
 
+	cc.onCounterUnavailable(registrationId)
 	for _, handler := range cc.unavailableCounterHandlers {
 		handler.handler.Handle(cc.counterReader, registrationId, counterId)
 	}
