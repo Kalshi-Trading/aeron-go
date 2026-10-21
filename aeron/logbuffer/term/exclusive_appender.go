@@ -183,12 +183,14 @@ func (appender *ExclusiveAppender) AppendFragmentedMessageVectors(termID, termOf
 func (appender *ExclusiveAppender) AppendBlock(termID, termOffset int32, src *atomic.Buffer,
 	srcOffset, length int32) int32 {
 	resultingOffset := termOffset + length
-	lengthOfFirstFrame := src.GetInt32(srcOffset)
+	hdrLength := logbuffer.DataFrameHeader.Length
+	term := appender.termBuffer
 
 	appender.putRawTailOrdered(termID, resultingOffset)
-	src.PutInt32(srcOffset, 0)
-	appender.termBuffer.PutBytes(termOffset, src, srcOffset, length)
-	appender.termBuffer.PutInt32Ordered(termOffset, lengthOfFirstFrame)
-	src.PutInt32(srcOffset, lengthOfFirstFrame)
+	term.PutBytes(termOffset+hdrLength, src, srcOffset+hdrLength, length-hdrLength)
+	term.PutInt64(termOffset+24, src.GetInt64(srcOffset+24))
+	term.PutInt64(termOffset+16, src.GetInt64(srcOffset+16))
+	term.PutInt64(termOffset+8, src.GetInt64(srcOffset+8))
+	term.PutInt64Ordered(termOffset, src.GetInt64(srcOffset))
 	return resultingOffset
 }

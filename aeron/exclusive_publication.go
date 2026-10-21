@@ -186,12 +186,12 @@ func (pub *ExclusivePublication) Offer2(
 // OfferVectors offers the concatenation of vectors as one message.
 func (pub *ExclusivePublication) OfferVectors(vectors []term.DirectBufferVector,
 	reservedValueSupplier term.ReservedValueSupplier) int64 {
-	if pub.IsClosed() {
-		return PublicationClosed
-	}
 	length, err := term.ValidateAndComputeLength(vectors)
 	if err != nil {
 		panic(err)
+	}
+	if pub.IsClosed() {
+		return PublicationClosed
 	}
 	limit := pub.pubLimit.get()
 	position := pub.termBeginPosition + int64(pub.termOffset)
@@ -224,7 +224,6 @@ func (pub *ExclusivePublication) TryClaim(length int32, bufferClaim *logbuffer.C
 	if position >= limit {
 		return pub.backPressureStatus(position, length)
 	}
-	checkPositiveLength(length)
 	result := pub.appenders[pub.activePartitionIndex].Claim(pub.termID, pub.termOffset, length, bufferClaim)
 	return pub.newPosition(result)
 }
@@ -239,12 +238,12 @@ func (pub *ExclusivePublication) AppendPadding(length int32) int64 {
 	if pub.IsClosed() {
 		return PublicationClosed
 	}
-	checkPositiveLength(length)
 	limit := pub.pubLimit.get()
 	position := pub.termBeginPosition + int64(pub.termOffset)
 	if position >= limit {
 		return pub.backPressureStatus(position, length)
 	}
+	checkPositiveLength(length)
 	result := pub.appenders[pub.activePartitionIndex].AppendPadding(pub.termID, pub.termOffset, length)
 	return pub.newPosition(result)
 }
