@@ -236,8 +236,6 @@ func (control *Control) PollForErrorResponse() (int, error) {
 			return received, nil
 		}
 	}
-
-	return 0, nil // Should not happen
 }
 
 // errorResponseFragmentHandler is used to check for errors and async events on an idle control
@@ -368,6 +366,9 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 				pollContext.control.archive.Listeners.RecordingSignalListener(rse)
 			}
 		}
+
+	// The archive pings control sessions to check liveness; nothing to do on receipt
+	case codecIds.ping:
 
 	default:
 		fmt.Printf("errorResponseFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
@@ -511,8 +512,6 @@ func (control *Control) PollForResponse(correlationID int64, sessionID int64) (i
 			control.archive.Options.IdleStrategy.Idle(0)
 		}
 	}
-
-	return 0, fmt.Errorf("PollForResponse out of loop") // can't happen
 }
 
 // DescriptorFragmentHandler is used to poll for descriptors (both recording and subscription)
