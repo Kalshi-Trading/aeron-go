@@ -1,5 +1,5 @@
 /*
-Copyright 2026 Kalshi Trading
+Copyright 2016 Stanislav Liberman
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,9 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// errorstat prints the distinct error log of a media driver, like io.aeron.samples.ErrorStat.
-//
-//	go run ./examples/errorstat -dir /dev/shm/aeron-compose
+// errorstat is a port of io.aeron.samples.ErrorStat: it prints the distinct errors recorded in the
+// driver's CnC error log.
 package main
 
 import (
@@ -24,25 +23,20 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
-	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/cnc"
 	"github.com/lirm/aeron-go/aeron/errorlog"
+	"github.com/lirm/aeron-go/examples"
 )
 
 func main() {
-	dir := flag.String("dir", aeron.DefaultAeronDir+"/aeron-"+aeron.UserName, "aeron directory")
 	flag.Parse()
-
-	f, err := cnc.Open(*dir)
+	dir := *examples.ExamplesConfig.AeronPrefix
+	file, err := cnc.Open(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer f.Close()
-
-	fmt.Printf("Media driver pid=%d started %s, client liveness timeout %s, file page size %d\n",
-		f.Pid(), time.UnixMilli(f.StartTimestampMs()).Format(errorlog.TimestampFormat),
-		time.Duration(f.ClientLivenessTimeoutNs()), f.FilePageSize())
-	errorlog.PrintErrorLog(f.ErrorLogBuffer(), os.Stdout)
+	defer file.Close()
+	fmt.Println("Command `n Control file " + cnc.Path(dir))
+	errorlog.PrintErrorLog(file.ErrorLogBuffer(), os.Stdout)
 }

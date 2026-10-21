@@ -4,6 +4,10 @@
 #   docker compose -f docker/cluster.compose.yml --profile three up -d --build                        # 3 nodes
 #   export AERON_DIR=/dev/shm/aeron-cluster-client
 #
+# examples/cluster_echo_client (and its E2E test) talks to cluster-node-0 over UDP from any driver, e.g. the
+# shared archiving-driver: docker compose -f docker/docker-compose.yml up -d --build archiving-driver
+#                          docker compose -f docker/cluster.compose.yml up -d --build cluster-node-0
+#
 # Go clients use the client-driver (aeron dir /dev/shm/aeron-cluster-client) so cluster nodes can be killed
 # without taking down the client's driver. Each node runs its own ClusteredMediaDriver in
 # /dev/shm/aeron-cluster-<n>-driver. EchoServiceNode port layout: 9000 + 100*n + offset, so ingress endpoints are
