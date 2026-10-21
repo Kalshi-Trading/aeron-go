@@ -34,7 +34,7 @@ import (
 
 const e2eTimeout = 10 * time.Second
 
-func connectE2E(t *testing.T) *aeron.Aeron {
+func connectChannelUriE2E(t *testing.T) *aeron.Aeron {
 	t.Helper()
 	if os.Getenv("AERON_E2E") != "1" {
 		t.Skip("set AERON_E2E=1 to run against an external Java media driver")
@@ -123,7 +123,7 @@ func pollN(t *testing.T, sub *aeron.Subscription, prefix string, n int) {
 }
 
 func TestChannelUriE2EMdcDynamic(t *testing.T) {
-	a := connectE2E(t)
+	a := connectChannelUriE2E(t)
 	const streamID = 24001
 	control := "localhost:24325"
 	pubChannel := build(t, udp().ControlEndpoint(control).ControlMode(aeron.MdcControlModeDynamic).
@@ -147,7 +147,7 @@ func TestChannelUriE2EMdcDynamic(t *testing.T) {
 }
 
 func TestChannelUriE2ETaggedChannels(t *testing.T) {
-	a := connectE2E(t)
+	a := connectChannelUriE2E(t)
 	const streamA, streamB = 24011, 24012
 	endpoint := "localhost:24330"
 
@@ -182,7 +182,7 @@ func TestChannelUriE2ETaggedChannels(t *testing.T) {
 }
 
 func TestChannelUriE2ESpiesSimulateConnection(t *testing.T) {
-	a := connectE2E(t)
+	a := connectChannelUriE2E(t)
 	const streamID = 24021
 
 	sscEndpoint := "localhost:24340"
@@ -201,7 +201,7 @@ func TestChannelUriE2ESpiesSimulateConnection(t *testing.T) {
 }
 
 func TestChannelUriE2EResponseChannel(t *testing.T) {
-	a := connectE2E(t)
+	a := connectChannelUriE2E(t)
 	const requestStream, responseStream = 24031, 24032
 	requestEndpoint := "localhost:24350"
 	responseControl := "localhost:24351"
@@ -233,7 +233,7 @@ func TestChannelUriE2EResponseChannel(t *testing.T) {
 }
 
 func TestChannelUriE2EInitialPosition(t *testing.T) {
-	a := connectE2E(t)
+	a := connectChannelUriE2E(t)
 	const streamID = 24041
 	const termLength = 64 * 1024
 	const position = int64(3*termLength + 1024)
