@@ -78,9 +78,9 @@ func (driver *Proxy) addPublication(msgTypeID int32, channel string, streamID in
 	logger.Debugf("driver.%s: clientId=%d correlationId=%d", command.TypeName(msgTypeID), driver.clientID,
 		correlationID)
 	return correlationID, driver.write(msgTypeID, command.ComputePublicationMessageLength(len(channel)),
-		func(buffer *atomic.Buffer) {
+		func(buffer *atomic.Buffer, index int32) {
 			var m command.PublicationMessage
-			m.Wrap(buffer, 0)
+			m.Wrap(buffer, index)
 			m.SetClientID(driver.clientID)
 			m.SetCorrelationID(correlationID)
 			m.SetStreamID(streamID)
@@ -94,9 +94,9 @@ func (driver *Proxy) RemovePublication(registrationID int64, revoke bool) (int64
 	logger.Debugf("driver.RemovePublication: clientId=%d correlationId=%d (regId=%d revoke=%v)",
 		driver.clientID, correlationID, registrationID, revoke)
 	return correlationID, driver.write(command.RemovePublication, command.RemovePublicationMessageLength,
-		func(buffer *atomic.Buffer) {
+		func(buffer *atomic.Buffer, index int32) {
 			var m command.RemovePublicationMessage
-			m.Wrap(buffer, 0)
+			m.Wrap(buffer, index)
 			m.SetClientID(driver.clientID)
 			m.SetCorrelationID(correlationID)
 			m.SetRegistrationID(registrationID)
@@ -109,9 +109,9 @@ func (driver *Proxy) AddSubscription(channel string, streamID int32) (int64, err
 	correlationID := driver.NextCorrelationID()
 	logger.Debugf("driver.AddSubscription: correlationId=%d", correlationID)
 	return correlationID, driver.write(command.AddSubscription, command.ComputeSubscriptionMessageLength(len(channel)),
-		func(buffer *atomic.Buffer) {
+		func(buffer *atomic.Buffer, index int32) {
 			var m command.SubscriptionMessage
-			m.Wrap(buffer, 0)
+			m.Wrap(buffer, index)
 			m.SetClientID(driver.clientID)
 			m.SetCorrelationID(correlationID)
 			m.SetRegistrationCorrelationID(NullValue)
@@ -134,9 +134,9 @@ func (driver *Proxy) RemoveCounter(registrationID int64) (int64, error) {
 
 func (driver *Proxy) remove(msgTypeID int32, registrationID int64) (int64, error) {
 	correlationID := driver.NextCorrelationID()
-	return correlationID, driver.write(msgTypeID, command.RemoveMessageLength, func(buffer *atomic.Buffer) {
+	return correlationID, driver.write(msgTypeID, command.RemoveMessageLength, func(buffer *atomic.Buffer, index int32) {
 		var m command.RemoveMessage
-		m.Wrap(buffer, 0)
+		m.Wrap(buffer, index)
 		m.SetClientID(driver.clientID)
 		m.SetCorrelationID(correlationID)
 		m.SetRegistrationID(registrationID)
@@ -168,9 +168,9 @@ func (driver *Proxy) destination(msgTypeID int32, registrationID int64, channel 
 	logger.Debugf("driver.%s: clientID=%d registrationID=%d correlationID=%d channel=%s",
 		command.TypeName(msgTypeID), driver.clientID, registrationID, correlationID, channel)
 	return correlationID, driver.write(msgTypeID, command.ComputeDestinationMessageLength(len(channel)),
-		func(buffer *atomic.Buffer) {
+		func(buffer *atomic.Buffer, index int32) {
 			var m command.DestinationMessage
-			m.Wrap(buffer, 0)
+			m.Wrap(buffer, index)
 			m.SetClientID(driver.clientID)
 			m.SetCorrelationID(correlationID)
 			m.SetRegistrationCorrelationID(registrationID)
@@ -183,9 +183,9 @@ func (driver *Proxy) destination(msgTypeID int32, registrationID int64, channel 
 func (driver *Proxy) RemoveDestinationByID(publicationRegistrationID, destinationRegistrationID int64) (int64, error) {
 	correlationID := driver.NextCorrelationID()
 	return correlationID, driver.write(command.RemoveDestinationByID, command.DestinationByIDMessageLength,
-		func(buffer *atomic.Buffer) {
+		func(buffer *atomic.Buffer, index int32) {
 			var m command.DestinationByIDMessage
-			m.Wrap(buffer, 0)
+			m.Wrap(buffer, index)
 			m.SetClientID(driver.clientID)
 			m.SetCorrelationID(correlationID)
 			m.SetResourceRegistrationID(publicationRegistrationID)
@@ -198,9 +198,9 @@ func (driver *Proxy) AddCounter(typeID int32, keyBuffer *atomic.Buffer, keyOffse
 	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (int64, error) {
 	correlationID := driver.NextCorrelationID()
 	length := command.ComputeCounterMessageLength(int(keyLength), int(labelLength))
-	return correlationID, driver.write(command.AddCounter, length, func(buffer *atomic.Buffer) {
+	return correlationID, driver.write(command.AddCounter, length, func(buffer *atomic.Buffer, index int32) {
 		var m command.CounterMessage
-		m.Wrap(buffer, 0)
+		m.Wrap(buffer, index)
 		m.SetClientID(driver.clientID)
 		m.SetCorrelationID(correlationID)
 		m.SetTypeID(typeID)
@@ -213,9 +213,9 @@ func (driver *Proxy) AddCounter(typeID int32, keyBuffer *atomic.Buffer, keyOffse
 func (driver *Proxy) AddCounterByLabel(typeID int32, label string) (int64, error) {
 	correlationID := driver.NextCorrelationID()
 	return correlationID, driver.write(command.AddCounter, command.ComputeCounterMessageLength(0, len(label)),
-		func(buffer *atomic.Buffer) {
+		func(buffer *atomic.Buffer, index int32) {
 			var m command.CounterMessage
-			m.Wrap(buffer, 0)
+			m.Wrap(buffer, index)
 			m.SetClientID(driver.clientID)
 			m.SetCorrelationID(correlationID)
 			m.SetTypeID(typeID)
@@ -230,9 +230,9 @@ func (driver *Proxy) AddStaticCounter(typeID int32, keyBuffer *atomic.Buffer, ke
 	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32, registrationID int64) (int64, error) {
 	correlationID := driver.NextCorrelationID()
 	length := command.ComputeStaticCounterMessageLength(int(keyLength), int(labelLength))
-	return correlationID, driver.write(command.AddStaticCounter, length, func(buffer *atomic.Buffer) {
+	return correlationID, driver.write(command.AddStaticCounter, length, func(buffer *atomic.Buffer, index int32) {
 		var m command.StaticCounterMessage
-		m.Wrap(buffer, 0)
+		m.Wrap(buffer, index)
 		m.SetClientID(driver.clientID)
 		m.SetCorrelationID(correlationID)
 		m.SetRegistrationID(registrationID)
@@ -246,9 +246,9 @@ func (driver *Proxy) AddStaticCounter(typeID int32, keyBuffer *atomic.Buffer, ke
 func (driver *Proxy) AddStaticCounterByLabel(typeID int32, label string, registrationID int64) (int64, error) {
 	correlationID := driver.NextCorrelationID()
 	length := command.ComputeStaticCounterMessageLength(0, len(label))
-	return correlationID, driver.write(command.AddStaticCounter, length, func(buffer *atomic.Buffer) {
+	return correlationID, driver.write(command.AddStaticCounter, length, func(buffer *atomic.Buffer, index int32) {
 		var m command.StaticCounterMessage
-		m.Wrap(buffer, 0)
+		m.Wrap(buffer, index)
 		m.SetClientID(driver.clientID)
 		m.SetCorrelationID(correlationID)
 		m.SetRegistrationID(registrationID)
@@ -271,9 +271,9 @@ func (driver *Proxy) ClientClose() error {
 }
 
 func (driver *Proxy) correlated(msgTypeID int32) error {
-	return driver.write(msgTypeID, command.CorrelatedMessageLength, func(buffer *atomic.Buffer) {
+	return driver.write(msgTypeID, command.CorrelatedMessageLength, func(buffer *atomic.Buffer, index int32) {
 		var m command.CorrelatedMessage
-		m.Wrap(buffer, 0)
+		m.Wrap(buffer, index)
 		m.SetClientID(driver.clientID)
 		m.SetCorrelationID(NullValue)
 	})
@@ -283,9 +283,9 @@ func (driver *Proxy) correlated(msgTypeID int32) error {
 // The driver does not respond.
 func (driver *Proxy) TerminateDriver(token []byte) error {
 	return driver.write(command.TerminateDriver, command.ComputeTerminateDriverMessageLength(len(token)),
-		func(buffer *atomic.Buffer) {
+		func(buffer *atomic.Buffer, index int32) {
 			var m command.TerminateDriverMessage
-			m.Wrap(buffer, 0)
+			m.Wrap(buffer, index)
 			m.SetClientID(driver.clientID)
 			m.SetCorrelationID(NullValue)
 			m.SetToken(token)
@@ -296,9 +296,9 @@ func (driver *Proxy) TerminateDriver(token []byte) error {
 func (driver *Proxy) RejectImage(imageCorrelationID int64, position int64, reason string) (int64, error) {
 	correlationID := driver.NextCorrelationID()
 	return correlationID, driver.write(command.RejectImage, command.ComputeRejectImageMessageLength(len(reason)),
-		func(buffer *atomic.Buffer) {
+		func(buffer *atomic.Buffer, index int32) {
 			var m command.RejectImageMessage
-			m.Wrap(buffer, 0)
+			m.Wrap(buffer, index)
 			m.SetClientID(driver.clientID)
 			m.SetCorrelationID(correlationID)
 			m.SetImageCorrelationID(imageCorrelationID)
@@ -312,20 +312,30 @@ func (driver *Proxy) RejectImage(imageCorrelationID int64, position int64, reaso
 func (driver *Proxy) NextAvailableSessionID(streamID int32) (int64, error) {
 	correlationID := driver.NextCorrelationID()
 	return correlationID, driver.write(command.GetNextAvailableSessionID,
-		command.GetNextAvailableSessionIDMessageLength, func(buffer *atomic.Buffer) {
+		command.GetNextAvailableSessionIDMessageLength, func(buffer *atomic.Buffer, index int32) {
 			var m command.GetNextAvailableSessionIDMessage
-			m.Wrap(buffer, 0)
+			m.Wrap(buffer, index)
 			m.SetClientID(driver.clientID)
 			m.SetCorrelationID(correlationID)
 			m.SetStreamID(streamID)
 		})
 }
 
-func (driver *Proxy) write(msgTypeID int32, length int32, fill func(buffer *atomic.Buffer)) error {
-	buffer := atomic.MakeBuffer(make([]byte, length))
-	fill(buffer)
-	if !driver.toDriverCommandBuffer.Write(msgTypeID, buffer, 0, length) {
+// write claims space in the to-driver ring buffer, encodes the command in place and commits it (as Java's
+// tryClaim/commit), or returns an error when the ring buffer is full.
+func (driver *Proxy) write(msgTypeID int32, length int32, fill func(buffer *atomic.Buffer, index int32)) error {
+	index := driver.toDriverCommandBuffer.TryClaim(msgTypeID, length)
+	if index < 0 {
 		return fmt.Errorf("failed to write %s command to driver", command.TypeName(msgTypeID))
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			driver.toDriverCommandBuffer.Abort(index)
+		}
+	}()
+	fill(driver.toDriverCommandBuffer.Buffer(), index)
+	driver.toDriverCommandBuffer.Commit(index)
+	committed = true
 	return nil
 }

@@ -19,72 +19,110 @@ package atomic
 import (
 	"bytes"
 	"fmt"
-	"log"
-	"reflect"
 	"sync/atomic"
 	"unsafe"
-
-	"github.com/lirm/aeron-go/aeron/util"
 )
 
 // Buffer is the equivalent of AtomicBuffer used by Aeron Java and C++ implementations. It provides
-// atomic operations on a raw byte buffer wrapped by the structure.
+// plain, ordered (release), volatile and atomic operations on a raw region of memory, which may be
+// a Go byte slice or memory-mapped file. All multi-byte values use native (little-endian on
+// amd64/arm64) byte order, the same as Agrona's UnsafeBuffer.
+//
+// Bounds are checked on every access unless the package is built with the
+// aeron_disable_bounds_checks build tag (see BoundsChecksEnabled). Out of bounds access panics
+// with an *IndexOutOfBoundsError.
 type Buffer struct {
 	bufferPtr unsafe.Pointer
 	length    int32
 }
 
-// MakeBuffer takes a variety of argument options and returns a new atomic.Buffer to the best of its ability
-//	Options for calling
-//		MakeAtomicBuffer(Pointer)
-//		MakeAtomicBuffer([]byte)
-//		MakeAtomicBuffer(Pointer, len)
-//		MakeAtomicBuffer([]byte, len)
+// MakeBuffer takes a variety of argument options and returns a new atomic.Buffer.
+//
+//	MakeBuffer()                       // empty buffer
+//	MakeBuffer([]byte)
+//	MakeBuffer([]byte, length)
+//	MakeBuffer([]byte, offset, length)
+//	MakeBuffer(unsafe.Pointer, length)
+//
+// Unsupported argument types panic. Prefer the typed constructors NewBufferSlice and
+// NewBufferPointer.
 func MakeBuffer(args ...interface{}) *Buffer {
-	var bufPtr unsafe.Pointer
-	var bufLen int32
-
+	buf := new(Buffer)
 	switch len(args) {
+	case 0:
+		return buf
 	case 1:
-		// just wrap
-		switch reflect.TypeOf(args[0]) {
-		case reflect.TypeOf(unsafe.Pointer(nil)):
-			bufPtr = unsafe.Pointer(args[0].(unsafe.Pointer))
-
-		case reflect.TypeOf(([]uint8)(nil)):
-			arr := ([]byte)(args[0].([]uint8))
-			bufPtr = unsafe.Pointer(&arr[0])
-			bufLen = int32(len(arr))
+		switch v := args[0].(type) {
+		case nil:
+			return buf
+		case []byte:
+			return buf.WrapSlice(v)
+		case unsafe.Pointer:
+			return buf.Wrap(v, 0)
 		}
 	case 2:
-		// wrap with length
-		if reflect.TypeOf(args[1]).ConvertibleTo(reflect.TypeOf(int32(0))) {
-			v := reflect.ValueOf(args[1])
-			t := reflect.TypeOf(int32(0))
-			bufLen = int32(v.Convert(t).Int())
+		length, ok := toInt32(args[1])
+		if !ok {
+			break
 		}
-
-		// pointer
-		switch reflect.TypeOf(args[0]) {
-		case reflect.TypeOf(uintptr(0)):
-			bufPtr = unsafe.Pointer(args[0].(uintptr))
-
-		case reflect.TypeOf(unsafe.Pointer(nil)):
-			bufPtr = unsafe.Pointer(args[0].(unsafe.Pointer))
-
-		case reflect.TypeOf(([]uint8)(nil)):
-			arr := ([]byte)(args[0].([]uint8))
-			bufPtr = unsafe.Pointer(&arr[0])
+		switch v := args[0].(type) {
+		case []byte:
+			checkSliceRange(len(v), 0, length)
+			return buf.Wrap(unsafe.Pointer(unsafe.SliceData(v)), length)
+		case unsafe.Pointer:
+			return buf.Wrap(v, length)
 		}
 	case 3:
-		// wrap with offset and length
+		offset, ok1 := toInt32(args[1])
+		length, ok2 := toInt32(args[2])
+		if v, ok := args[0].([]byte); ok && ok1 && ok2 {
+			checkSliceRange(len(v), offset, length)
+			return buf.WrapSlice(v[offset : offset+length])
+		}
 	}
-
-	buf := new(Buffer)
-	return buf.Wrap(bufPtr, bufLen)
+	panic(fmt.Sprintf("atomic.MakeBuffer: unsupported arguments %T", args))
 }
 
-// Wrap raw memory with this buffer instance
+// NewBufferSlice returns a Buffer wrapping the whole of b.
+func NewBufferSlice(b []byte) *Buffer {
+	return new(Buffer).WrapSlice(b)
+}
+
+// NewBufferPointer returns a Buffer wrapping length bytes of raw memory at ptr.
+func NewBufferPointer(ptr unsafe.Pointer, length int32) *Buffer {
+	return new(Buffer).Wrap(ptr, length)
+}
+
+func toInt32(v interface{}) (int32, bool) {
+	switch n := v.(type) {
+	case int:
+		return int32(n), true
+	case int32:
+		return n, true
+	case int64:
+		return int32(n), true
+	case uint32:
+		return int32(n), true
+	case int16:
+		return int32(n), true
+	case uint16:
+		return int32(n), true
+	case uint8:
+		return int32(n), true
+	case int8:
+		return int32(n), true
+	}
+	return 0, false
+}
+
+func checkSliceRange(sliceLen int, offset, length int32) {
+	if offset < 0 || length < 0 || int64(offset)+int64(length) > int64(sliceLen) {
+		panic(&IndexOutOfBoundsError{Index: offset, Length: length, Capacity: int32(sliceLen)})
+	}
+}
+
+// Wrap raw memory with this buffer instance.
+//
 //go:norace
 func (buf *Buffer) Wrap(buffer unsafe.Pointer, length int32) *Buffer {
 	buf.bufferPtr = buffer
@@ -92,242 +130,261 @@ func (buf *Buffer) Wrap(buffer unsafe.Pointer, length int32) *Buffer {
 	return buf
 }
 
+// WrapSlice wraps the whole of b. The buffer keeps b's backing array alive.
+//
+//go:norace
+func (buf *Buffer) WrapSlice(b []byte) *Buffer {
+	buf.bufferPtr = unsafe.Pointer(unsafe.SliceData(b))
+	buf.length = int32(len(b))
+	return buf
+}
+
+// WrapBuffer wraps the region [offset, offset+length) of another buffer, like Agrona's
+// wrap(DirectBuffer, offset, length).
+//
+//go:norace
+func (buf *Buffer) WrapBuffer(src *Buffer, offset, length int32) *Buffer {
+	src.BoundsCheck(offset, length)
+	if length == 0 {
+		// Avoid forming a pointer one past the end of the source allocation.
+		buf.bufferPtr = src.bufferPtr
+	} else {
+		buf.bufferPtr = unsafe.Add(src.bufferPtr, offset)
+	}
+	buf.length = length
+	return buf
+}
+
 // Ptr will return the raw memory pointer for the underlying buffer
+//
 //go:norace
 func (buf *Buffer) Ptr() unsafe.Pointer {
 	return buf.bufferPtr
 }
 
+// PtrAt returns a pointer to the byte at index after checking that length bytes are in bounds.
+//
+//go:norace
+func (buf *Buffer) PtrAt(index, length int32) unsafe.Pointer {
+	buf.BoundsCheck(index, length)
+	if index == buf.length {
+		return buf.bufferPtr
+	}
+	return unsafe.Add(buf.bufferPtr, index)
+}
+
 // Capacity of the buffer, which is used for bound checking
+//
 //go:norace
 func (buf *Buffer) Capacity() int32 {
 	return buf.length
 }
 
+// Slice returns a []byte aliasing [index, index+length) of the buffer memory. Writes through the
+// slice are visible in the buffer.
+//
+//go:norace
+func (buf *Buffer) Slice(index, length int32) []byte {
+	buf.BoundsCheck(index, length)
+	if length == 0 {
+		return []byte{}
+	}
+	return unsafe.Slice((*byte)(unsafe.Add(buf.bufferPtr, index)), length)
+}
+
+//go:norace
+func (buf *Buffer) at(offset int32) unsafe.Pointer {
+	return unsafe.Add(buf.bufferPtr, offset)
+}
+
 // Fill the buffer with the value of the argument byte. Generally used for initialization,
 // since it's somewhat expensive.
+//
 //go:norace
 func (buf *Buffer) Fill(b uint8) {
-	if buf.length == 0 {
+	buf.SetMemory(0, buf.length, b)
+}
+
+// SetMemory sets length bytes starting at index to value.
+//
+//go:norace
+func (buf *Buffer) SetMemory(index, length int32, value uint8) {
+	buf.BoundsCheck(index, length)
+	if length == 0 {
 		return
 	}
-	for ix := 0; ix < int(buf.length); ix++ {
-		uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(ix))
-		*(*uint8)(uptr) = b
+	s := unsafe.Slice((*byte)(buf.at(index)), length)
+	for i := range s {
+		s[i] = value
 	}
 }
 
 //go:norace
 func (buf *Buffer) GetUInt8(offset int32) uint8 {
-	BoundsCheck(offset, 1, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-
-	return *(*uint8)(uptr)
+	buf.BoundsCheck(offset, 1)
+	return *(*uint8)(buf.at(offset))
 }
 
 //go:norace
 func (buf *Buffer) GetUInt16(offset int32) uint16 {
-	BoundsCheck(offset, 2, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-
-	return *(*uint16)(uptr)
+	buf.BoundsCheck(offset, 2)
+	return *(*uint16)(buf.at(offset))
 }
 
 //go:norace
 func (buf *Buffer) GetInt32(offset int32) int32 {
-	BoundsCheck(offset, 4, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-
-	return *(*int32)(uptr)
+	buf.BoundsCheck(offset, 4)
+	return *(*int32)(buf.at(offset))
 }
 
 //go:norace
 func (buf *Buffer) GetInt64(offset int32) int64 {
-	BoundsCheck(offset, 8, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-
-	return *(*int64)(uptr)
+	buf.BoundsCheck(offset, 8)
+	return *(*int64)(buf.at(offset))
 }
 
 //go:norace
 func (buf *Buffer) PutUInt8(offset int32, value uint8) {
-	BoundsCheck(offset, 1, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-
-	*(*uint8)(uptr) = value
+	buf.BoundsCheck(offset, 1)
+	*(*uint8)(buf.at(offset)) = value
 }
 
 //go:norace
 func (buf *Buffer) PutInt8(offset int32, value int8) {
-	BoundsCheck(offset, 1, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-
-	*(*int8)(uptr) = value
+	buf.BoundsCheck(offset, 1)
+	*(*int8)(buf.at(offset)) = value
 }
 
 //go:norace
 func (buf *Buffer) PutUInt16(offset int32, value uint16) {
-	BoundsCheck(offset, 2, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-
-	*(*uint16)(uptr) = value
+	buf.BoundsCheck(offset, 2)
+	*(*uint16)(buf.at(offset)) = value
 }
 
 //go:norace
 func (buf *Buffer) PutInt32(offset int32, value int32) {
-	BoundsCheck(offset, 4, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-
-	*(*int32)(uptr) = value
+	buf.BoundsCheck(offset, 4)
+	*(*int32)(buf.at(offset)) = value
 }
 
 //go:norace
 func (buf *Buffer) PutInt64(offset int32, value int64) {
-	BoundsCheck(offset, 8, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-
-	*(*int64)(uptr) = value
+	buf.BoundsCheck(offset, 8)
+	*(*int64)(buf.at(offset)) = value
 }
 
-//go:norace
+// GetAndAddInt64 atomically adds delta and returns the previous value.
 func (buf *Buffer) GetAndAddInt64(offset int32, delta int64) int64 {
-	BoundsCheck(offset, 8, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-	newVal := atomic.AddUint64((*uint64)(uptr), uint64(delta))
-
-	return int64(newVal) - delta
+	buf.BoundsCheck(offset, 8)
+	return atomic.AddInt64((*int64)(buf.at(offset)), delta) - delta
 }
 
-//go:norace
+// GetInt32Volatile is an acquire (sequentially consistent) load.
 func (buf *Buffer) GetInt32Volatile(offset int32) int32 {
-	BoundsCheck(offset, 4, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-	cur := atomic.LoadUint32((*uint32)(uptr))
-
-	return int32(cur)
+	buf.BoundsCheck(offset, 4)
+	return atomic.LoadInt32((*int32)(buf.at(offset)))
 }
 
-//go:norace
+// GetInt64Volatile is an acquire (sequentially consistent) load.
 func (buf *Buffer) GetInt64Volatile(offset int32) int64 {
-	BoundsCheck(offset, 8, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-	cur := atomic.LoadUint64((*uint64)(uptr))
-
-	return int64(cur)
+	buf.BoundsCheck(offset, 8)
+	return atomic.LoadInt64((*int64)(buf.at(offset)))
 }
 
-//go:norace
+// PutInt64Ordered is a release store (Agrona putLongOrdered/putLongRelease).
 func (buf *Buffer) PutInt64Ordered(offset int32, value int64) {
-	BoundsCheck(offset, 8, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-	atomic.StoreInt64((*int64)(uptr), value)
+	buf.BoundsCheck(offset, 8)
+	atomic.StoreInt64((*int64)(buf.at(offset)), value)
 }
 
-//go:norace
+// PutInt32Ordered is a release store (Agrona putIntOrdered/putIntRelease).
 func (buf *Buffer) PutInt32Ordered(offset int32, value int32) {
-	BoundsCheck(offset, 4, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-	atomic.StoreInt32((*int32)(uptr), value)
+	buf.BoundsCheck(offset, 4)
+	atomic.StoreInt32((*int32)(buf.at(offset)), value)
 }
 
-//go:norace
+// PutIntOrdered is a release store of a 32-bit value.
+//
+// Deprecated: use PutInt32Ordered.
 func (buf *Buffer) PutIntOrdered(offset int32, value int) {
-	BoundsCheck(offset, 4, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-	atomic.StoreInt32((*int32)(uptr), int32(value))
+	buf.PutInt32Ordered(offset, int32(value))
 }
 
-//go:norace
+// CompareAndSetInt64 atomically sets the value to updateValue if it currently equals expectedValue.
 func (buf *Buffer) CompareAndSetInt64(offset int32, expectedValue, updateValue int64) bool {
-	BoundsCheck(offset, 8, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-	return atomic.CompareAndSwapInt64((*int64)(uptr), expectedValue, updateValue)
+	buf.BoundsCheck(offset, 8)
+	return atomic.CompareAndSwapInt64((*int64)(buf.at(offset)), expectedValue, updateValue)
 }
 
-//go:norace
+// CompareAndSetInt32 atomically sets the value to updateValue if it currently equals expectedValue.
 func (buf *Buffer) CompareAndSetInt32(offset int32, expectedValue, updateValue int32) bool {
-	BoundsCheck(offset, 4, buf.length)
-
-	uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset))
-	return atomic.CompareAndSwapInt32((*int32)(uptr), expectedValue, updateValue)
+	buf.BoundsCheck(offset, 4)
+	return atomic.CompareAndSwapInt32((*int32)(buf.at(offset)), expectedValue, updateValue)
 }
 
+// PutBytes copies length bytes from srcBuffer at srcIndex into this buffer at index.
+//
 //go:norace
-func (buf *Buffer) PutBytes(index int32, srcBuffer *Buffer, srcint32 int32, length int32) {
-	BoundsCheck(index, length, buf.length)
-	BoundsCheck(srcint32, length, srcBuffer.length)
-
-	util.Memcpy(uintptr(buf.bufferPtr)+uintptr(index), uintptr(srcBuffer.bufferPtr)+uintptr(srcint32), length)
+func (buf *Buffer) PutBytes(index int32, srcBuffer *Buffer, srcIndex int32, length int32) {
+	buf.BoundsCheck(index, length)
+	srcBuffer.BoundsCheck(srcIndex, length)
+	if length == 0 {
+		return
+	}
+	copy(unsafe.Slice((*byte)(buf.at(index)), length), unsafe.Slice((*byte)(srcBuffer.at(srcIndex)), length))
 }
 
+// GetBytesArray returns a copy of length bytes starting at offset.
+//
 //go:norace
 func (buf *Buffer) GetBytesArray(offset int32, length int32) []byte {
-	BoundsCheck(offset, length, buf.length)
-
+	buf.BoundsCheck(offset, length)
 	bArr := make([]byte, length)
-	for ix := 0; ix < int(length); ix++ {
-		uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset) + uintptr(ix))
-		bArr[ix] = *(*uint8)(uptr)
+	if length > 0 {
+		copy(bArr, unsafe.Slice((*byte)(buf.at(offset)), length))
 	}
-
 	return bArr
 }
 
+// GetBytes copies len(b) bytes starting at offset into b.
+//
 //go:norace
 func (buf *Buffer) GetBytes(offset int32, b []byte) {
-	length := len(b)
-	BoundsCheck(offset, int32(length), buf.length)
-
-	for ix := 0; ix < length; ix++ {
-		uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset) + uintptr(ix))
-		b[ix] = *(*uint8)(uptr)
+	length := int32(len(b))
+	buf.BoundsCheck(offset, length)
+	if length > 0 {
+		copy(b, unsafe.Slice((*byte)(buf.at(offset)), length))
 	}
 }
 
 // WriteBytes writes data from offset and length to the given dest buffer. This will
 // grow the buffer as needed.
+//
 //go:norace
 func (buf *Buffer) WriteBytes(dest *bytes.Buffer, offset int32, length int32) {
-	BoundsCheck(offset, length, buf.length)
-	// grow the buffer all at once to prevent additional allocations.
-	dest.Grow(int(length))
-	for ix := 0; ix < int(length); ix++ {
-		uptr := unsafe.Pointer(uintptr(buf.bufferPtr) + uintptr(offset) + uintptr(ix))
-		dest.WriteByte(*(*uint8)(uptr))
+	buf.BoundsCheck(offset, length)
+	if length > 0 {
+		dest.Write(unsafe.Slice((*byte)(buf.at(offset)), length))
 	}
 }
 
+// PutBytesArray copies length bytes from (*arr)[srcIndex:] into this buffer at index.
+//
+// Deprecated: use PutBytesSlice, which does not need a pointer to the slice.
+//
 //go:norace
-func (buf *Buffer) PutBytesArray(index int32, arr *[]byte, srcint32 int32, length int32) {
-	BoundsCheck(index, length, buf.length)
-	BoundsCheck(srcint32, length, int32(len(*arr)))
-
-	bArr := *arr
-
-	util.Memcpy(uintptr(buf.bufferPtr)+uintptr(index), uintptr(unsafe.Pointer(&bArr[0]))+uintptr(srcint32), length)
+func (buf *Buffer) PutBytesArray(index int32, arr *[]byte, srcIndex int32, length int32) {
+	checkSliceRange(len(*arr), srcIndex, length)
+	buf.PutBytesSlice(index, (*arr)[srcIndex:srcIndex+length])
 }
 
-// BoundsCheck is helper function to make sure buffer writes and reads to
-// not go out of bounds on stated buffer capacity
+// PutBytesSlice copies all of src into this buffer at index.
+//
 //go:norace
-func BoundsCheck(index int32, length int32, myLength int32) {
-	if (index + length) > myLength {
-		log.Fatal(fmt.Sprintf("Out of Bounds. int32: %d + %d Capacity: %d", index, length, myLength))
+func (buf *Buffer) PutBytesSlice(index int32, src []byte) {
+	length := int32(len(src))
+	buf.BoundsCheck(index, length)
+	if length > 0 {
+		copy(unsafe.Slice((*byte)(buf.at(index)), length), src)
 	}
 }

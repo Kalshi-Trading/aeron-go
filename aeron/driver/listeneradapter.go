@@ -74,8 +74,8 @@ func (pos *SubscriberPosition) IndicatorID() int32 {
 // Listener receives decoded driver responses. The adapter does no correlation filtering: every message on the
 // to-clients broadcast buffer is delivered, and the listener decides whether it concerns this client.
 //
-// A Listener may additionally implement StaticCounterListener, PublicationErrorListener and
-// NextAvailableSessionIDListener to receive the corresponding responses; they are dropped otherwise.
+// A Listener may additionally implement StaticCounterListener and NextAvailableSessionIDListener to receive the
+// corresponding responses; they are dropped otherwise.
 type Listener interface {
 	OnNewPublication(streamID int32, sessionID int32, positionLimitCounterID int32, channelStatusIndicatorID int32,
 		logFileName string, correlationID int64, registrationID int64)
@@ -91,17 +91,14 @@ type Listener interface {
 	OnAvailableCounter(correlationID int64, counterID int32)
 	OnUnavailableCounter(correlationID int64, counterID int32)
 	OnClientTimeout(clientID int64)
+	// OnPublicationError receives ON_PUBLICATION_ERROR (an error frame received by a publication). It is broadcast to
+	// all clients; decode with command.PublicationErrorFrame and filter on RegistrationID.
+	OnPublicationError(buffer *atomic.Buffer, offset int32, length int32)
 }
 
 // StaticCounterListener receives ON_STATIC_COUNTER responses to AddStaticCounter.
 type StaticCounterListener interface {
 	OnStaticCounter(correlationID int64, counterID int32)
-}
-
-// PublicationErrorListener receives ON_PUBLICATION_ERROR notifications (error frames received by publications). They
-// are broadcast to all clients; filter on RegistrationID.
-type PublicationErrorListener interface {
-	OnPublicationError(publicationError *command.PublicationError)
 }
 
 // NextAvailableSessionIDListener receives ON_NEXT_AVAILABLE_SESSION_ID responses to NextAvailableSessionID.
@@ -123,7 +120,6 @@ type ListenerAdapter struct {
 	counterUpdate     command.CounterUpdate
 	clientTimeout     command.ClientTimeout
 	staticCounter     command.StaticCounter
-	publicationError  command.PublicationErrorFrame
 	nextSessionID     command.NextAvailableSessionID
 }
 
@@ -202,10 +198,7 @@ func (adapter *ListenerAdapter) OnMessage(msgTypeID int32, buffer *atomic.Buffer
 		}
 
 	case command.OnPublicationError:
-		if l, ok := listener.(PublicationErrorListener); ok {
-			value := adapter.publicationError.Wrap(buffer, offset).Value()
-			l.OnPublicationError(&value)
-		}
+		listener.OnPublicationError(buffer, offset, length)
 
 	case command.OnNextAvailableSessionID:
 		if l, ok := listener.(NextAvailableSessionIDListener); ok {

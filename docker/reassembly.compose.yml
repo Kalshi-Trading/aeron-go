@@ -1,0 +1,14 @@
+# Java 1.53.3 publisher of large fragmented messages for the aeron-go reassembly E2E test.
+# Requires the archiving-driver from docker-compose.yml to be running. Used by systests/reassembly_e2e_test.go:
+#   docker compose -f docker/reassembly.compose.yml run --rm reassembly-publisher <channel> <streamId> <count>
+services:
+  reassembly-publisher:
+    build: ./reassembly
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    volumes:
+      - /dev/shm:/dev/shm
+    environment:
+      AERON_PROPS: -Daeron.dir=/dev/shm/aeron-compose
+    command: ["aeron:udp?endpoint=localhost:20131", "1031", "200"]

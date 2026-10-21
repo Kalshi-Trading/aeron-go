@@ -308,6 +308,10 @@ func (l *recordingListener) OnUnavailableCounter(correlationID int64, counterID 
 	l.record("OnUnavailableCounter", correlationID, counterID)
 }
 func (l *recordingListener) OnClientTimeout(clientID int64) { l.record("OnClientTimeout", clientID) }
+func (l *recordingListener) OnPublicationError(buffer *atomic.Buffer, offset int32, length int32) {
+	var frame command.PublicationErrorFrame
+	l.record("OnPublicationError", frame.Wrap(buffer, offset).Value(), length)
+}
 
 type extendedListener struct {
 	recordingListener
@@ -316,9 +320,7 @@ type extendedListener struct {
 func (l *extendedListener) OnStaticCounter(correlationID int64, counterID int32) {
 	l.record("OnStaticCounter", correlationID, counterID)
 }
-func (l *extendedListener) OnPublicationError(publicationError *command.PublicationError) {
-	l.record("OnPublicationError", *publicationError)
-}
+
 func (l *extendedListener) OnNextAvailableSessionID(correlationID int64, nextSessionID int32) {
 	l.record("OnNextAvailableSessionID", correlationID, nextSessionID)
 }
@@ -443,7 +445,6 @@ func TestListenerAdapterSkipsOptionalCallbacks(t *testing.T) {
 	assert.NotPanics(t, func() {
 		adapter.OnMessage(command.OnStaticCounter, buf, 0, command.StaticCounterLength)
 		adapter.OnMessage(command.OnNextAvailableSessionID, buf, 0, command.NextAvailableSessionIDLength)
-		adapter.OnMessage(command.OnPublicationError, buf, 0, 68)
 	})
 	assert.Empty(t, listener.calls)
 }
