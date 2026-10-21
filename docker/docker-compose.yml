@@ -2,7 +2,10 @@
 # on the host can connect over shared memory: AERON_DIR=/dev/shm/aeron-compose (see docker/README.md).
 services:
   archiving-driver:
-    build: .
+    build:
+      context: .
+      args:
+        JAVA_IMAGE: ${JAVA_IMAGE:-eclipse-temurin:21-jre}
     network_mode: host
     user: "${UID:-1000}:${GID:-1000}"
     ipc: host
@@ -35,7 +38,10 @@ services:
 
   # Java sample publisher sending to a UDP channel the Go side can subscribe/record.
   java-publisher:
-    build: .
+    build:
+      context: .
+      args:
+        JAVA_IMAGE: ${JAVA_IMAGE:-eclipse-temurin:21-jre}
     profiles: ["clients"]
     network_mode: host
     user: "${UID:-1000}:${GID:-1000}"
@@ -55,7 +61,10 @@ services:
     command: ["io.aeron.samples.BasicPublisher"]
 
   java-subscriber:
-    build: .
+    build:
+      context: .
+      args:
+        JAVA_IMAGE: ${JAVA_IMAGE:-eclipse-temurin:21-jre}
     profiles: ["clients"]
     network_mode: host
     user: "${UID:-1000}:${GID:-1000}"
@@ -72,3 +81,80 @@ services:
         -Daeron.sample.streamId=1002
     command: ["io.aeron.samples.BasicSubscriber"]
 
+
+  # ---- profile e2e: Go test clients (e2e/cmd) in containers against the Java driver ----
+  # docker compose -f docker/docker-compose.yml --profile e2e up --build
+  # Scenario 1: go-recorder + go-subscriber attach to udp :22121 stream 3001, go-publisher sends
+  #   E2E_COUNT sequenced messages, then go-replayer replays the finished recording.
+  # Scenario 2: go-mdc-publisher records + publishes on MDC control :22141 stream 3003 while
+  #   go-replay-merge replays from the start and merges onto the live stream.
+  # Every checker exits non-zero on a gap/duplicate/corrupt message; see `make e2e-docker`.
+  go-subscriber: &go-client
+    build:
+      context: ..
+      dockerfile: docker/go-clients.Dockerfile
+      args:
+        GO_IMAGE: ${GO_IMAGE:-golang:1.21-bookworm}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-debian:bookworm-slim}
+    image: aeron-go-e2e-clients
+    profiles: ["e2e"]
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    volumes:
+      - /dev/shm:/dev/shm
+    depends_on:
+      archiving-driver:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 1s
+      retries: 60
+    command: ["subscriber", "-channel", "aeron:udp?endpoint=localhost:22121", "-stream", "3001",
+              "-count", "${E2E_COUNT:-100000}", "-ready-file", "/tmp/ready"]
+
+  go-recorder:
+    <<: *go-client
+    command: ["recorder", "-channel", "aeron:udp?endpoint=localhost:22121", "-stream", "3001",
+              "-ready-file", "/tmp/ready"]
+
+  go-publisher:
+    <<: *go-client
+    depends_on:
+      go-subscriber:
+        condition: service_healthy
+      go-recorder:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    command: ["publisher", "-channel", "aeron:udp?endpoint=localhost:22121", "-stream", "3001",
+              "-count", "${E2E_COUNT:-100000}", "-size", "200"]
+
+  go-replayer:
+    <<: *go-client
+    depends_on:
+      go-recorder:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    command: ["replayer", "-channel", "aeron:udp?endpoint=localhost:22121", "-stream", "3001",
+              "-replay-channel", "aeron:udp?endpoint=localhost:22151", "-replay-stream", "3101",
+              "-count", "${E2E_COUNT:-100000}"]
+
+  go-mdc-publisher:
+    <<: *go-client
+    command: ["publisher", "-channel", "aeron:udp?control=localhost:22141|control-mode=dynamic", "-stream", "3003",
+              "-record", "aeron:udp?endpoint=localhost:22142|control=localhost:22141",
+              "-count", "${E2E_MERGE_COUNT:-20000}", "-size", "128", "-interval", "200us",
+              "-ready-after", "2000", "-ready-file", "/tmp/ready", "-linger", "5s"]
+
+  go-replay-merge:
+    <<: *go-client
+    depends_on:
+      go-mdc-publisher:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    command: ["replay-merge", "-channel", "aeron:udp?endpoint=localhost:22142|control=localhost:22141", "-stream", "3003",
+              "-live-destination", "aeron:udp?endpoint=localhost:22143|control=localhost:22141",
+              "-count", "${E2E_MERGE_COUNT:-20000}"]
