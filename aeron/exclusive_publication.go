@@ -28,7 +28,7 @@ import (
 // ExclusivePublication is a publication for a single writer (io.aeron.ExclusivePublication). It is not safe for
 // concurrent use; in exchange it avoids atomic read-modify-write on the tail and supports OfferBlock and
 // AppendPadding. Its initial position may be set with the channel parameters init-term-id, term-id and
-// term-offset (see ChannelUriStringBuilder.InitialPosition).
+// term-offset, e.g. "aeron:udp?endpoint=host:port|init-term-id=100|term-id=105|term-offset=1024".
 type ExclusivePublication struct {
 	publicationBase
 
