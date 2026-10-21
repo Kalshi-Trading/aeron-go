@@ -18,7 +18,7 @@ RACE_FLAGS      ?= -race
 
 E2E_CHECKERS    := go-subscriber go-recorder go-publisher go-replayer go-mdc-publisher go-replay-merge
 
-.PHONY: all build vet test race jar docker-mirror e2e e2e-up e2e-test e2e-down e2e-docker e2e-bin e2e-chaos
+.PHONY: all build vet test race jar docker-mirror e2e e2e-up e2e-test e2e-down e2e-docker e2e-bin e2e-chaos e2e-adversarial
 
 all: build vet test
 
@@ -106,6 +106,11 @@ e2e-chaos: jar
 	$(CHAOS_COMPOSE) up -d --build --wait
 	AERON_E2E=1 AERON_E2E_CHAOS=1 $(GO) test -count=1 -p 1 -timeout 20m -v ./systests/chaos/; status=$$?; \
 	$(CHAOS_COMPOSE) down -v; exit $$status
+
+# Adversarial crash/fault suites (systests/adversarial/<area>); each test brings up and tears down its own
+# docker/adversarial-<area>.compose.yml stack (project adv-<area>, AERON_DIR /dev/shm/aeron-adv-<area>).
+e2e-adversarial: jar
+	AERON_E2E=1 AERON_ADVERSARIAL=1 AERON_JAR=$(AERON_JAR_PATH) $(GO) test -count=1 -p 1 -timeout 90m -v ./systests/adversarial/...
 
 # The Go clients in containers (docker compose --profile e2e), failing if any checker fails.
 e2e-docker:
