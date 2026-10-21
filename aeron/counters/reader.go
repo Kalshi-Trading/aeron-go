@@ -207,9 +207,13 @@ func (reader *Reader) scan(cb func(Counter), bytesToString func(labelBytes []byt
 // The key buffer is only valid for the duration of the callback.
 func (reader *Reader) ScanForType(typeId int32, callback func(counterId int32, keyBuffer *atomic.Buffer) bool) {
 	var keyBuf atomic.Buffer
+	capacity := reader.metaData.Capacity()
 	for id := 0; id <= reader.maxCounterID; id++ {
 		counterId := int32(id)
 		metaDataOffset := counterId * MetadataLength
+		if metaDataOffset+MetadataLength > capacity {
+			break
+		}
 		recordStatus := reader.metaData.GetInt32Volatile(metaDataOffset)
 		if recordStatus == RecordUnused {
 			break
@@ -228,8 +232,12 @@ func (reader *Reader) ScanForType(typeId int32, callback func(counterId int32, k
 // or NullCounterId.
 func (reader *Reader) FindCounter(typeId int32, keyFilter func(keyBuffer *atomic.Buffer) bool) int32 {
 	var keyBuf atomic.Buffer
+	capacity := reader.metaData.Capacity()
 	for id := 0; id <= reader.maxCounterID; id++ {
 		metaDataOffset := int32(id) * MetadataLength
+		if metaDataOffset+MetadataLength > capacity {
+			break
+		}
 		recordStatus := reader.metaData.GetInt32Volatile(metaDataOffset)
 		if recordStatus == RecordUnused {
 			break

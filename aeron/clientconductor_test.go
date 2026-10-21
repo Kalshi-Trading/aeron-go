@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
+	"github.com/lirm/aeron-go/aeron/command"
 	"github.com/lirm/aeron-go/aeron/counters"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/stretchr/testify/mock"
@@ -591,12 +592,25 @@ func (idleStrategyForTest) Idle(int) { time.Sleep(time.Millisecond) }
 var _ = mock.Anything
 
 func encodePublicationErrorFrame(regID int64, code int32, msg string) (*atomic.Buffer, int32) {
-	length := int32(pubErrErrorMessageOffset + 4 + len(msg))
-	buf := atomic.MakeBuffer(make([]byte, length))
-	buf.PutInt64(pubErrRegistrationIDOffset, regID)
-	buf.PutInt32(pubErrErrorCodeOffset, code)
-	buf.PutInt32(pubErrErrorMessageOffset, int32(len(msg)))
-	b := []byte(msg)
-	buf.PutBytesArray(pubErrErrorMessageOffset+4, &b, 0, int32(len(msg)))
-	return buf, length
+	buf := atomic.MakeBuffer(make([]byte, 256))
+	var fly command.PublicationErrorFrame
+	fly.Wrap(buf, 0)
+	fly.SetRegistrationID(regID)
+	fly.SetErrorCode(code)
+	fly.SetErrorMessage(msg)
+	return buf, fly.Length()
+}
+
+func TestChannelEndpointErrorDoesNotFailActiveCommand(t *testing.T) {
+	tc := newTestConductor(t)
+	tc.activeCorrelationID = 77
+	tc.OnChannelEndpointError(77, "status indicator 77 errored")
+	require.NotEqual(t, int64(77), tc.receivedCorrelationID, "status indicator id is not a correlation id")
+	require.NoError(t, tc.driverErr)
+
+	tc.asyncCommandIDs[78] = 78
+	tc.OnChannelEndpointError(78, "async")
+	tc.flush()
+	_, stillPending := tc.asyncCommandIDs[78]
+	require.False(t, stillPending, "async command with that id is failed, as Java does")
 }

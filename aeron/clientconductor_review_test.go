@@ -54,7 +54,7 @@ func TestAsyncRemovePendingSubscriptionSendsRemove(t *testing.T) {
 	require.ErrorIs(t, err, ErrUnknownRegistration)
 }
 
-func TestAsyncRemovePendingCounterSendsRemove(t *testing.T) {
+func TestAsyncRemovePendingCounterIsNotActive(t *testing.T) {
 	tc := newTestConductor(t)
 	regID, err := tc.AddCounterByLabel(CounterTypeId, CounterLabel)
 	require.NoError(t, err)
