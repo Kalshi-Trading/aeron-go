@@ -37,7 +37,7 @@ func (d *IngressSessionDecorator) SetLeadershipTermId(leadershipTermId int64) *I
 }
 
 // Offer the message with the session header prepended.
-func (d *IngressSessionDecorator) Offer(publication *aeron.Publication, buffer *atomic.Buffer, offset int32,
+func (d *IngressSessionDecorator) Offer(publication aeron.Publisher, buffer *atomic.Buffer, offset int32,
 	length int32) int64 {
 	return publication.Offer2(d.headerBuffer, 0, SessionHeaderLength, buffer, offset, length, nil)
 }

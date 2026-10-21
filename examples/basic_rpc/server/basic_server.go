@@ -43,7 +43,7 @@ func init() {
 }
 
 type client struct {
-	pub *aeron.Publication
+	pub *aeron.ExclusivePublication
 }
 
 func main() {

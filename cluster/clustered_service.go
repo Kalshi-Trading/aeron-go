@@ -42,7 +42,7 @@ type ClusteredService interface {
 	// Note: As this is a potentially long-running operation the implementation should use
 	// Cluster.idleStrategy() and then occasionally call IdleStrategy.idle()
 	// especially when the snapshot ExclusivePublication returns Publication.BACK_PRESSURED
-	OnTakeSnapshot(publication *aeron.Publication)
+	OnTakeSnapshot(publication *aeron.ExclusivePublication)
 
 	// OnRoleChange notifies the clustered service that the cluster node has changed role
 	OnRoleChange(role Role)

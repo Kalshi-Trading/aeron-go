@@ -128,7 +128,7 @@ func javaToGo(t *testing.T, ch channels, v variant) {
 func goToJava(t *testing.T, ch channels, v variant) {
 	a := connectGo(t)
 	stream := nextStream()
-	var pub *aeron.Publication
+	var pub aeron.Publisher
 	var err error
 	if v.exclusive {
 		pub, err = a.AddExclusivePublication(ch.pub, stream)
