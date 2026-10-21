@@ -1298,6 +1298,26 @@ func (cc *ClientConductor) sendAddCounter(kind resourceKind, send func() (int64,
 	return corrID, nil
 }
 
+// addCounterSync sends an add counter command and blocks in awaitResponse until the driver responds (Java
+// ClientConductor.addCounter/addStaticCounter), so a stalled or lost driver surfaces as a DriverTimeoutError.
+func (cc *ClientConductor) addCounterSync(kind resourceKind, send func() (int64, error)) (*Counter, error) {
+	cc.adminLock.Lock()
+	defer cc.unlock()
+	corrID, err := cc.sendAddCounter(kind, send)
+	if err != nil {
+		return nil, err
+	}
+	if err := cc.awaitResponse(corrID); err != nil {
+		delete(cc.resources, corrID)
+		return nil, err
+	}
+	res := cc.resources[corrID]
+	if res == nil || res.counter == nil {
+		return nil, fmt.Errorf("counter %d not available after response", corrID)
+	}
+	return res.counter, nil
+}
+
 // GetCounter polls for a counter added with AddCounter*/AddStaticCounter*: (nil, nil) while the driver has not
 // responded.
 func (cc *ClientConductor) GetCounter(correlationID int64) (*Counter, error) {
