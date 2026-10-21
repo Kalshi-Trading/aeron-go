@@ -100,8 +100,8 @@ func TestMain(m *testing.M) {
 
 	archive, err = NewArchive(options, context)
 	if err != nil || archive == nil {
-		log.Printf("archive-media-driver connection failed, skipping all archive_tests:%s", err.Error())
-		return
+		log.Printf("archive-media-driver connection failed, skipping archive integration tests: %v", err)
+		os.Exit(m.Run())
 	}
 	haveArchive = true
 
@@ -507,7 +507,7 @@ func TestListRecordings(t *testing.T) {
 	} else if !res {
 		t.Logf("StopRecordingByIdentity(%d) failed", recordingID)
 	}
-	if err := archive.PurgeRecording(recordingID); err != nil {
+	if _, err := archive.PurgeRecording(recordingID); err != nil {
 		t.Logf("PurgeRecording(%d) failed: %s", recordingID, err.Error())
 	}
 	publication.Close()

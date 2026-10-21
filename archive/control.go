@@ -93,6 +93,7 @@ type CodecIds struct {
 	recordingStarted                uint16
 	recordingProgress               uint16
 	recordingStopped                uint16
+	ping                            uint16
 }
 
 var codecIds CodecIds
@@ -115,6 +116,7 @@ func init() {
 	codecIds.recordingStarted = recordingStarted.SbeTemplateId()
 	codecIds.recordingProgress = recordingProgress.SbeTemplateId()
 	codecIds.recordingStopped = recordingStopped.SbeTemplateId()
+	codecIds.ping = (&codecs.Ping{}).SbeTemplateId()
 }
 
 func controlFragmentHandler(context interface{}, buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) (action term.ControlledPollAction) {
@@ -195,16 +197,17 @@ func controlFragmentHandler(context interface{}, buffer *atomic.Buffer, offset i
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
 				pollContext.control.archive.Listeners.ErrorListener(err2)
 			}
+			return
 		}
-		if pollContext.control.archive.Listeners.RecordingSignalListener != nil {
-			pollContext.control.archive.Listeners.RecordingSignalListener(recordingSignalEvent)
-		}
+		dispatchRecordingSignal(pollContext.control.archive, recordingSignalEvent)
 
 	// These can happen when testing/reconnecting or if multiple clients are on the same channel/stream
 	case codecIds.recordingDescriptor:
 		logger.Debugf("controlFragmentHandler: ignoring RecordingDescriptor type %d", hdr.TemplateId)
 	case codecIds.recordingSubscriptionDescriptor:
 		logger.Debugf("controlFragmentHandler: ignoring RecordingSubscriptionDescriptor type %d", hdr.TemplateId)
+	case codecIds.ping:
+		// Archive keepalive to the control session (schema v14); nothing to do.
 
 	default:
 		// This can happen when testing/adding new functionality
@@ -379,8 +382,6 @@ func (control *Control) PollForErrorResponse() (int, error) {
 			return received, nil
 		}
 	}
-
-	return 0, nil // Should not happen
 }
 
 // errorResponseFragmentHandler is used to check for errors and async events on an idle control
@@ -500,17 +501,9 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
 				pollContext.control.archive.Listeners.ErrorListener(err2)
 			}
+			return
 		}
-		if pollContext.control.archive.Listeners.RecordingSignalListener != nil {
-			pollContext.control.archive.Listeners.RecordingSignalListener(rse)
-		}
-
-		if rse.ControlSessionId == pollContext.control.archive.SessionID {
-			// We can call the async callback if it exists
-			if pollContext.control.archive.Listeners.RecordingSignalListener != nil {
-				pollContext.control.archive.Listeners.RecordingSignalListener(rse)
-			}
-		}
+		dispatchRecordingSignal(pollContext.control.archive, rse)
 
 	default:
 		fmt.Printf("errorResponseFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
@@ -597,6 +590,7 @@ func (control *Control) onFragment(
 			}
 			return term.ControlledPollActionContinue
 		}
+		dispatchRecordingSignal(control.archive, recordingSignalEvent)
 
 	default:
 		logger.Debug("descriptorFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
@@ -654,8 +648,6 @@ func (control *Control) PollForResponse(correlationID int64, sessionID int64) (i
 			control.archive.Options.IdleStrategy.Idle(0)
 		}
 	}
-
-	return 0, fmt.Errorf("PollForResponse out of loop") // can't happen
 }
 
 // DescriptorFragmentHandler is used to poll for descriptors (both recording and subscription)
@@ -784,11 +776,8 @@ func DescriptorFragmentHandler(context interface{}, buffer *atomic.Buffer, offse
 				pollContext.control.archive.Listeners.ErrorListener(err2)
 			}
 			return
-
 		}
-		if pollContext.control.archive.Listeners.RecordingSignalListener != nil {
-			pollContext.control.archive.Listeners.RecordingSignalListener(recordingSignalEvent)
-		}
+		dispatchRecordingSignal(pollContext.control.archive, recordingSignalEvent)
 
 	default:
 		logger.Debug("descriptorFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)

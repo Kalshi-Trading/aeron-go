@@ -225,7 +225,7 @@ func (adapter *ListenerAdapter) ReceiveMessages() int {
 			adapter.listener.OnClientTimeout(msg.clientID.Get())
 		default:
 			// Note: Java silently ignores unhandled events
-			logger.Fatalf("received unhandled %d", msgTypeID)
+			logger.Debugf("ignoring unhandled driver event %d", msgTypeID)
 		}
 	}
 
