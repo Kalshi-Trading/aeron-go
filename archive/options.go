@@ -22,6 +22,7 @@ import (
 
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/idlestrategy"
+	"github.com/lirm/aeron-go/aeron/util"
 	"github.com/lirm/aeron-go/archive/codecs"
 	"go.uber.org/zap/zapcore"
 )
@@ -211,15 +212,19 @@ func (o *Options) conclude() error {
 	return nil
 }
 
+// minNextSessionIDDriverVersion is the oldest driver applySessionID asks for a session id.
+var minNextSessionIDDriverVersion = util.SemanticVersionCompose(1, 53, 0)
+
 // applySessionID sets the session-id of the control request and response channels to the id allocated by the
 // driver, as Java Context.conclude() does with aeron.nextSessionId(controlRequestStreamId). Channels using
-// control-mode=response are left alone.
-func (o *Options) applySessionID(nextSessionID func(streamID int32) (int32, error)) error {
+// control-mode=response are left alone, and so are the channels when the driver is older than 1.53 or its version
+// is unknown: older drivers (ktgo runs 1.43) never answer GET_NEXT_AVAILABLE_SESSION_ID, so connect would time out.
+func (o *Options) applySessionID(nextSessionID func(streamID int32) (int32, error), driverVersion uint32) error {
 	response, err := aeron.ParseChannelUri(o.ResponseChannel)
 	if err != nil {
 		return err
 	}
-	if isControlModeResponse(response) {
+	if isControlModeResponse(response) || driverVersion < minNextSessionIDDriverVersion {
 		return nil
 	}
 	request, err := aeron.ParseChannelUri(o.RequestChannel)

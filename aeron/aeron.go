@@ -440,6 +440,17 @@ func (aeron *Aeron) NextSessionID(streamID int32) (int32, error) {
 	return aeron.conductor.NextSessionID(streamID)
 }
 
+// DriverVersion returns the media driver's semantic version (see util.SemanticVersionCompose) from its
+// "Aeron software" system counter, or 0 if the driver does not publish one.
+func (aeron *Aeron) DriverVersion() uint32 {
+	r := aeron.CounterReader()
+	id := counters.SystemCounterIdAeronVersion
+	if r == nil || !r.IsCounterAllocated(id) || r.GetCounterTypeID(id) != counters.DriverSystemCounterTypeId {
+		return 0
+	}
+	return uint32(r.GetCounterValue(id))
+}
+
 // CounterReader returns a reader for the media driver counters.
 func (aeron *Aeron) CounterReader() *counters.Reader {
 	return aeron.conductor.CounterReader()
