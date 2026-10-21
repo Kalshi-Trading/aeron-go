@@ -155,12 +155,12 @@ func (pub *Publication) Offer2(
 	if pub.IsClosed() {
 		return PublicationClosed
 	}
-	length := validateAndComputeLength(lengthOne, lengthTwo)
 	limit := pub.pubLimit.get()
 	_, appender, position, ok := pub.activeState()
 	if !ok {
 		return AdminAction
 	}
+	length := validateAndComputeLength(lengthOne, lengthTwo)
 	if position >= limit {
 		return pub.backPressureStatus(position, length)
 	}
@@ -182,12 +182,12 @@ func (pub *Publication) Offer2(
 // Panics if a vector is invalid or the total exceeds MaxMessageLength.
 func (pub *Publication) OfferVectors(vectors []term.DirectBufferVector,
 	reservedValueSupplier term.ReservedValueSupplier) int64 {
-	if pub.IsClosed() {
-		return PublicationClosed
-	}
 	length, err := term.ValidateAndComputeLength(vectors)
 	if err != nil {
 		panic(err)
+	}
+	if pub.IsClosed() {
+		return PublicationClosed
 	}
 	limit := pub.pubLimit.get()
 	_, appender, position, ok := pub.activeState()
@@ -225,7 +225,6 @@ func (pub *Publication) TryClaim(length int32, bufferClaim *logbuffer.Claim) int
 	if position >= limit {
 		return pub.backPressureStatus(position, length)
 	}
-	checkPositiveLength(length)
 	resultingOffset, termID := appender.Claim(length, bufferClaim)
 	return pub.newPosition(resultingOffset, termID)
 }

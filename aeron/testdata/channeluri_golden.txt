@@ -1,0 +1,393 @@
+IN	aeron:udp
+PARSE		udp	null	null
+BUILD	aeron:udp
+IN	aeron:ipc
+PARSE		ipc	null	null
+BUILD	aeron:ipc
+IN	aeron-spy:aeron:ipc
+PARSE	aeron-spy	ipc	null	null
+BUILD	aeron-spy:aeron:ipc
+IN	aeron-spy:aeron:udp?endpoint=localhost:4041
+PARSE	aeron-spy	udp	null	null	endpoint=localhost:4041
+BUILD	aeron-spy:aeron:udp?endpoint=localhost:4041
+IN	aeron-spy:aeron-spy:aeron:ipc
+PARSE	ERR
+BUILD	ERR
+IN	aeron-spy:ipc
+PARSE	ERR
+BUILD	ERR
+IN	:udp
+PARSE	ERR
+BUILD	ERR
+IN	aeron
+PARSE	ERR
+BUILD	ERR
+IN	aron:
+PARSE	ERR
+BUILD	ERR
+IN	eeron:
+PARSE	ERR
+BUILD	ERR
+IN	aeron:
+PARSE	ERR
+BUILD	ERR
+IN	aeron:udp:
+PARSE	ERR
+BUILD	ERR
+IN	aeron:ipcsdfgfdhfgf
+PARSE	ERR
+BUILD	ERR
+IN	aeron:ipc|sparse=true
+PARSE	ERR
+BUILD	ERR
+IN	aeron:udp?endpoint=localhost:4652|-~@{]|=??#s!£$%====
+PARSE	ERR
+BUILD	ERR
+IN	aeron:foo?endpoint=localhost:1
+PARSE		foo	null	null	endpoint=localhost:1
+BUILD	ERR
+IN	aeron:?endpoint=localhost:1
+PARSE			null	null	endpoint=localhost:1
+BUILD	ERR
+IN	aeron:UDP?endpoint=localhost:1
+PARSE		UDP	null	null	endpoint=localhost:1
+BUILD	ERR
+IN	aeron:udp?
+PARSE	ERR
+BUILD	ERR
+IN	aeron:udp?endpoint
+PARSE	ERR
+BUILD	ERR
+IN	aeron:udp?=x
+PARSE	ERR
+BUILD	ERR
+IN	aeron:udp?endpoint=localhost:1|
+PARSE	ERR
+BUILD	ERR
+IN	aeron:udp?endpoint=localhost:1||ttl=4
+PARSE	ERR
+BUILD	ERR
+IN	aeron:udp?endpoint=
+PARSE		udp	null	null	endpoint=
+BUILD	aeron:udp?endpoint=
+IN	aeron:udp?endpoint=a=b=c
+PARSE		udp	null	null	endpoint=a=b=c
+BUILD	aeron:udp?endpoint=a=b=c
+IN	aeron:udp?endpoint=a:1|endpoint=b:2
+PARSE		udp	null	null	endpoint=b:2
+BUILD	aeron:udp?endpoint=b:2
+IN	aeron:udp?endpoint=[::1]:40123|interface=[fe80::1%eth0]/64
+PARSE		udp	null	null	endpoint=[::1]:40123	interface=[fe80::1%eth0]/64
+BUILD	aeron:udp?endpoint=[::1]:40123|interface=[fe80::1%eth0]/64
+IN	aeron:ipc?alias=caf\u00e9
+PARSE		ipc	null	null	alias=caf\u00e9
+BUILD	aeron:ipc?alias=caf\u00e9
+IN	aeron:ipc?alias=café
+PARSE		ipc	null	null	alias=café
+BUILD	aeron:ipc?alias=café
+IN	aeron:ipc?tags=1001
+PARSE		ipc	1001	null	tags=1001
+BUILD	aeron:ipc?tags=1001
+IN	aeron:ipc?tags=1001,1002
+PARSE		ipc	1001	1002	tags=1001,1002
+BUILD	aeron:ipc?tags=1001,1002
+IN	aeron:ipc?tags=1001,1002,1003
+PARSE		ipc	1001	1002	tags=1001,1002,1003
+BUILD	aeron:ipc?tags=1001,1002,1003
+IN	aeron:ipc?tags=,1002
+PARSE		ipc		1002	tags=,1002
+BUILD	aeron:ipc?tags=,1002
+IN	aeron:ipc?tags=1001,
+PARSE		ipc	1001		tags=1001,
+BUILD	aeron:ipc?tags=1001,
+IN	aeron:ipc?tags=
+PARSE		ipc		null	tags=
+BUILD	aeron:ipc?tags=
+IN	aeron:ipc?tags=,
+PARSE		ipc			tags=,
+BUILD	aeron:ipc?tags=,
+IN	aeron:ipc?tags=a,b
+PARSE		ipc	a	b	tags=a,b
+BUILD	aeron:ipc?tags=a,b
+IN	aeron:ipc?session-id=tag:1001
+PARSE		ipc	null	null	session-id=tag:1001
+BUILD	aeron:ipc?session-id=tag:1001
+IN	aeron:ipc?session-id=tag:
+PARSE		ipc	null	null	session-id=tag:
+BUILD	ERR
+IN	aeron:ipc?session-id=tag:abc
+PARSE		ipc	null	null	session-id=tag:abc
+BUILD	ERR
+IN	aeron:ipc?session-id=tag:-5
+PARSE		ipc	null	null	session-id=tag:-5
+BUILD	aeron:ipc?session-id=tag:-5
+IN	aeron:ipc?session-id=-1
+PARSE		ipc	null	null	session-id=-1
+BUILD	aeron:ipc?session-id=-1
+IN	aeron:ipc?session-id=+7
+PARSE		ipc	null	null	session-id=+7
+BUILD	aeron:ipc?session-id=7
+IN	aeron:ipc?session-id=2147483648
+PARSE		ipc	null	null	session-id=2147483648
+BUILD	ERR
+IN	aeron:ipc?session-id=
+PARSE		ipc	null	null	session-id=
+BUILD	ERR
+IN	aeron:ipc?session-id=TAG:5
+PARSE		ipc	null	null	session-id=TAG:5
+BUILD	ERR
+IN	aeron:ipc?ttl=+5
+PARSE		ipc	null	null	ttl=+5
+BUILD	aeron:ipc?ttl=5
+IN	aeron:ipc?ttl=256
+PARSE		ipc	null	null	ttl=256
+BUILD	ERR
+IN	aeron:ipc?ttl=abc
+PARSE		ipc	null	null	ttl=abc
+BUILD	ERR
+IN	aeron:udp?endpoint=localhost:1|mtu=1k
+PARSE		udp	null	null	endpoint=localhost:1	mtu=1k
+BUILD	aeron:udp?endpoint=localhost:1|mtu=1k
+IN	aeron:udp?endpoint=localhost:1|mtu=1408
+PARSE		udp	null	null	endpoint=localhost:1	mtu=1408
+BUILD	aeron:udp?endpoint=localhost:1|mtu=1408
+IN	aeron:udp?endpoint=localhost:1|mtu=1409
+PARSE		udp	null	null	endpoint=localhost:1	mtu=1409
+BUILD	ERR
+IN	aeron:udp?endpoint=localhost:1|mtu=+1408
+PARSE		udp	null	null	endpoint=localhost:1	mtu=+1408
+BUILD	ERR
+IN	aeron:udp?endpoint=localhost:1|mtu=64g
+PARSE		udp	null	null	endpoint=localhost:1	mtu=64g
+BUILD	ERR
+IN	aeron:ipc?term-length=64k
+PARSE		ipc	null	null	term-length=64k
+BUILD	aeron:ipc?term-length=64k
+IN	aeron:ipc?term-length=64K
+PARSE		ipc	null	null	term-length=64K
+BUILD	aeron:ipc?term-length=64k
+IN	aeron:ipc?term-length=65536
+PARSE		ipc	null	null	term-length=65536
+BUILD	aeron:ipc?term-length=64k
+IN	aeron:ipc?term-length=1g
+PARSE		ipc	null	null	term-length=1g
+BUILD	aeron:ipc?term-length=1g
+IN	aeron:ipc?term-length=2g
+PARSE		ipc	null	null	term-length=2g
+BUILD	ERR
+IN	aeron:ipc?term-length=3m
+PARSE		ipc	null	null	term-length=3m
+BUILD	ERR
+IN	aeron:ipc?term-length=k
+PARSE		ipc	null	null	term-length=k
+BUILD	ERR
+IN	aeron:ipc?term-length=-64k
+PARSE		ipc	null	null	term-length=-64k
+BUILD	ERR
+IN	aeron:ipc?term-length=64x
+PARSE		ipc	null	null	term-length=64x
+BUILD	ERR
+IN	aeron:ipc?term-length=9223372036854775807k
+PARSE		ipc	null	null	term-length=9223372036854775807k
+BUILD	ERR
+IN	aeron:ipc?init-term-id=1|term-id=2|term-offset=64
+PARSE		ipc	null	null	init-term-id=1	term-id=2	term-offset=64
+BUILD	aeron:ipc?init-term-id=1|term-id=2|term-offset=64
+IN	aeron:ipc?init-term-id=1|term-id=2|term-offset=63
+PARSE		ipc	null	null	init-term-id=1	term-id=2	term-offset=63
+BUILD	ERR
+IN	aeron:ipc?init-term-id=1|term-id=2|term-offset=-32
+PARSE		ipc	null	null	init-term-id=1	term-id=2	term-offset=-32
+BUILD	ERR
+IN	aeron:ipc?init-term-id=x
+PARSE		ipc	null	null	init-term-id=x
+BUILD	ERR
+IN	aeron:ipc?init-term-id=2147483648
+PARSE		ipc	null	null	init-term-id=2147483648
+BUILD	ERR
+IN	aeron:ipc?linger=0
+PARSE		ipc	null	null	linger=0
+BUILD	aeron:ipc?linger=0ns
+IN	aeron:ipc?linger=5s
+PARSE		ipc	null	null	linger=5s
+BUILD	aeron:ipc?linger=5s
+IN	aeron:ipc?linger=5S
+PARSE		ipc	null	null	linger=5S
+BUILD	aeron:ipc?linger=5s
+IN	aeron:ipc?linger=5ms
+PARSE		ipc	null	null	linger=5ms
+BUILD	aeron:ipc?linger=5ms
+IN	aeron:ipc?linger=5MS
+PARSE		ipc	null	null	linger=5MS
+BUILD	aeron:ipc?linger=5ms
+IN	aeron:ipc?linger=5us
+PARSE		ipc	null	null	linger=5us
+BUILD	aeron:ipc?linger=5us
+IN	aeron:ipc?linger=5ns
+PARSE		ipc	null	null	linger=5ns
+BUILD	aeron:ipc?linger=5ns
+IN	aeron:ipc?linger=5Ns
+PARSE		ipc	null	null	linger=5Ns
+BUILD	aeron:ipc?linger=5ns
+IN	aeron:ipc?linger=1000ms
+PARSE		ipc	null	null	linger=1000ms
+BUILD	aeron:ipc?linger=1s
+IN	aeron:ipc?linger=1500ms
+PARSE		ipc	null	null	linger=1500ms
+BUILD	aeron:ipc?linger=1500ms
+IN	aeron:ipc?linger=s
+PARSE		ipc	null	null	linger=s
+BUILD	ERR
+IN	aeron:ipc?linger=ms
+PARSE		ipc	null	null	linger=ms
+BUILD	ERR
+IN	aeron:ipc?linger=5xs
+PARSE		ipc	null	null	linger=5xs
+BUILD	ERR
+IN	aeron:ipc?linger=5m
+PARSE		ipc	null	null	linger=5m
+BUILD	ERR
+IN	aeron:ipc?linger=-0
+PARSE		ipc	null	null	linger=-0
+BUILD	ERR
+IN	aeron:ipc?linger=
+PARSE		ipc	null	null	linger=
+BUILD	ERR
+IN	aeron:ipc?linger=9223372036854775807s
+PARSE		ipc	null	null	linger=9223372036854775807s
+BUILD	aeron:ipc?linger=9223372036854775807ns
+IN	aeron:ipc?linger=99999999999999999999
+PARSE		ipc	null	null	linger=99999999999999999999
+BUILD	ERR
+IN	aeron:ipc?reliable=true
+PARSE		ipc	null	null	reliable=true
+BUILD	aeron:ipc?reliable=true
+IN	aeron:ipc?reliable=TRUE
+PARSE		ipc	null	null	reliable=TRUE
+BUILD	aeron:ipc?reliable=true
+IN	aeron:ipc?reliable=yes
+PARSE		ipc	null	null	reliable=yes
+BUILD	aeron:ipc?reliable=false
+IN	aeron:ipc?reliable=
+PARSE		ipc	null	null	reliable=
+BUILD	aeron:ipc?reliable=false
+IN	aeron:ipc?sparse=false|eos=true|tether=false|group=true|rejoin=false|ssc=true
+PARSE		ipc	null	null	eos=true	group=true	rejoin=false	sparse=false	ssc=true	tether=false
+BUILD	aeron:ipc?sparse=false|eos=true|tether=false|group=true|rejoin=false|ssc=true
+IN	aeron:ipc?control-mode=manual
+PARSE		ipc	null	null	control-mode=manual
+BUILD	aeron:ipc?control-mode=manual
+IN	aeron:ipc?control-mode=dynamic
+PARSE		ipc	null	null	control-mode=dynamic
+BUILD	aeron:ipc?control-mode=dynamic
+IN	aeron:ipc?control-mode=response
+PARSE		ipc	null	null	control-mode=response
+BUILD	aeron:ipc?control-mode=response
+IN	aeron:ipc?control-mode=bogus
+PARSE		ipc	null	null	control-mode=bogus
+BUILD	ERR
+IN	aeron:ipc?control-mode=
+PARSE		ipc	null	null	control-mode=
+BUILD	ERR
+IN	aeron:udp?control=localhost:1|control-mode=dynamic
+PARSE		udp	null	null	control=localhost:1	control-mode=dynamic
+BUILD	aeron:udp?control=localhost:1|control-mode=dynamic
+IN	aeron:ipc?gtag=-3
+PARSE		ipc	null	null	gtag=-3
+BUILD	aeron:ipc?gtag=-3
+IN	aeron:ipc?gtag=9223372036854775808
+PARSE		ipc	null	null	gtag=9223372036854775808
+BUILD	ERR
+IN	aeron:ipc?gtag=
+PARSE		ipc	null	null	gtag=
+BUILD	ERR
+IN	aeron:ipc?so-sndbuf=8k|so-rcvbuf=1m|rcv-wnd=128k
+PARSE		ipc	null	null	rcv-wnd=128k	so-rcvbuf=1m	so-sndbuf=8k
+BUILD	aeron:ipc?so-sndbuf=8k|so-rcvbuf=1m|rcv-wnd=128k
+IN	aeron:ipc?so-sndbuf=2g
+PARSE		ipc	null	null	so-sndbuf=2g
+BUILD	ERR
+IN	aeron:ipc?so-sndbuf=-1
+PARSE		ipc	null	null	so-sndbuf=-1
+BUILD	ERR
+IN	aeron:ipc?media-rcv-ts-offset=reserved|channel-rcv-ts-offset=0|channel-snd-ts-offset=8
+PARSE		ipc	null	null	channel-rcv-ts-offset=0	channel-snd-ts-offset=8	media-rcv-ts-offset=reserved
+BUILD	aeron:ipc?media-rcv-ts-offset=reserved|channel-rcv-ts-offset=0|channel-snd-ts-offset=8
+IN	aeron:ipc?media-rcv-ts-offset=x
+PARSE		ipc	null	null	media-rcv-ts-offset=x
+BUILD	ERR
+IN	aeron:ipc?media-rcv-ts-offset=
+PARSE		ipc	null	null	media-rcv-ts-offset=
+BUILD	ERR
+IN	aeron:ipc?channel-rcv-ts-offset=2147483648
+PARSE		ipc	null	null	channel-rcv-ts-offset=2147483648
+BUILD	ERR
+IN	aeron:ipc?response-correlation-id=prototype
+PARSE		ipc	null	null	response-correlation-id=prototype
+BUILD	aeron:ipc?response-correlation-id=prototype
+IN	aeron:ipc?response-correlation-id=-1
+PARSE		ipc	null	null	response-correlation-id=-1
+BUILD	aeron:ipc?response-correlation-id=-1
+IN	aeron:ipc?response-correlation-id=-2
+PARSE		ipc	null	null	response-correlation-id=-2
+BUILD	ERR
+IN	aeron:ipc?response-correlation-id=x
+PARSE		ipc	null	null	response-correlation-id=x
+BUILD	ERR
+IN	aeron:ipc?response-correlation-id=
+PARSE		ipc	null	null	response-correlation-id=
+BUILD	ERR
+IN	aeron:udp?control=localhost:1|control-mode=response|response-endpoint=localhost:0
+PARSE		udp	null	null	control=localhost:1	control-mode=response	response-endpoint=localhost:0
+BUILD	aeron:udp?control=localhost:1|control-mode=response|response-endpoint=localhost:0
+IN	aeron:ipc?nak-delay=100us
+PARSE		ipc	null	null	nak-delay=100us
+BUILD	aeron:ipc?nak-delay=100us
+IN	aeron:ipc?nak-delay=x
+PARSE		ipc	null	null	nak-delay=x
+BUILD	ERR
+IN	aeron:ipc?untethered-window-limit-timeout=1s|untethered-linger-timeout=2ms|untethered-resting-timeout=3us
+PARSE		ipc	null	null	untethered-linger-timeout=2ms	untethered-resting-timeout=3us	untethered-window-limit-timeout=1s
+BUILD	aeron:ipc?untethered-window-limit-timeout=1s|untethered-linger-timeout=2ms|untethered-resting-timeout=3us
+IN	aeron:ipc?max-resend=5
+PARSE		ipc	null	null	max-resend=5
+BUILD	aeron:ipc?max-resend=5
+IN	aeron:ipc?max-resend=-1
+PARSE		ipc	null	null	max-resend=-1
+BUILD	ERR
+IN	aeron:ipc?stream-id=-1001
+PARSE		ipc	null	null	stream-id=-1001
+BUILD	aeron:ipc?stream-id=-1001
+IN	aeron:ipc?stream-id=x
+PARSE		ipc	null	null	stream-id=x
+BUILD	ERR
+IN	aeron:ipc?pub-wnd=64k
+PARSE		ipc	null	null	pub-wnd=64k
+BUILD	aeron:ipc?pub-wnd=64k
+IN	aeron:ipc?pub-wnd=-1
+PARSE		ipc	null	null	pub-wnd=-1
+BUILD	ERR
+IN	aeron:ipc?pub-wnd=4g
+PARSE		ipc	null	null	pub-wnd=4g
+BUILD	ERR
+IN	aeron:ipc?fc=min,g:/3,t:5s|cc=cubic
+PARSE		ipc	null	null	cc=cubic	fc=min,g:/3,t:5s
+BUILD	aeron:ipc?cc=cubic|fc=min,g:/3,t:5s
+IN	aeron:ipc?alias=
+PARSE		ipc	null	null	alias=
+BUILD	aeron:ipc?alias=
+IN	aeron:ipc?interface=
+PARSE		ipc	null	null	interface=
+BUILD	aeron:ipc?interface=
+IN	aeron:ipc?cc=
+PARSE		ipc	null	null	cc=
+BUILD	aeron:ipc?cc=
+IN	aeron:ipc?unknown=1
+PARSE		ipc	null	null	unknown=1
+BUILD	aeron:ipc
+IN	aeron:ipc?endpoint=localhost:1|unknown=1
+PARSE		ipc	null	null	endpoint=localhost:1	unknown=1
+BUILD	aeron:ipc?endpoint=localhost:1
+IN	aeron-spy:aeron:udp?endpoint=127.0.0.1:0|interface=127.0.0.1|control=127.0.0.2:0|control-mode=manual|tags=2,4|alias=foo|cc=cubic|fc=min|reliable=false|ttl=16|mtu=8992|term-length=1m|init-term-id=5|term-offset=64|term-id=4353|session-id=2314234|gtag=3|linger=100000055000001ns|sparse=true|eos=true|tether=false|group=false|ssc=true|so-sndbuf=8m|so-rcvbuf=9m|rcv-wnd=10m|media-rcv-ts-offset=reserved|channel-rcv-ts-offset=0|channel-snd-ts-offset=8
+PARSE	aeron-spy	udp	2	4	alias=foo	cc=cubic	channel-rcv-ts-offset=0	channel-snd-ts-offset=8	control=127.0.0.2:0	control-mode=manual	endpoint=127.0.0.1:0	eos=true	fc=min	group=false	gtag=3	init-term-id=5	interface=127.0.0.1	linger=100000055000001ns	media-rcv-ts-offset=reserved	mtu=8992	rcv-wnd=10m	reliable=false	session-id=2314234	so-rcvbuf=9m	so-sndbuf=8m	sparse=true	ssc=true	tags=2,4	term-id=4353	term-length=1m	term-offset=64	tether=false	ttl=16
+BUILD	aeron-spy:aeron:udp?tags=2,4|endpoint=127.0.0.1:0|interface=127.0.0.1|control=127.0.0.2:0|control-mode=manual|mtu=8992|term-length=1m|init-term-id=5|term-id=4353|term-offset=64|session-id=2314234|ttl=16|reliable=false|linger=100000055000001ns|alias=foo|cc=cubic|fc=min|gtag=3|sparse=true|eos=true|tether=false|group=false|ssc=true|so-sndbuf=8m|so-rcvbuf=9m|rcv-wnd=10m|media-rcv-ts-offset=reserved|channel-rcv-ts-offset=0|channel-snd-ts-offset=8

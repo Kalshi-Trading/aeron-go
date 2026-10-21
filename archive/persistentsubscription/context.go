@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
+	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/lirm/aeron-go/archive"
 )
 
@@ -127,7 +128,7 @@ func (ctx *Context) validate() error {
 	if ctx.StartPosition < FromLive {
 		return configError("invalid startPosition %d", ctx.StartPosition)
 	}
-	if ctx.StartPosition >= 0 && ctx.StartPosition&(int64(frameAlignment)-1) != 0 {
+	if ctx.StartPosition >= 0 && ctx.StartPosition&(int64(logbuffer.FrameAlignment)-1) != 0 {
 		return configError("startPosition %d is not frame aligned", ctx.StartPosition)
 	}
 	replayURI, err := aeron.ParseChannelUri(ctx.ReplayChannel)
@@ -158,6 +159,18 @@ func (ctx *Context) archiveOptions() *archive.Options {
 		ctx.ArchiveOptions = archive.DefaultOptions()
 	}
 	return ctx.ArchiveOptions
+}
+
+// archiveConnectOptions returns a copy of the archive options used for each archive connection. Like Java's
+// Context.conclude (aeronArchiveContext.aeron(aeron)), the archive shares the persistent subscription's Aeron
+// client unless ArchiveOptions.Aeron or ArchiveAeronContext asks for a dedicated one.
+func (ctx *Context) archiveConnectOptions() *archive.Options {
+	options := *ctx.archiveOptions()
+	if options.Aeron == nil && ctx.ArchiveAeronContext == nil && ctx.Aeron != nil {
+		options.Aeron = ctx.Aeron
+		options.OwnsAeronClient = false
+	}
+	return &options
 }
 
 func (ctx *Context) newArchiveAeronContext() *aeron.Context {
