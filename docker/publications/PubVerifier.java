@@ -11,7 +11,6 @@ import io.aeron.logbuffer.FragmentHandler;
 import io.aeron.logbuffer.Header;
 import org.agrona.DirectBuffer;
 import org.agrona.concurrent.IdleStrategy;
-import org.agrona.concurrent.SigInt;
 import org.agrona.concurrent.SleepingMillisIdleStrategy;
 import org.agrona.concurrent.UnsafeBuffer;
 
@@ -30,7 +29,7 @@ public class PubVerifier
         final String replyChannel = System.getProperty("verifier.reply.channel", "aeron:udp?endpoint=localhost:20141");
         final int replyStreamId = Integer.getInteger("verifier.reply.stream", 3100);
         final AtomicBoolean running = new AtomicBoolean(true);
-        SigInt.register(() -> running.set(false));
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> running.set(false)));
 
         try (Aeron aeron = Aeron.connect(new Aeron.Context());
             Publication reply = aeron.addPublication(replyChannel, replyStreamId))
