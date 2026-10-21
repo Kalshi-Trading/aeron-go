@@ -155,15 +155,13 @@ func (s *totalService) get(f func(*totalService) interface{}) interface{} {
 }
 
 type egress struct {
+	client.NoOpEgressEvents
 	mu   sync.Mutex
 	last int64
 	n    int
 }
 
-func (e *egress) OnConnect(*client.AeronCluster)            {}
-func (e *egress) OnDisconnect(*client.AeronCluster, string) {}
-func (e *egress) OnMessage(_ *client.AeronCluster, _ int64, buf *atomic.Buffer, offset, length int32,
-	_ *logbuffer.Header) {
+func (e *egress) OnMessage(_ int64, _ int64, buf *atomic.Buffer, offset, length int32, _ *logbuffer.Header) {
 	if length >= 8 {
 		e.mu.Lock()
 		e.last = buf.GetInt64(offset)
@@ -171,8 +169,6 @@ func (e *egress) OnMessage(_ *client.AeronCluster, _ int64, buf *atomic.Buffer, 
 		e.mu.Unlock()
 	}
 }
-func (e *egress) OnNewLeader(*client.AeronCluster, int64, int32) {}
-func (e *egress) OnError(_ *client.AeronCluster, details string) {}
 
 func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool, poll func()) {
 	t.Helper()
@@ -207,17 +203,17 @@ func startAgent(t *testing.T, svc *totalService, clusterDir string) chan error {
 
 func connectClient(t *testing.T) (*client.AeronCluster, *egress) {
 	t.Helper()
-	ctx := aeron.NewContext().AeronDir(e2eAeronDir())
-	opts := client.NewOptions()
-	opts.IngressChannel = "aeron:udp"
-	opts.IngressEndpoints = "0=localhost:20110"
-	opts.EgressChannel = "aeron:udp?endpoint=localhost:0"
 	l := &egress{}
-	ac, err := client.NewAeronCluster(ctx, opts, l)
+	ctx := client.NewContext()
+	ctx.AeronDirectoryName = e2eAeronDir()
+	ctx.IngressChannel = "aeron:udp"
+	ctx.IngressEndpoints = "0=localhost:20110"
+	ctx.EgressChannel = "aeron:udp?endpoint=localhost:0"
+	ctx.EgressListener = l
+	ac, err := client.Connect(ctx)
 	if err != nil {
-		t.Fatalf("NewAeronCluster: %v", err)
+		t.Fatalf("client.Connect: %v", err)
 	}
-	waitFor(t, 20*time.Second, "client connect", ac.IsConnected, func() { ac.Poll() })
 	return ac, l
 }
 
@@ -225,12 +221,12 @@ func send(t *testing.T, ac *client.AeronCluster, l *egress, v int64, expectTotal
 	t.Helper()
 	buf := atomic.MakeBuffer(make([]byte, 8))
 	buf.PutInt64(0, v)
-	waitFor(t, 10*time.Second, "ingress offer", func() bool { return ac.Offer(buf, 0, 8) > 0 }, func() { ac.Poll() })
+	waitFor(t, 10*time.Second, "ingress offer", func() bool { return ac.Offer(buf, 0, 8) > 0 }, func() { ac.PollEgress() })
 	waitFor(t, 10*time.Second, "egress total", func() bool {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 		return l.last == expectTotal
-	}, func() { ac.Poll() })
+	}, func() { ac.PollEgress() })
 }
 
 func compose(t *testing.T, args ...string) {
