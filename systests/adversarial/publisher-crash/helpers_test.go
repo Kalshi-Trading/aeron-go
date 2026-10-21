@@ -729,3 +729,35 @@ func (c *consumer) imagesFor(sessionID int32) (available, gone int) {
 	}
 	return available, gone
 }
+
+// awaitUnavailableOrStuck waits for the image of a killed publisher to go unavailable and reports whether it was
+// stuck instead. Java 1.53.3: a publisher killed part way through writing a fragmented message leaves a zeroed frame
+// inside the reserved tail with nothing written after it, and LogBufferUnblocker only pads such a frame once a later
+// frame is written or the term ends, so the draining publication is never unblocked and its image stays, stuck at
+// that frame, until the subscription closes. For a stuck image this checks it really doesn't move, closes the
+// subscription and waits for the driver to free the publication.
+func (c *consumer) awaitUnavailableOrStuck(a *aeron.Aeron, session, stream int32, clientID int64, fragmented bool,
+	timeout time.Duration) bool {
+	t := c.t
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for !c.isGone(session) && time.Now().Before(deadline) {
+		if c.poll() == 0 {
+			time.Sleep(100 * time.Microsecond)
+		}
+	}
+	if c.isGone(session) {
+		return false
+	}
+	require.True(t, fragmented, "image of an unfragmented publisher never went unavailable; %s", c.statsString())
+	img := c.imageFor(session)
+	require.NotNil(t, img)
+	pos := img.Position()
+	c.pollFor(2 * time.Second)
+	require.Equal(t, pos, img.Position(), "image neither went unavailable nor is stuck")
+	require.False(t, c.isGone(session))
+	t.Logf("publisher died mid fragmented message: image stuck at %d, as in Java; closing the subscription", pos)
+	require.NoError(t, c.sub.Close())
+	awaitDriverForgets(t, a, session, stream, clientID, 20*time.Second)
+	return true
+}

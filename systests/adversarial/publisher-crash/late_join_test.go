@@ -137,7 +137,8 @@ func TestPublisherKilledUnderLoss(t *testing.T) {
 			c.pollUntil("messages under loss", 60*time.Second, func() bool { return c.session(session).received >= 1000 })
 			p.killAndWait()
 			published := p.lastPublished()
-			c.pollUntil("unavailable image", 60*time.Second, func() bool { return c.isGone(session) })
+			c.awaitUnavailableOrStuck(a, session, stream, ready.int("clientId"),
+				tc.size > int(ready.int("maxPayloadLength")), 60*time.Second)
 			require.NoError(t, netem(t, "qdisc", "del", "dev", "lo", "root"))
 			s := c.session(session)
 			require.GreaterOrEqual(t, s.next, published, "messages offered before the kill were lost")

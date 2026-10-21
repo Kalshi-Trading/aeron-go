@@ -85,17 +85,25 @@ func TestPublisherKillMatrix(t *testing.T) {
 
 			p1.killAndWait()
 			published := p1.lastPublished()
-			c.pollUntil("unavailable image", 20*time.Second, func() bool { return c.isGone(session) })
-			c.pollFor(100 * time.Millisecond)
+			stuck := c.awaitUnavailableOrStuck(a, session, stream, ready.int("clientId"),
+				tc.size > int(ready.int("maxPayloadLength")), 20*time.Second)
+			dead := c
+			if !stuck {
+				c.pollFor(100 * time.Millisecond)
+			}
 			s := c.session(session)
 			require.EqualValues(t, 0, s.first)
 			require.GreaterOrEqual(t, s.next, published, "lost messages the dead publisher had offered")
 			require.Equal(t, s.next, s.received)
-			c.mu.Lock()
-			require.True(t, c.goneEOS[session], "image not end of stream when it went unavailable")
-			c.mu.Unlock()
-			awaitDriverForgets(t, a, session, stream, int64(ready.int("clientId")), 20*time.Second)
-			require.False(t, c.sub.IsConnected())
+			if stuck {
+				c = newConsumer(t, a, tc.consumer, ch.sub, stream, ch.subDests...)
+			} else {
+				c.mu.Lock()
+				require.True(t, c.goneEOS[session], "image not end of stream when it went unavailable")
+				c.mu.Unlock()
+				awaitDriverForgets(t, a, session, stream, ready.int("clientId"), 20*time.Second)
+				require.False(t, c.sub.IsConnected())
+			}
 
 			p2 := startPeer(t, tc.lang, "pub", append(args, fmt.Sprintf("from=%d", s.next))...)
 			ready2 := p2.await("ready", 30*time.Second, nil)
@@ -106,7 +114,7 @@ func TestPublisherKillMatrix(t *testing.T) {
 				return c.session(session2).received >= 300
 			})
 			require.Equal(t, s.next, c.session(session2).first)
-			require.Equal(t, s, c.session(session), "dead session delivered more after the unavailable image")
+			require.Equal(t, s, dead.session(session), "dead session delivered more after the unavailable image")
 			p2.send("exit")
 			c.pollUntil("restarted publisher's image unavailable after close", 20*time.Second, func() bool {
 				return c.isGone(session2)
