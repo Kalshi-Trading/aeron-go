@@ -1,0 +1,174 @@
+# Java Aeron 1.53.3 three-member cluster for the adversarial crash/failover suite in systests/adversarial/cluster
+# (AERON_E2E=1 AERON_ADVERSARIAL=1). Compose project adv-cluster; the tests kill, SIGSTOP, partition and restart
+# these containers, so they are separate from every other stack.
+#
+#   node0..2       io.aeron.cluster.ClusteredMediaDriver (driver + archive + consensus module) whose clustered
+#                  service is the Go service (systests/adversarial/cluster/internal/advsvc) running on the host and
+#                  sharing /dev/shm. AERON_DIR=/dev/shm/aeron-adv-cluster-n<i>, IP 172.30.76.1<i>, ports 276<i>0..276<i>4
+#                  (ingress, consensus, log, catchup, archive control); log/ingress/consensus streams 9600/9601/9608. Cluster/archive state lives in the host bind
+#                  mount $ADV_CLUSTER_DATA/node<i> so a restart recovers from it; the mark files are on a per-start
+#                  tmpfs so a restart after SIGKILL is not refused with "active mark file detected".
+#   solo           (profile one) single-member cluster, AERON_DIR=/dev/shm/aeron-adv-cluster-solo, IP 172.30.76.30,
+#                  ports 27630..27634, state in $ADV_CLUSTER_DATA/solo.
+#   client-driver  MediaDriver for the Go cluster clients, AERON_DIR=/dev/shm/aeron-adv-cluster, IP 172.30.76.20.
+#   netem          iproute2/iptables image (profile tools) run by the tests with --net container:adv-cluster-node<i>.
+#
+# The members are on their own bridge network so a single member can be partitioned inside its network namespace.
+#
+#   ADV_CLUSTER_DATA=$HOME/adv-cluster-data docker compose -f docker/adversarial-cluster.compose.yml up -d --build --wait
+#   docker compose -f docker/adversarial-cluster.compose.yml --profile tools build netem
+name: adv-cluster
+
+x-node: &node
+  image: aeron-adv-cluster-java:1.53.3
+  build: .
+  ipc: host
+  user: "${UID:-1000}:${GID:-1000}"
+  tmpfs:
+    - /tmp/mark:uid=${UID:-1000},gid=${GID:-1000}
+  stop_grace_period: 5s
+  environment: &nodeenv
+    MEMBERS: >-
+      0,172.30.76.10:27600,172.30.76.10:27601,172.30.76.10:27602,172.30.76.10:27603,172.30.76.10:27604|1,172.30.76.11:27610,172.30.76.11:27611,172.30.76.11:27612,172.30.76.11:27613,172.30.76.11:27614|2,172.30.76.12:27620,172.30.76.12:27621,172.30.76.12:27622,172.30.76.12:27623,172.30.76.12:27624
+  entrypoint:
+    - sh
+    - -c
+    - >-
+      exec java $$JAVA_OPTS
+      -Daeron.dir=/dev/shm/aeron-adv-cluster-$$NODE_NAME
+      -Daeron.dir.delete.on.start=true
+      -Daeron.threading.mode=SHARED
+      -Daeron.archive.threading.mode=SHARED
+      -Daeron.client.liveness.timeout=5000000000
+      -Daeron.image.liveness.timeout=5000000000
+      -Daeron.archive.dir=/data/archive
+      -Daeron.archive.mark.file.dir=/tmp/mark
+      -Daeron.archive.control.channel=aeron:udp?endpoint=$$NODE_IP:$${PORT_BASE}4
+      -Daeron.archive.control.stream.id=10
+      -Daeron.archive.replication.channel=aeron:udp?endpoint=$$NODE_IP:0
+      -Daeron.archive.id=10$$NODE_ID
+      -Daeron.cluster.dir=/data/cluster
+      -Daeron.cluster.mark.file.dir=/tmp/mark
+      -Daeron.cluster.member.id=$$NODE_ID
+      -Daeron.cluster.members=$$MEMBERS
+      -Daeron.cluster.ingress.channel=aeron:udp
+      -Daeron.cluster.ingress.stream.id=9601
+      -Daeron.cluster.log.stream.id=9600
+      -Daeron.cluster.consensus.stream.id=9608
+      -Daeron.cluster.log.channel=aeron:udp?term-length=4m
+      -Daeron.cluster.replication.channel=aeron:udp?endpoint=$$NODE_IP:0
+      -Daeron.cluster.service.count=1
+      -Daeron.cluster.session.timeout=5s
+      -Daeron.cluster.leader.heartbeat.timeout=2s
+      -Daeron.cluster.leader.heartbeat.interval=100ms
+      -Daeron.cluster.startup.canvass.timeout=5s
+      -Daeron.cluster.authorisation.service.supplier=ALLOW_ALL
+      -cp /opt/aeron/aeron-all.jar io.aeron.cluster.ClusteredMediaDriver
+  healthcheck:
+    test: ["CMD-SHELL", "test -f /dev/shm/aeron-adv-cluster-$$NODE_NAME/cnc.dat"]
+    interval: 1s
+    retries: 30
+
+services:
+  node0:
+    <<: *node
+    container_name: adv-cluster-node0
+    networks:
+      net:
+        ipv4_address: 172.30.76.10
+    environment:
+      <<: *nodeenv
+      NODE_ID: "0"
+      NODE_NAME: n0
+      PORT_BASE: "2760"
+      NODE_IP: 172.30.76.10
+    volumes:
+      - /dev/shm:/dev/shm
+      - ${ADV_CLUSTER_DATA:-/tmp/adv-cluster-data}/node0:/data
+  node1:
+    <<: *node
+    container_name: adv-cluster-node1
+    networks:
+      net:
+        ipv4_address: 172.30.76.11
+    environment:
+      <<: *nodeenv
+      NODE_ID: "1"
+      NODE_NAME: n1
+      PORT_BASE: "2761"
+      NODE_IP: 172.30.76.11
+    volumes:
+      - /dev/shm:/dev/shm
+      - ${ADV_CLUSTER_DATA:-/tmp/adv-cluster-data}/node1:/data
+  node2:
+    <<: *node
+    container_name: adv-cluster-node2
+    networks:
+      net:
+        ipv4_address: 172.30.76.12
+    environment:
+      <<: *nodeenv
+      NODE_ID: "2"
+      NODE_NAME: n2
+      PORT_BASE: "2762"
+      NODE_IP: 172.30.76.12
+    volumes:
+      - /dev/shm:/dev/shm
+      - ${ADV_CLUSTER_DATA:-/tmp/adv-cluster-data}/node2:/data
+
+  solo:
+    <<: *node
+    container_name: adv-cluster-solo
+    profiles: ["one"]
+    networks:
+      net:
+        ipv4_address: 172.30.76.30
+    environment:
+      MEMBERS: 0,172.30.76.30:27630,172.30.76.30:27631,172.30.76.30:27632,172.30.76.30:27633,172.30.76.30:27634
+      NODE_ID: "0"
+      NODE_NAME: solo
+      PORT_BASE: "2763"
+      NODE_IP: 172.30.76.30
+    volumes:
+      - /dev/shm:/dev/shm
+      - ${ADV_CLUSTER_DATA:-/tmp/adv-cluster-data}/solo:/data
+
+  client-driver:
+    image: aeron-adv-cluster-java:1.53.3
+    build: .
+    container_name: adv-cluster-client-driver
+    ipc: host
+    user: "${UID:-1000}:${GID:-1000}"
+    networks:
+      net:
+        ipv4_address: 172.30.76.20
+    volumes:
+      - /dev/shm:/dev/shm
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-adv-cluster
+        -Daeron.dir.delete.on.start=true
+        -Daeron.threading.mode=SHARED
+        -Daeron.client.liveness.timeout=5000000000
+        -Daeron.image.liveness.timeout=5000000000
+    command: ["io.aeron.driver.MediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-adv-cluster/cnc.dat"]
+      interval: 1s
+      retries: 30
+
+  netem:
+    image: aeron-adv-cluster-netem
+    build:
+      context: adversarial-cluster
+      dockerfile: netem.Dockerfile
+    profiles: ["tools"]
+    network_mode: none
+    entrypoint: ["true"]
+
+networks:
+  net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.76.0/24
