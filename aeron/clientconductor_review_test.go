@@ -15,6 +15,7 @@
 package aeron
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -240,3 +241,24 @@ func TestCloseFromConductorCallback(t *testing.T) {
 type idleFunc func()
 
 func (f idleFunc) Idle(int) { f() }
+
+// Java ClientConductor.service: a lapped (invalid) driver events adapter terminates the conductor and, outside a
+// client API call, is reported as AeronException("Driver events adapter is invalid", cause).
+func TestLappedDriverEventsAdapterIsAeronError(t *testing.T) {
+	tc := newTestConductor(t)
+	tc.events.respond = func() { panic(fmt.Errorf("lapped: %w", broadcast.ErrUnableToKeepUp)) }
+	_, terminated := tc.doWork()
+	require.True(t, terminated)
+	require.True(t, tc.IsClosed())
+	var aerr *AeronError
+	var found error
+	for _, e := range tc.errors() {
+		if errors.As(e, &aerr) {
+			found = e
+		}
+	}
+	require.NotNil(t, found, "errors: %v", tc.errors())
+	require.Equal(t, CategoryError, aerr.Category)
+	require.Contains(t, found.Error(), "Driver events adapter is invalid")
+	require.ErrorIs(t, found, broadcast.ErrUnableToKeepUp)
+}
