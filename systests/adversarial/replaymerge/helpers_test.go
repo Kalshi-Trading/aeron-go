@@ -11,7 +11,7 @@
 // stream ids 9400-9499. Each test recreates the stack, so tests do not depend on order.
 //
 //	make docker-mirror jar
-//	docker compose -p adv-replaymerge -f docker/adversarial-replaymerge.compose.yml build rm-driver
+//	make e2e-adversarial   # all adversarial suites, or just this one:
 //	AERON_E2E=1 AERON_ADVERSARIAL=1 go test -count=1 -p 1 -v -timeout 60m ./systests/adversarial/replaymerge/
 //	docker compose -p adv-replaymerge -f docker/adversarial-replaymerge.compose.yml down
 //
@@ -56,6 +56,10 @@ func TestMain(m *testing.M) {
 	if enabled() {
 		dir, err := os.MkdirTemp("", "rmhelper")
 		if err != nil {
+			panic(err)
+		}
+		// The image is shared with docker/chaos.compose.yml and cached, so this is quick after the first build.
+		if err := compose("build", "rm-driver"); err != nil {
 			panic(err)
 		}
 		helperBin = filepath.Join(dir, "rmhelper")
