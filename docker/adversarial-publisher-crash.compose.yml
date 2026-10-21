@@ -1,0 +1,63 @@
+# Java Aeron 1.53.3 stack for the adversarial publisher-crash suite in systests/adversarial/publisher-crash
+# (AERON_E2E=1 AERON_ADVERSARIAL=1). The tests recreate the driver for every test and SIGKILL/SIGSTOP it and the
+# Java/Go clients, so it is separate from every other stack:
+#
+#   driver     standalone MediaDriver, AERON_DIR=/dev/shm/aeron-adv-publisher-crash, short client/image liveness
+#              (2s) and publication unblock (4s) timeouts so dead publishers are detected quickly.
+#   java-tool  (profile tools) CrashTool: Java publisher/subscriber peers run with `docker run` by the tests.
+#   netem      (profile tools) iproute2 sidecar with NET_ADMIN on the host network for `tc netem` faults on lo.
+#
+# The tests only use UDP ports 27200-27299 and stream ids 9200-9299.
+#
+#   docker compose -p adv-publisher-crash -f docker/adversarial-publisher-crash.compose.yml --profile tools build
+#   docker compose -p adv-publisher-crash -f docker/adversarial-publisher-crash.compose.yml up -d --build --wait driver
+#   AERON_E2E=1 AERON_ADVERSARIAL=1 go test -count=1 -p 1 -v ./systests/adversarial/publisher-crash/
+name: adv-publisher-crash
+services:
+  driver:
+    build: .
+    image: docker-archiving-driver
+    container_name: adv-publisher-crash-driver
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    shm_size: 1g
+    volumes:
+      - /dev/shm:/dev/shm
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-adv-publisher-crash
+        -Daeron.dir.delete.on.start=true
+        -Daeron.client.liveness.timeout=2000000000
+        -Daeron.image.liveness.timeout=2000000000
+        -Daeron.publication.unblock.timeout=4000000000
+        -Daeron.publication.connection.timeout=2000000000
+        -Daeron.publication.linger.timeout=1000000000
+        -Daeron.timer.interval=100000000
+        -Daeron.untethered.window.limit.timeout=1000000000
+        -Daeron.untethered.resting.timeout=1000000000
+        -Daeron.threading.mode=SHARED
+    command: ["io.aeron.driver.MediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-adv-publisher-crash/cnc.dat"]
+      interval: 1s
+      retries: 30
+
+  java-tool:
+    build: ./adversarial-publisher-crash
+    image: aeron-go-adv-publisher-crash-java:1.53.3
+    profiles: ["tools"]
+    network_mode: host
+    ipc: host
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - /dev/shm:/dev/shm
+
+  netem:
+    build:
+      context: ./adversarial-publisher-crash
+      dockerfile: netem.Dockerfile
+    image: aeron-go-adv-netem
+    profiles: ["tools"]
+    network_mode: host
+    cap_add: ["NET_ADMIN"]
