@@ -28,6 +28,7 @@ import (
 	"github.com/lirm/aeron-go/aeron/logging"
 	"github.com/lirm/aeron-go/aeron/util"
 	"github.com/lirm/aeron-go/archive"
+	"github.com/lirm/aeron-go/archive/status"
 	"github.com/lirm/aeron-go/cluster/codecs"
 )
 
@@ -38,7 +39,6 @@ const terminationAckAttempts = 5
 const slowTickIntervalNs = int64(time.Millisecond)
 
 const (
-	recordingPosCounterTypeId  = 100
 	commitPosCounterTypeId     = 203
 	recoveryStateCounterTypeId = 204
 )
@@ -831,7 +831,7 @@ func (agent *ClusteredServiceAgent) takeSnapshot(logPos int64, leadershipTermId 
 		return NullValue, err
 	}
 
-	counterId, recordingId, err := agent.awaitRecordingCounter(pub.SessionID(), arch)
+	counterId, recordingId, err := agent.awaitRecordingCounter(pub.SessionID(), arch.ArchiveID(), arch)
 	if err != nil {
 		return NullValue, err
 	}
@@ -858,36 +858,29 @@ func (agent *ClusteredServiceAgent) takeSnapshot(logPos int64, leadershipTermId 
 	return recordingId, nil
 }
 
-func (agent *ClusteredServiceAgent) awaitRecordingCounter(sessionId int32, arch *archive.Archive) (int32, int64, error) {
+func (agent *ClusteredServiceAgent) awaitRecordingCounter(sessionId int32, archiveId int64,
+	arch *archive.Archive) (int32, int64, error) {
 	start := time.Now()
-	for time.Since(start) < agent.opts.Timeout {
-		recId := int64(NullValue)
-		counterId := agent.counters.FindCounter(recordingPosCounterTypeId, func(keyBuffer *atomic.Buffer) bool {
-			if keyBuffer.GetInt32(8) == sessionId {
-				recId = keyBuffer.GetInt64(0)
-				return true
-			}
-			return false
-		})
+	for {
+		counterId := status.FindCounterIdBySession(agent.counters, sessionId, archiveId)
 		if counterId != counters.NullCounterId {
-			return counterId, recId, nil
+			return counterId, status.GetRecordingId(agent.counters, counterId), nil
+		}
+		if time.Since(start) >= agent.opts.Timeout {
+			return counters.NullCounterId, NullValue, fmt.Errorf(
+				"timed out waiting for recording counter for sessionId=%d archiveId=%d", sessionId, archiveId)
 		}
 		if _, err := arch.PollForErrorResponse(); err != nil {
 			return counters.NullCounterId, NullValue, err
 		}
 		agent.idle(0)
 	}
-	return counters.NullCounterId, NullValue,
-		fmt.Errorf("timed out waiting for recording counter for sessionId=%d", sessionId)
 }
 
 func (agent *ClusteredServiceAgent) awaitRecordingComplete(recordingId, position int64, counterId int32,
 	arch *archive.Archive) error {
-	for {
-		if agent.counters.GetCounterValue(counterId) >= position {
-			return nil
-		}
-		if !agent.counters.IsCounterAllocated(counterId) {
+	for agent.counters.GetCounterValue(counterId) < position {
+		if !status.IsActive(agent.counters, counterId, recordingId) {
 			return newClusterError("recording stopped unexpectedly: recordingId=%d", recordingId)
 		}
 		if _, err := arch.PollForErrorResponse(); err != nil {
@@ -895,6 +888,7 @@ func (agent *ClusteredServiceAgent) awaitRecordingComplete(recordingId, position
 		}
 		agent.idle(0)
 	}
+	return nil
 }
 
 func (agent *ClusteredServiceAgent) nextAckId() int64 {
