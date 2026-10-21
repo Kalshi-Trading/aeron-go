@@ -52,8 +52,10 @@ func TestLivePartitionAfterMerge(t *testing.T) {
 	cfg := e.mergeConfig(total)
 	var partitioned bool
 	stop := func() bool { return partitioned && e.c.images.count(true, e.session) > 0 }
+	// Only the live destination's port: the publication's control port also carries the recording's data and
+	// status messages, and cutting it stops the recording, which is a different scenario.
 	cfg.OnState = atState(replaymerge.StateMerged, func() {
-		netem(t, "loss 100%", e.p.live, e.p.control)
+		netem(t, "loss 100%", e.p.live)
 		partitioned = true
 	})
 	r := rmrun.RunReplayMergeUntil(e.c.Aeron, cfg, rmrun.Nop, stop)
