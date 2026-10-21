@@ -15,12 +15,16 @@
 package aeron
 
 import (
+	"errors"
 	"fmt"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/broadcast"
+	"github.com/lirm/aeron-go/aeron/util/memmap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -240,3 +244,85 @@ func TestCloseFromConductorCallback(t *testing.T) {
 type idleFunc func()
 
 func (f idleFunc) Idle(int) { f() }
+
+// Java ClientConductor.service: a lapped (invalid) driver events adapter terminates the conductor and, outside a
+// client API call, is reported as AeronException("Driver events adapter is invalid", cause).
+func TestLappedDriverEventsAdapterIsAeronError(t *testing.T) {
+	tc := newTestConductor(t)
+	tc.events.respond = func() { panic(fmt.Errorf("lapped: %w", broadcast.ErrUnableToKeepUp)) }
+	_, terminated := tc.doWork()
+	require.True(t, terminated)
+	require.True(t, tc.IsClosed())
+	var aerr *AeronError
+	var found error
+	for _, e := range tc.errors() {
+		if errors.As(e, &aerr) {
+			found = e
+		}
+	}
+	require.NotNil(t, found, "errors: %v", tc.errors())
+	require.Equal(t, CategoryError, aerr.Category)
+	require.Contains(t, found.Error(), "Driver events adapter is invalid")
+	require.ErrorIs(t, found, broadcast.ErrUnableToKeepUp)
+}
+
+// Close from another goroutine while a conductor callback runs is not a close from a callback: like Java (which
+// blocks on the client lock) it must wait for the conductor to finish closing rather than return ErrCloseFromCallback.
+func TestCloseConcurrentWithConductorCallback(t *testing.T) {
+	tc := newTestConductor(t)
+	inCallback := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	tc.events.respond = func() {
+		once.Do(func() {
+			tc.queueCallback(func() {
+				close(inCallback)
+				<-release
+			})
+		})
+	}
+	tc.Start(idleStrategyForTest{})
+	<-inCallback
+
+	closeErr := make(chan error, 1)
+	go func() { closeErr <- tc.Close() }()
+	select {
+	case err := <-closeErr:
+		t.Fatalf("Close returned %v while the conductor was still running a callback", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-closeErr:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not complete after the callback returned")
+	}
+	require.True(t, tc.IsClosed())
+	require.Equal(t, 1, tc.proxy.clientClose)
+}
+
+// Aeron.Close requested from a conductor callback completes asynchronously; a later Close from an application
+// goroutine must, like Java's idempotent close, wait for that close and succeed instead of repeating
+// ErrCloseFromCallback.
+func TestAeronCloseAfterCloseFromCallback(t *testing.T) {
+	cnc, err := memmap.NewFile(filepath.Join(t.TempDir(), "cnc.dat"), 0, 4096)
+	require.NoError(t, err)
+	a := &Aeron{context: NewContext(), cncFile: cnc}
+	tc := newTestConductorOn(t, &a.conductor)
+	closeErr := make(chan error, 1)
+	var once sync.Once
+	tc.events.respond = func() {
+		once.Do(func() { tc.queueCallback(func() { closeErr <- a.Close() }) })
+	}
+	tc.Start(idleStrategyForTest{})
+	select {
+	case err := <-closeErr:
+		require.ErrorIs(t, err, ErrCloseFromCallback)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close from a conductor callback deadlocked")
+	}
+	require.NoError(t, a.Close())
+	require.True(t, a.IsClosed())
+	require.NoError(t, a.Close())
+}
