@@ -326,3 +326,74 @@ func TestAeronCloseAfterCloseFromCallback(t *testing.T) {
 	require.True(t, a.IsClosed())
 	require.NoError(t, a.Close())
 }
+
+// closeObservingImage records, when the conductor force-closes it, whether the client already reported IsClosed.
+type closeObservingImage struct {
+	*testImage
+	onClose func()
+}
+
+func (i *closeObservingImage) markClosed() {
+	i.onClose()
+	i.testImage.markClosed()
+}
+
+// Java sets Aeron.isClosed only in ClientConductor.onClose, after terminateConductor has force-closed every resource,
+// so a caller that sees isClosed() never finds a publication still accepting offers. IsClosed must not report true
+// while a fatal timeout is still force-closing resources.
+func TestTerminateForceClosesResourcesBeforeReportingClosed(t *testing.T) {
+	tc := newTestConductor(t)
+	sub := addReadySubscription(t, tc, nil, nil)
+	ti := newTestImage(t)
+	closedDuringForceClose := true
+	img := &closeObservingImage{testImage: ti, onClose: func() { closedDuringForceClose = tc.IsClosed() }}
+	tc.imageFactory = func(int32, int64, string, int64, string, *atomic.Buffer, int32) Image { return img }
+	tc.OnAvailableImage(StreamId1, SessionId1, "log", "src", 1, sub.RegistrationID(), ti.CorrelationID())
+	tc.flush()
+
+	tc.proxy.keepaliveMs = func() int64 { return time.Now().UnixMilli() - 10_000 }
+	tc.timeOfLastServiceNs -= int64(time.Second)
+	tc.timeOfLastKeepaliveNs -= int64(time.Second)
+	_, terminated := tc.doWork()
+	require.True(t, terminated)
+	require.True(t, ti.IsClosed())
+	require.False(t, closedDuringForceClose, "IsClosed reported true before resources were force closed")
+	require.True(t, tc.IsClosed())
+}
+
+// unmapTimingImage records when the conductor releases (unmaps) the image after its linger.
+type unmapTimingImage struct {
+	*testImage
+	releasedAt time.Time
+}
+
+func (i *unmapTimingImage) Close() error {
+	i.releasedAt = time.Now()
+	return i.testImage.Close()
+}
+
+// Java ClientConductor.onClose sleeps IDLE_SLEEP_DEFAULT_MS before unmapping the lingering log buffers of a client that
+// terminated on a timeout, so a poller that saw the image open just before termination finishes before its term
+// buffers disappear. Unmapping immediately makes such a poller fault (SIGSEGV) on the unmapped term buffer.
+func TestOnCloseAfterTimeoutGracesPollersBeforeUnmapping(t *testing.T) {
+	tc := newTestConductor(t)
+	sub := addReadySubscription(t, tc, nil, nil)
+	ti := newTestImage(t)
+	img := &unmapTimingImage{testImage: ti}
+	tc.imageFactory = func(int32, int64, string, int64, string, *atomic.Buffer, int32) Image { return img }
+	tc.OnAvailableImage(StreamId1, SessionId1, "log", "src", 1, sub.RegistrationID(), ti.CorrelationID())
+	tc.flush()
+
+	tc.proxy.keepaliveMs = func() int64 { return time.Now().UnixMilli() - 10_000 }
+	tc.timeOfLastServiceNs -= int64(time.Second)
+	tc.timeOfLastKeepaliveNs -= int64(time.Second)
+	_, terminated := tc.doWork()
+	require.True(t, terminated)
+	require.True(t, img.releasedAt.IsZero(), "terminate must linger, not unmap, the image")
+
+	start := time.Now()
+	tc.onClose()
+	require.False(t, img.releasedAt.IsZero(), "onClose unmaps the lingering image")
+	require.GreaterOrEqual(t, img.releasedAt.Sub(start), time.Duration(idleSleepNs),
+		"lingering buffers of a terminated client were unmapped without the idle-sleep grace")
+}

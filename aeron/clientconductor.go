@@ -405,6 +405,7 @@ func (cc *ClientConductor) Close() error {
 func (cc *ClientConductor) onClose() {
 	cc.closeOnce.Do(func() {
 		cc.adminLock.Lock()
+		wasTerminating := cc.isTerminating.Get()
 		cc.isTerminating.Set(true)
 		cc.forceCloseResources()
 		for _, h := range cc.closeHandlers {
@@ -413,6 +414,11 @@ func (cc *ClientConductor) onClose() {
 		}
 		cc.unlock()
 
+		// As Java: give pollers that saw a resource open just before a fatal timeout an idle sleep to finish before
+		// the lingering log buffers are unmapped under them.
+		if wasTerminating {
+			time.Sleep(time.Duration(idleSleepNs))
+		}
 		if cc.closeLingerNs > 0 {
 			time.Sleep(time.Duration(cc.closeLingerNs))
 		}
@@ -509,8 +515,10 @@ func (cc *ClientConductor) terminate(err error) error {
 	if cc.terminalErr == nil {
 		cc.terminalErr = err
 	}
-	cc.isTerminating.Set(true)
+	// Force close before publishing isTerminating (which IsClosed reports): like Java, where Aeron.isClosed is set only
+	// after terminateConductor, a caller that sees IsClosed must find every publication already CLOSED.
 	cc.forceCloseResources()
+	cc.isTerminating.Set(true)
 	return err
 }
 
