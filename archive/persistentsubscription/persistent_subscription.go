@@ -210,7 +210,7 @@ func New(ctx *Context) (*PersistentSubscription, error) {
 		return nil, err
 	}
 	ps := newPersistentSubscription(ctx, newRealAeronClient(ctx.Aeron))
-	ps.archive = newAsyncArchive(ctx.ArchiveOptions, ctx.newArchiveAeronContext, ps, ctx.NanoClock)
+	ps.archive = newAsyncArchive(ctx.archiveConnectOptions(), ctx.newArchiveAeronContext, ps, ctx.NanoClock)
 	return ps, nil
 }
 
@@ -252,8 +252,12 @@ func newPersistentSubscription(ctx *Context, aeronClient aeronClient) *Persisten
 		op.correlationID = aeron.NullValue
 	}
 	ps.maxRecordedPosition.ps = ps
-	ps.controlledAssembler = aeron.NewImageControlledFragmentAssembler(ps.onFragmentControlled, 0)
-	ps.uncontrolledAssembler = aeron.NewImageFragmentAssembler(ps.onFragmentUncontrolled, 0)
+	// One assembler of each kind spans the replay and live images (identical term offsets, different session ids)
+	// so a message fragmented across the replay->live switch is reassembled, as in Java.
+	ps.controlledAssembler = aeron.NewImageControlledFragmentAssembler(ps.onFragmentControlled,
+		aeron.DefaultFragmentAssemblyBufferLength)
+	ps.uncontrolledAssembler = aeron.NewImageFragmentAssembler(ps.onFragmentUncontrolled,
+		aeron.DefaultFragmentAssemblyBufferLength)
 	ps.setJoinDifference(minInt64)
 	setCounter(ps.stateCounter, int64(ps.state))
 	return ps

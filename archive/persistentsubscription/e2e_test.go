@@ -161,11 +161,16 @@ type checker struct {
 	received atomic.Int64
 }
 
-func (c *checker) onMessage(buffer *aeronatomic.Buffer, offset int32, length int32, _ *logbuffer.Header) {
+func (c *checker) onMessage(buffer *aeronatomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
 	msg := buffer.GetBytesArray(offset, length)
 	seq := int64(binary.LittleEndian.Uint64(msg))
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Reassembled messages carry Java's BufferBuilder.completeHeader: BEGIN|END flags, whole-message frame length.
+	if header.Flags() != 0xC0 || header.FrameLength() != logbuffer.DataFrameHeader.Length+length {
+		c.errors = append(c.errors, fmt.Sprintf("seq %d: header flags=%#x frameLength=%d for length %d", seq,
+			header.Flags(), header.FrameLength(), length))
+	}
 	if seq != c.next {
 		kind := "gap"
 		if seq < c.next {
@@ -224,6 +229,8 @@ func TestE2EReplayLiveAndPublisherRestart(t *testing.T) {
 	}{
 		{"ipc-replay/poll", "aeron:ipc", false},
 		{"udp-dynamic-port-replay/controlled-poll", "aeron:udp?endpoint=localhost:0", true},
+		{"udp-response-channel-replay/poll",
+			fmt.Sprintf("aeron:udp?control-mode=response|control=localhost:%d", 20000+rand.Intn(20000)), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { runReplayLiveAndRestart(t, tc.replayChannel, tc.controlled) })

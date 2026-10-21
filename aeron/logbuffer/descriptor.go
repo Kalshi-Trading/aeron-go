@@ -133,7 +133,7 @@ func (m *LogBufferMetaData) Wrap(buf *atomic.Buffer, offset int) flyweight.Flywe
 
 // ActiveTransportCount returns the count of active transports for the Image.
 func (m *LogBufferMetaData) ActiveTransportCount() int32 {
-	return m.ActiveTransportCountOff.Get()
+	return m.buf.GetInt32Volatile(m.offset + LogActiveTransportCount)
 }
 
 // CheckTermLength checks the term length is a power of two within [TermMinLength, TermMaxLength].

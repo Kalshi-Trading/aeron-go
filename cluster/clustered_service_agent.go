@@ -916,7 +916,7 @@ func (agent *ClusteredServiceAgent) takeSnapshot(logPos int64, leadershipTermId 
 		return NullValue, err
 	}
 
-	counterId, recordingId, err := agent.awaitRecordingCounter(pub.SessionID(), arch)
+	counterId, recordingId, err := agent.awaitRecordingCounter(pub.SessionID(), arch.ArchiveID(), arch)
 	if err != nil {
 		return NullValue, err
 	}
@@ -946,28 +946,28 @@ func (agent *ClusteredServiceAgent) takeSnapshot(logPos int64, leadershipTermId 
 	return recordingId, nil
 }
 
-func (agent *ClusteredServiceAgent) awaitRecordingCounter(sessionId int32, arch *archive.Archive) (int32, int64, error) {
+func (agent *ClusteredServiceAgent) awaitRecordingCounter(sessionId int32, archiveId int64,
+	arch *archive.Archive) (int32, int64, error) {
 	start := time.Now()
-	for time.Since(start) < agent.opts.Timeout {
-		counterId := status.FindCounterIdBySession(agent.counters, sessionId, arch.ArchiveID())
+	for {
+		counterId := status.FindCounterIdBySession(agent.counters, sessionId, archiveId)
 		if counterId != counters.NullCounterId {
 			return counterId, status.GetRecordingId(agent.counters, counterId), nil
+		}
+		if time.Since(start) >= agent.opts.Timeout {
+			return counters.NullCounterId, NullValue, fmt.Errorf(
+				"timed out waiting for recording counter for sessionId=%d archiveId=%d", sessionId, archiveId)
 		}
 		if _, err := arch.PollForErrorResponse(); err != nil {
 			return counters.NullCounterId, NullValue, err
 		}
 		agent.idle(0)
 	}
-	return counters.NullCounterId, NullValue,
-		fmt.Errorf("timed out waiting for recording counter for sessionId=%d", sessionId)
 }
 
 func (agent *ClusteredServiceAgent) awaitRecordingComplete(recordingId, position int64, counterId int32,
 	arch *archive.Archive) error {
-	for {
-		if agent.counters.GetCounterValue(counterId) >= position {
-			return nil
-		}
+	for agent.counters.GetCounterValue(counterId) < position {
 		if !status.IsActive(agent.counters, counterId, recordingId) {
 			return newClusterError("recording stopped unexpectedly: recordingId=%d", recordingId)
 		}
@@ -976,6 +976,7 @@ func (agent *ClusteredServiceAgent) awaitRecordingComplete(recordingId, position
 		}
 		agent.idle(0)
 	}
+	return nil
 }
 
 func (agent *ClusteredServiceAgent) nextAckId() int64 {

@@ -161,6 +161,18 @@ func (ctx *Context) archiveOptions() *archive.Options {
 	return ctx.ArchiveOptions
 }
 
+// archiveConnectOptions returns a copy of the archive options used for each archive connection. Like Java's
+// Context.conclude (aeronArchiveContext.aeron(aeron)), the archive shares the persistent subscription's Aeron
+// client unless ArchiveOptions.Aeron or ArchiveAeronContext asks for a dedicated one.
+func (ctx *Context) archiveConnectOptions() *archive.Options {
+	options := *ctx.archiveOptions()
+	if options.Aeron == nil && ctx.ArchiveAeronContext == nil && ctx.Aeron != nil {
+		options.Aeron = ctx.Aeron
+		options.OwnsAeronClient = false
+	}
+	return &options
+}
+
 func (ctx *Context) newArchiveAeronContext() *aeron.Context {
 	if ctx.ArchiveAeronContext != nil {
 		return ctx.ArchiveAeronContext

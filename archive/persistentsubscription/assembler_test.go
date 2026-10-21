@@ -30,8 +30,6 @@ const (
 	asmTestInitialTermID = int32(10)
 	asmTestTermID        = int32(12)
 
-	beginFragFlag    uint8 = 0x80
-	endFragFlag      uint8 = 0x40
 	frameAlignment   int32 = 32
 	dataHeaderLength int32 = 32
 )

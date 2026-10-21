@@ -34,6 +34,7 @@ type subscriptionHandle interface {
 // requestPublication is an exclusive publication used to send replay requests for response channels.
 type requestPublication interface {
 	isConnected() bool
+	publisher() aeron.Publisher
 }
 
 // aeronClient is the subset of the aeron client used by PersistentSubscription. Abstracted for unit testing.
@@ -130,6 +131,13 @@ type exclusivePublication struct {
 
 func (p *exclusivePublication) isConnected() bool {
 	return p.pub.IsConnected()
+}
+
+func (p *exclusivePublication) publisher() aeron.Publisher {
+	if p.pub == nil {
+		return nil
+	}
+	return p.pub
 }
 
 // realAeronClient adapts *aeron.Aeron. It is only used from the polling goroutine except for image handlers.
@@ -282,9 +290,3 @@ func (c *realAeronClient) isClosed() bool {
 }
 
 // publication returns the underlying aeron publication for a resolved request publication.
-func publicationOf(p requestPublication) *aeron.ExclusivePublication {
-	if e, ok := p.(*exclusivePublication); ok {
-		return e.pub
-	}
-	return nil
-}
