@@ -3,6 +3,9 @@ package cluster
 import (
 	"time"
 
+	"github.com/lirm/aeron-go/aeron"
+	"github.com/lirm/aeron-go/aeron/util"
+
 	"github.com/lirm/aeron-go/aeron/idlestrategy"
 	"github.com/lirm/aeron-go/archive"
 	"go.uber.org/zap/zapcore"
@@ -26,6 +29,22 @@ type Options struct {
 	ReplayStreamId          int32
 	ArchiveOptions          *archive.Options
 	LogFragmentLimit        int
+	// IsRespondingService controls whether egress publications are created for client sessions when leader
+	// (Java: ClusteredServiceContainer.Context.isRespondingService). Default true.
+	IsRespondingService bool
+	// AppVersionValidator checks the configured AppVersion against the version found in the log / snapshot.
+	// Defaults to SemanticVersionMajorValidator (Java: AppVersionValidator.SEMANTIC_VERSIONING_VALIDATOR).
+	AppVersionValidator func(configured, logOrSnapshot int32) bool
+	// ServiceName is recorded in the service mark file.
+	ServiceName string
+	// AeronClient optionally supplies an existing client; otherwise the agent connects using the aeron.Context
+	// and closes the client on termination.
+	AeronClient *aeron.Aeron
+}
+
+// SemanticVersionMajorValidator accepts versions with the same semantic major version.
+func SemanticVersionMajorValidator(configured, logOrSnapshot int32) bool {
+	return util.SemanticVersionMajor(uint32(configured)) == util.SemanticVersionMajor(uint32(logOrSnapshot))
 }
 
 func NewOptions() *Options {
@@ -47,5 +66,8 @@ func NewOptions() *Options {
 		ReplayStreamId:          103,
 		ArchiveOptions:          archiveOpts,
 		LogFragmentLimit:        50,
+		IsRespondingService:     true,
+		AppVersionValidator:     SemanticVersionMajorValidator,
+		ServiceName:             "clustered-service",
 	}
 }

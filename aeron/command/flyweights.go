@@ -20,6 +20,7 @@ package command
 import (
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/flyweight"
+	"github.com/lirm/aeron-go/aeron/util"
 )
 
 type CorrelatedMessage struct {
@@ -170,8 +171,8 @@ func (m *CounterMessage) Wrap(buf *atomic.Buffer, offset int) flyweight.Flyweigh
 }
 
 func (m *CounterMessage) getLabelOffset() int {
-	// Size of the first 3 fixed fields, the length field of the key, and the key buffer itself.
-	return 8 + 8 + 4 + 4 + int(m.key.Length())
+	// Size of the first 3 fixed fields, the length field of the key, and the key buffer aligned to 4 bytes (as Java).
+	return 8 + 8 + 4 + 4 + int(util.AlignInt32(m.key.Length(), 4))
 }
 
 func (m *CounterMessage) setSize() {

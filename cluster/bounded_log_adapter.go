@@ -9,14 +9,15 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package cluster
 
 import (
 	"bytes"
+
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
+	"github.com/lirm/aeron-go/aeron/util"
 	"github.com/lirm/aeron-go/cluster/codecs"
 )
 
@@ -26,13 +27,39 @@ const (
 	unfragmented uint8 = 0x80 | 0x40
 )
 
+// logAdapterHandler receives the log events decoded by boundedLogAdapter.
+type logAdapterHandler interface {
+	onTimerEvent(logPosition, correlationId, timestamp int64)
+	onSessionOpen(leadershipTermId, logPosition, clusterSessionId, timestamp int64,
+		responseStreamId int32, responseChannel string, encodedPrincipal []byte)
+	onSessionClose(leadershipTermId, logPosition, clusterSessionId, timestamp int64,
+		closeReason codecs.CloseReasonEnum)
+	onServiceAction(leadershipTermId, logPosition, timestamp int64, action codecs.ClusterActionEnum, flags int32)
+	onNewLeadershipTermEvent(leadershipTermId, logPosition, timestamp, termBaseLogPosition int64,
+		leaderMemberId, logSessionId int32, timeUnit codecs.ClusterTimeUnitEnum, appVersion int32)
+	onSessionMessage(logPosition, clusterSessionId, timestamp int64, buffer *atomic.Buffer,
+		offset, length int32, header *logbuffer.Header)
+}
+
+// boundedLogAdapter mirrors io.aeron.cluster.service.BoundedLogAdapter: it consumes the replicated log up to the
+// commit position, reassembling fragmented messages.
 type boundedLogAdapter struct {
 	marshaller     *codecs.SbeGoMarshaller
 	options        *Options
-	agent          *ClusteredServiceAgent
+	handler        logAdapterHandler
 	image          aeron.Image
 	builder        *bytes.Buffer
+	nextTermOffset int32
 	maxLogPosition int64
+}
+
+func newBoundedLogAdapter(options *Options, handler logAdapterHandler) *boundedLogAdapter {
+	return &boundedLogAdapter{
+		marshaller: codecs.NewSbeGoMarshaller(),
+		options:    options,
+		handler:    handler,
+		builder:    &bytes.Buffer{},
+	}
 }
 
 func (adapter *boundedLogAdapter) isDone() bool {
@@ -54,23 +81,29 @@ func (adapter *boundedLogAdapter) onFragment(
 	flags := header.Flags()
 	if (flags & unfragmented) == unfragmented {
 		adapter.onMessage(buffer, offset, length, header)
-	} else if (flags & beginFrag) == beginFrag {
-		if adapter.builder == nil {
-			adapter.builder = &bytes.Buffer{}
-		}
+		return
+	}
+	alignedFrameLength := util.AlignInt32(header.FrameLength(), logbuffer.FrameAlignment)
+	if (flags & beginFrag) == beginFrag {
 		adapter.builder.Reset()
 		buffer.WriteBytes(adapter.builder, offset, length)
-	} else if adapter.builder != nil && adapter.builder.Len() != 0 {
-		buffer.WriteBytes(adapter.builder, offset, length)
-		if (flags & endFrag) == endFrag {
-			msgLength := adapter.builder.Len()
-			adapter.onMessage(
-				atomic.MakeBuffer(adapter.builder.Bytes(), msgLength),
-				int32(0),
-				int32(msgLength),
-				header)
-			adapter.builder.Reset()
-		}
+		adapter.nextTermOffset = header.Offset() + alignedFrameLength
+		return
+	}
+	if adapter.builder.Len() == 0 {
+		return
+	}
+	if header.Offset() != adapter.nextTermOffset {
+		// gap in the fragment sequence - discard the partial message
+		adapter.builder.Reset()
+		return
+	}
+	buffer.WriteBytes(adapter.builder, offset, length)
+	adapter.nextTermOffset = header.Offset() + alignedFrameLength
+	if (flags & endFrag) == endFrag {
+		msgLength := int32(adapter.builder.Len())
+		adapter.onMessage(atomic.MakeBuffer(adapter.builder.Bytes(), msgLength), 0, msgLength, header)
+		adapter.builder.Reset()
 	}
 }
 
@@ -88,74 +121,12 @@ func (adapter *boundedLogAdapter) onMessage(
 	schemaId := buffer.GetUInt16(offset + 4)
 	version := buffer.GetUInt16(offset + 6)
 	if schemaId != ClusterSchemaId {
-		logger.Errorf("BoundedLogAdaptor - unexpected schemaId=%d templateId=%d blockLen=%d version=%d",
-			schemaId, templateId, blockLength, version)
-		return
+		panic(newClusterError("expected schemaId=%d, actual=%d", ClusterSchemaId, schemaId))
 	}
 	offset += SBEHeaderLength
 	length -= SBEHeaderLength
 
 	switch templateId {
-	case timerEventTemplateId:
-		correlationId := buffer.GetInt64(offset + 8)
-		timestamp := buffer.GetInt64(offset + 16)
-		adapter.agent.onTimerEvent(header.Position(), correlationId, timestamp)
-	case sessionOpenTemplateId:
-		event := &codecs.SessionOpenEvent{}
-		if err := event.Decode(
-			adapter.marshaller,
-			toByteBuffer(buffer, offset, length),
-			version,
-			blockLength,
-			adapter.options.RangeChecking,
-		); err != nil {
-			logger.Errorf("boundedLogAdapter: session open decode error: %v", err)
-			return
-		}
-
-		err := adapter.agent.onSessionOpen(
-			event.LeadershipTermId,
-			header.Position(),
-			event.ClusterSessionId,
-			event.Timestamp,
-			event.ResponseStreamId,
-			string(event.ResponseChannel),
-			event.EncodedPrincipal,
-		)
-		if err != nil {
-			panic("boundedLogAdapter: session open error: " + err.Error())
-		}
-	case sessionCloseTemplateId:
-		leadershipTermId := buffer.GetInt64(offset)
-		clusterSessionId := buffer.GetInt64(offset + 8)
-		timestamp := buffer.GetInt64(offset + 16)
-		closeReason := codecs.CloseReasonEnum(buffer.GetInt32(offset + 24))
-		adapter.agent.onSessionClose(leadershipTermId, header.Position(), clusterSessionId, timestamp, closeReason)
-	case clusterActionReqTemplateId:
-		e := codecs.ClusterActionRequest{}
-		buf := toByteBuffer(buffer, offset, length)
-		if err := e.Decode(adapter.marshaller, buf, version, blockLength, adapter.options.RangeChecking); err != nil {
-			logger.Errorf("boundedLogAdapter: cluster action request decode error: %v", err)
-		} else {
-			adapter.agent.onServiceAction(e.LeadershipTermId, e.LogPosition, e.Timestamp, e.Action)
-		}
-	case newLeadershipTermTemplateId:
-		e := codecs.NewLeadershipTermEvent{}
-		buf := toByteBuffer(buffer, offset, length)
-		if err := e.Decode(adapter.marshaller, buf, version, blockLength, adapter.options.RangeChecking); err != nil {
-			logger.Errorf("boundedLogAdapter: new leadership term decode error: %v", err)
-		} else {
-			adapter.agent.onNewLeadershipTermEvent(e.LeadershipTermId, e.LogPosition, e.Timestamp,
-				e.TermBaseLogPosition, e.LeaderMemberId, e.LogSessionId, e.TimeUnit, e.AppVersion)
-		}
-	case membershipChangeTemplateId:
-		e := codecs.MembershipChangeEvent{}
-		buf := toByteBuffer(buffer, offset, length)
-		if err := e.Decode(adapter.marshaller, buf, version, blockLength, adapter.options.RangeChecking); err != nil {
-			logger.Errorf("boundedLogAdapter: membership change event decode error: %v", err)
-		} else {
-			adapter.agent.onMembershipChange(e.LogPosition, e.Timestamp, e.ChangeType, e.MemberId)
-		}
 	case SessionMessageHeaderTemplateId:
 		if length < SessionMessageHeaderLength {
 			logger.Errorf("received invalid session message - length: %d", length)
@@ -163,7 +134,7 @@ func (adapter *boundedLogAdapter) onMessage(
 		}
 		clusterSessionId := buffer.GetInt64(offset + 8)
 		timestamp := buffer.GetInt64(offset + 16)
-		adapter.agent.onSessionMessage(
+		adapter.handler.onSessionMessage(
 			header.Position(),
 			clusterSessionId,
 			timestamp,
@@ -172,8 +143,54 @@ func (adapter *boundedLogAdapter) onMessage(
 			length-SessionMessageHeaderLength,
 			header,
 		)
+	case timerEventTemplateId:
+		correlationId := buffer.GetInt64(offset + 8)
+		timestamp := buffer.GetInt64(offset + 16)
+		adapter.handler.onTimerEvent(header.Position(), correlationId, timestamp)
+	case sessionOpenTemplateId:
+		event := &codecs.SessionOpenEvent{}
+		if err := event.Decode(adapter.marshaller, toByteBuffer(buffer, offset, length), version, blockLength,
+			adapter.options.RangeChecking); err != nil {
+			panic(newClusterError("session open decode error: %v", err))
+		}
+		adapter.handler.onSessionOpen(
+			event.LeadershipTermId,
+			header.Position(),
+			event.ClusterSessionId,
+			event.Timestamp,
+			event.ResponseStreamId,
+			string(event.ResponseChannel),
+			event.EncodedPrincipal,
+		)
+	case sessionCloseTemplateId:
+		leadershipTermId := buffer.GetInt64(offset)
+		clusterSessionId := buffer.GetInt64(offset + 8)
+		timestamp := buffer.GetInt64(offset + 16)
+		closeReason := codecs.CloseReasonEnum(buffer.GetInt32(offset + 24))
+		adapter.handler.onSessionClose(leadershipTermId, header.Position(), clusterSessionId, timestamp, closeReason)
+	case clusterActionReqTemplateId:
+		e := codecs.ClusterActionRequest{}
+		if err := e.Decode(adapter.marshaller, toByteBuffer(buffer, offset, length), version, blockLength,
+			adapter.options.RangeChecking); err != nil {
+			panic(newClusterError("cluster action request decode error: %v", err))
+		}
+		flags := e.Flags
+		if flags == e.FlagsNullValue() {
+			flags = ClusterActionFlagsDefault
+		}
+		adapter.handler.onServiceAction(e.LeadershipTermId, e.LogPosition, e.Timestamp, e.Action, flags)
+	case newLeadershipTermTemplateId:
+		e := codecs.NewLeadershipTermEvent{}
+		if err := e.Decode(adapter.marshaller, toByteBuffer(buffer, offset, length), version, blockLength,
+			adapter.options.RangeChecking); err != nil {
+			panic(newClusterError("new leadership term decode error: %v", err))
+		}
+		adapter.handler.onNewLeadershipTermEvent(e.LeadershipTermId, e.LogPosition, e.Timestamp,
+			e.TermBaseLogPosition, e.LeaderMemberId, e.LogSessionId, e.TimeUnit, e.AppVersion)
+	case membershipChangeTemplateId:
+		// Dynamic membership was removed from the consensus module; Java's BoundedLogAdapter ignores the event.
 	default:
-		logger.Debugf("BoundedLogAdaptor: unexpected templateId=%d at pos=%d", templateId, header.Position())
+		logger.Debugf("boundedLogAdapter: unexpected templateId=%d at pos=%d", templateId, header.Position())
 	}
 }
 
@@ -189,5 +206,6 @@ func (adapter *boundedLogAdapter) Close() error {
 		err = adapter.image.Close()
 		adapter.image = nil
 	}
+	adapter.builder.Reset()
 	return err
 }

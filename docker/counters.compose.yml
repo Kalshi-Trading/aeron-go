@@ -1,0 +1,23 @@
+# Extra services for the counters E2E test (systests/counters_e2e_test.go). Requires the archiving-driver from
+# docker-compose.yml to be running. Usage:
+#   docker compose -p aeron-counters -f docker/counters.compose.yml run --rm aeron-stat
+#   docker compose -p aeron-counters -f docker/counters.compose.yml run --rm counters-tool add-static 9102 42 label
+x-aeron-client: &aeron-client
+  network_mode: host
+  user: "${UID:-1000}:${GID:-1000}"
+  ipc: host
+  volumes:
+    - /dev/shm:/dev/shm
+  environment:
+    AERON_PROPS: -Daeron.dir=/dev/shm/aeron-compose
+
+services:
+  # Java io.aeron.samples.AeronStat printing all counters once.
+  aeron-stat:
+    <<: *aeron-client
+    build: .
+    command: ["io.aeron.samples.AeronStat", "watch=false"]
+
+  counters-tool:
+    <<: *aeron-client
+    build: ./counters

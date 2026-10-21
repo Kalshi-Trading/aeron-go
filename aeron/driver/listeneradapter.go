@@ -96,6 +96,7 @@ type Listener interface {
 	OnAvailableCounter(correlationID int64, counterID int32)
 	OnUnavailableCounter(correlationID int64, counterID int32)
 	OnClientTimeout(clientID int64)
+	OnStaticCounter(correlationID int64, counterID int32)
 	OnPublicationError(buffer *atomic.Buffer, offset int32, length int32)
 }
 
@@ -223,6 +224,13 @@ func (adapter *ListenerAdapter) ReceiveMessages() int {
 			msg.Wrap(buffer, int(offset))
 
 			adapter.listener.OnUnavailableCounter(msg.correlationID.Get(), msg.counterID.Get())
+		case Events.OnStaticCounter:
+			logger.Debugf("received ON_STATIC_COUNTER")
+
+			var msg counterUpdate
+			msg.Wrap(buffer, int(offset))
+
+			adapter.listener.OnStaticCounter(msg.correlationID.Get(), msg.counterID.Get())
 		case Events.OnClientTimeout:
 			logger.Debugf("received ON_CLIENT_TIMEOUT")
 
