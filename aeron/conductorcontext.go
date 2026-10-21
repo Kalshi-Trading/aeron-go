@@ -20,7 +20,6 @@ package aeron
 import (
 	"fmt"
 	"runtime/debug"
-	"time"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
 	ctr "github.com/lirm/aeron-go/aeron/counters"
@@ -115,21 +114,6 @@ func (cc *ClientConductor) wrapLogBuffers(logFileName string) *logbuffer.LogBuff
 	return lb
 }
 
-// notifyClose calls the close handler at most once.
-func (cc *ClientConductor) notifyClose() {
-	cc.closeOnce.Do(func() {
-		if cc.closeHandler == nil {
-			return
-		}
-		defer func() {
-			if r := recover(); r != nil {
-				cc.onError(fmt.Errorf("close handler panic: %v", r))
-			}
-		}()
-		cc.closeHandler()
-	})
-}
-
 // callSubscriberHandler runs an image handler, routing panics to the subscriber error handler.
 func (cc *ClientConductor) callSubscriberHandler(handler func(Image), image Image) {
 	if handler == nil {
@@ -141,43 +125,20 @@ func (cc *ClientConductor) callSubscriberHandler(handler func(Image), image Imag
 			if cc.subscriberErrorHandler != nil {
 				cc.subscriberErrorHandler(err)
 			} else {
-				cc.onError(err)
+				cc.reportError(err)
 			}
 		}
 	}()
 	handler(image)
 }
 
-// OnPublicationError dispatches an ON_PUBLICATION_ERROR message to the publication error frame handler if the
-// frame is for a publication owned by this client.
-func (cc *ClientConductor) OnPublicationError(buffer *atomic.Buffer, offset int32, length int32) {
-	if cc.publicationErrorFrameHandler == nil {
-		return
-	}
-	if err := decodePublicationErrorFrame(buffer, offset, length, &cc.publicationErrorFrame); err != nil {
-		cc.onError(err)
-		return
-	}
-	cc.adminLock.Lock()
-	owned := false
-	for _, pub := range cc.pubs {
-		if pub != nil && pub.origRegID == cc.publicationErrorFrame.RegistrationID {
-			owned = true
-			break
-		}
-	}
-	cc.adminLock.Unlock()
-	if owned {
-		cc.publicationErrorFrameHandler(&cc.publicationErrorFrame)
-	}
-}
-
 // initDutyCycleTimes resets the conductor timers prior to the first duty cycle.
 func (cc *ClientConductor) initDutyCycleTimes() {
-	now := time.Now().UnixNano()
-	cc.timeOfLastKeepalive = now
-	cc.timeOfLastCheckManagedResources = now
-	cc.timeOfLastDoWork = now
+	cc.adminLock.Lock()
+	now := cc.nanoClock()
+	cc.timeOfLastKeepaliveNs = now
+	cc.timeOfLastServiceNs = now
+	cc.adminLock.Unlock()
 }
 
 // ConductorAgentInvoker drives the client conductor on the caller's goroutine when
@@ -190,21 +151,14 @@ type ConductorAgentInvoker struct {
 // count. It returns 0 once the client is closed.
 func (i *ConductorAgentInvoker) Invoke() int {
 	cc := &i.aeron.conductor
-	if !cc.running.Get() {
+	if cc.IsClosed() {
 		return 0
 	}
 	work := 0
 	if inv := i.aeron.context.driverAgentInvoker; inv != nil {
 		work += inv.Invoke()
 	}
-	n, err := cc.doWork()
-	if err != nil {
-		cc.onError(err)
-		cc.running.Set(false)
-		cc.forceCloseResources()
-		cc.notifyClose()
-		return work
-	}
+	n, _ := cc.doWork()
 	return work + n
 }
 

@@ -1,767 +1,598 @@
-// Copyright 2022 Steven Stern
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+Copyright 2026 Kalshi Trading
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 
 package aeron
 
 import (
-	"fmt"
-	"github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/counters"
-	"github.com/lirm/aeron-go/aeron/testdata"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/suite"
+	"errors"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/lirm/aeron-go/aeron/atomic"
+	"github.com/lirm/aeron-go/aeron/counters"
+	"github.com/lirm/aeron-go/aeron/logbuffer"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 const (
-	StreamId1                          = int32(1002)
-	CorrelationId1                     = int64(2000)
-	SessionId1                         = int32(13)
-	SourceInfo                         = "127.0.0.1:40789"
-	SubscriptionPositionId             = int32(2)
-	SubscriptionPositionRegistrationId = int64(4001)
-	CounterTypeId                      = int32(102)
-	CounterLabel                       = "counter label"
-	CounterRegId                       = int64(42)
-	CounterRegId2                      = int64(43)
-	CounterId                          = int32(3)
+	StreamId1      = int32(1002)
+	CorrelationId1 = int64(2000)
+	SessionId1     = int32(13)
+	CounterTypeId  = int32(102)
+	CounterLabel   = "counter label"
+	CounterId      = int32(3)
+	testClientID   = int64(77)
 )
 
-type ClientConductorTestSuite struct {
-	suite.Suite
-	cc          ClientConductor
-	driverProxy *MockDriverProxy
+type fakeDriverProxy struct {
+	mu          sync.Mutex
+	nextCorr    int64
+	keepaliveMs func() int64
+	calls       []string
+	clientClose int
+	sendErr     error
 }
 
-func (c *ClientConductorTestSuite) SetupTest() {
+func (p *fakeDriverProxy) record(name string) (int64, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls = append(p.calls, name)
+	if p.sendErr != nil {
+		return 0, p.sendErr
+	}
+	p.nextCorr++
+	return p.nextCorr, nil
+}
+
+func (p *fakeDriverProxy) ClientID() int64 { return testClientID }
+func (p *fakeDriverProxy) TimeOfLastDriverKeepalive() int64 {
+	if p.keepaliveMs != nil {
+		return p.keepaliveMs()
+	}
+	return time.Now().UnixMilli()
+}
+func (p *fakeDriverProxy) NextCorrelationID() int64 { c, _ := p.record("NextCorrelationID"); return c }
+func (p *fakeDriverProxy) AddSubscription(string, int32) (int64, error) {
+	return p.record("AddSubscription")
+}
+func (p *fakeDriverProxy) RemoveSubscription(int64) (int64, error) {
+	return p.record("RemoveSubscription")
+}
+func (p *fakeDriverProxy) AddPublication(string, int32) (int64, error) {
+	return p.record("AddPublication")
+}
+func (p *fakeDriverProxy) AddExclusivePublication(string, int32) (int64, error) {
+	return p.record("AddExclusivePublication")
+}
+func (p *fakeDriverProxy) RemovePublication(int64, bool) (int64, error) {
+	return p.record("RemovePublication")
+}
+func (p *fakeDriverProxy) ClientClose() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.clientClose++
+	return nil
+}
+func (p *fakeDriverProxy) AddDestination(int64, string) (int64, error) {
+	return p.record("AddDestination")
+}
+func (p *fakeDriverProxy) RemoveDestination(int64, string) (int64, error) {
+	return p.record("RemoveDestination")
+}
+func (p *fakeDriverProxy) RemoveDestinationByID(int64, int64) (int64, error) {
+	return p.record("RemoveDestinationByID")
+}
+func (p *fakeDriverProxy) AddRcvDestination(int64, string) (int64, error) {
+	return p.record("AddRcvDestination")
+}
+func (p *fakeDriverProxy) RemoveRcvDestination(int64, string) (int64, error) {
+	return p.record("RemoveRcvDestination")
+}
+func (p *fakeDriverProxy) AddCounter(int32, *atomic.Buffer, int32, int32, *atomic.Buffer, int32, int32) (int64, error) {
+	return p.record("AddCounter")
+}
+func (p *fakeDriverProxy) AddCounterByLabel(int32, string) (int64, error) {
+	return p.record("AddCounterByLabel")
+}
+func (p *fakeDriverProxy) RemoveCounter(int64) (int64, error) { return p.record("RemoveCounter") }
+func (p *fakeDriverProxy) AddStaticCounterByLabel(int32, string, int64) (int64, error) {
+	return p.record("AddStaticCounter")
+}
+func (p *fakeDriverProxy) AddStaticCounter(int32, *atomic.Buffer, int32, int32, *atomic.Buffer, int32, int32,
+	int64) (int64, error) {
+	return p.record("AddStaticCounter")
+}
+func (p *fakeDriverProxy) NextAvailableSessionID(int32) (int64, error) {
+	return p.record("GetNextAvailableSessionID")
+}
+
+func (p *fakeDriverProxy) called(name string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, c := range p.calls {
+		if c == name {
+			n++
+		}
+	}
+	return n
+}
+
+// fakeEvents simulates the driver's broadcast: respond is invoked (with the lock held, like the real adapter) on
+// each ReceiveMessages call.
+type fakeEvents struct {
+	respond func()
+}
+
+func (f *fakeEvents) ReceiveMessages() int {
+	if f.respond != nil {
+		r := f.respond
+		f.respond = nil
+		r()
+		return 1
+	}
+	return 0
+}
+
+type testConductor struct {
+	*ClientConductor
+	proxy  *fakeDriverProxy
+	events *fakeEvents
+	errs   []error
+	errMu  sync.Mutex
+}
+
+func newTestConductor(t *testing.T) *testConductor {
 	metaBuf := atomic.MakeBuffer(make([]byte, 256*1024))
 	meta := counters.InitAndWrapMetaData(metaBuf, 0, 0, 0, 24*1024, 24*1024, 0)
-	c.driverProxy = new(MockDriverProxy)
-	c.cc.Init(c.driverProxy, nil, time.Millisecond*100, time.Millisecond*100,
-		time.Millisecond*100, time.Millisecond*100, meta)
-	c.driverProxy.On("NextCorrelationID").Return(int64(123))
-}
-
-func (c *ClientConductorTestSuite) TestAddPublicationShouldNotifyMediaDriver() {
-	c.driverProxy.On("AddPublication", Channel, StreamId1).
-		Return(CorrelationId1, nil)
-	reg, err := c.cc.AddPublication(Channel, StreamId1)
-	c.Assert().NoError(err)
-	c.Assert().Equal(reg, CorrelationId1)
-}
-
-func (c *ClientConductorTestSuite) TestAddPublicationShouldTimeoutWithoutReadyMessage() {
-	c.driverProxy.On("AddPublication", Channel, StreamId1).
-		Return(CorrelationId1, nil)
-	reg, err := c.cc.AddPublication(Channel, StreamId1)
-	c.Require().NoError(err)
-	c.Require().Equal(reg, CorrelationId1)
-
-	// First a temporary error.
-	pub, err := c.cc.FindPublication(CorrelationId1)
-	c.Require().NoError(err)
-	c.Assert().Nil(pub)
-
-	// Then a permanent error.
-	oldTimeout := c.cc.driverTimeoutNs
-	c.cc.driverTimeoutNs = 1
-	defer func() { c.cc.driverTimeoutNs = oldTimeout }()
-	pub, err = c.cc.FindPublication(CorrelationId1)
-	c.Assert().Error(err)
-	c.Assert().Nil(pub)
-}
-
-func (c *ClientConductorTestSuite) TestShouldFailToAddPublicationOnMediaDriverError() {
-	c.driverProxy.On("AddPublication", Channel, StreamId1).
-		Return(CorrelationId1, nil)
-	reg, err := c.cc.AddPublication(Channel, StreamId1)
-	c.Require().NoError(err)
-	c.Require().Equal(reg, CorrelationId1)
-
-	c.cc.OnErrorResponse(CorrelationId1, 1, "error")
-	pub, err := c.cc.FindPublication(CorrelationId1)
-	c.Assert().Nil(pub)
-	c.Assert().Error(err)
-}
-
-func (c *ClientConductorTestSuite) TestAddSubscriptionShouldNotifyMediaDriver() {
-	c.driverProxy.On("AddSubscription", Channel, StreamId1).
-		Return(CorrelationId1, nil)
-	reg, err := c.cc.AddSubscription(Channel, StreamId1)
-	c.Assert().NoError(err)
-	c.Assert().Equal(reg, CorrelationId1)
-}
-
-func (c *ClientConductorTestSuite) TestAddSubscriptionShouldTimeoutWithoutOperationSuccessful() {
-	c.driverProxy.On("AddSubscription", Channel, StreamId1).
-		Return(CorrelationId1, nil)
-	reg, err := c.cc.AddSubscription(Channel, StreamId1)
-	c.Require().NoError(err)
-	c.Require().Equal(reg, CorrelationId1)
-
-	// First a temporary error.
-	sub, err := c.cc.FindSubscription(CorrelationId1)
-	c.Assert().NoError(err)
-	c.Assert().Nil(sub)
-
-	// Then a permanent error.
-	oldTimeout := c.cc.driverTimeoutNs
-	c.cc.driverTimeoutNs = 1
-	defer func() { c.cc.driverTimeoutNs = oldTimeout }()
-	sub, err = c.cc.FindSubscription(CorrelationId1)
-	c.Assert().Error(err)
-	c.Assert().Nil(sub)
-}
-
-func (c *ClientConductorTestSuite) TestShouldFailToAddSubscriptionOnMediaDriverError() {
-	c.driverProxy.On("AddSubscription", Channel, StreamId1).
-		Return(CorrelationId1, nil)
-	reg, err := c.cc.AddSubscription(Channel, StreamId1)
-	c.Require().NoError(err)
-	c.Require().Equal(reg, CorrelationId1)
-
-	c.cc.OnErrorResponse(CorrelationId1, 1, "error")
-	sub, err := c.cc.FindSubscription(CorrelationId1)
-	c.Assert().Nil(sub)
-	c.Assert().Error(err)
-}
-
-func (c *ClientConductorTestSuite) TestClientNotifiedOfNewAndInactiveImagesWithDefaultHandler() {
-	var availableHandler = FakeImageHandler{}
-	var unavailableHandler = FakeImageHandler{}
-	c.cc.onAvailableImageHandler = availableHandler.Handle
-	c.cc.onUnavailableImageHandler = unavailableHandler.Handle
-	c.driverProxy.On("AddSubscription", Channel, StreamId1).
-		Return(CorrelationId1, nil)
-	reg, err := c.cc.AddSubscription(Channel, StreamId1)
-	c.Require().NoError(err)
-	c.Require().Equal(reg, CorrelationId1)
-
-	c.cc.OnSubscriptionReady(CorrelationId1, -1)
-	sub, err := c.cc.FindSubscription(CorrelationId1)
-	c.Require().NoError(err)
-	c.Require().NotNil(sub)
-
-	var image MockImage
-	c.cc.imageFactory = func(_ int32, _ int64, _ string, _ int64, _ string, _ *atomic.Buffer, _ int32) Image {
-		return &image
+	tc := &testConductor{ClientConductor: new(ClientConductor), proxy: &fakeDriverProxy{nextCorr: 1000},
+		events: &fakeEvents{}}
+	tc.Init(tc.proxy, nil, 10*time.Second, 200*time.Millisecond, time.Second, 50*time.Millisecond, meta)
+	tc.driverListenerAdapter = tc.events
+	tc.errorHandler = func(err error) {
+		tc.errMu.Lock()
+		defer tc.errMu.Unlock()
+		tc.errs = append(tc.errs, err)
 	}
-
-	c.Require().Equal(sub.ImageCount(), 0)
-	c.cc.OnAvailableImage(StreamId1, SessionId1, fmt.Sprintf("%d-log", SessionId1), SourceInfo,
-		SubscriptionPositionId, CorrelationId1, CorrelationId1)
-	c.Require().Equal(sub.ImageCount(), 1)
-	c.Require().Equal(availableHandler.GetHandledImage(), &image)
-	c.Require().Nil(availableHandler.GetHandledImage())
-	c.Require().Nil(unavailableHandler.GetHandledImage())
-
-	image.On("CorrelationID").Return(CorrelationId1)
-	c.cc.OnUnavailableImage(CorrelationId1, sub.RegistrationID())
-	c.Require().Equal(sub.ImageCount(), 0)
-	c.Require().Equal(unavailableHandler.GetHandledImage(), &image)
-	c.Require().Nil(unavailableHandler.GetHandledImage())
-	c.Require().Nil(availableHandler.GetHandledImage())
+	return tc
 }
 
-func (c *ClientConductorTestSuite) TestClientNotifiedOfNewAndInactiveImagesWithSpecificHandler() {
-	var failHandler = func(_ Image) {
-		c.Fail("Default handler called instead of specified handler")
+// flush dispatches queued callbacks for events delivered directly in tests.
+func (tc *testConductor) flush() {
+	tc.adminLock.Lock()
+	tc.unlock()
+}
+
+func (tc *testConductor) errors() []error {
+	tc.errMu.Lock()
+	defer tc.errMu.Unlock()
+	return append([]error(nil), tc.errs...)
+}
+
+func preloadLogBuffers(t *testing.T, tc *testConductor, regID int64) {
+	lb, err := logbuffer.NewTestingLogbuffer()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = logbuffer.RemoveTestingLogbufferFile() })
+	tc.logBuffersByID[regID] = lb
+}
+
+func TestAsyncAddPublicationPollsUntilReady(t *testing.T) {
+	tc := newTestConductor(t)
+	regID, err := tc.AsyncAddPublication(Channel, StreamId1)
+	require.NoError(t, err)
+	require.True(t, tc.IsCommandActive(regID))
+
+	pub, err := tc.GetPublication(regID)
+	require.NoError(t, err)
+	require.Nil(t, pub)
+
+	preloadLogBuffers(t, tc, regID)
+	tc.OnNewPublication(StreamId1, SessionId1, 1, 2, "unused", regID, regID)
+
+	pub, err = tc.GetPublication(regID)
+	require.NoError(t, err)
+	require.NotNil(t, pub)
+	require.Equal(t, regID, pub.RegistrationID())
+	require.Equal(t, SessionId1, pub.SessionID())
+	require.False(t, tc.IsCommandActive(regID))
+
+	_, err = tc.GetExclusivePublication(regID)
+	require.Error(t, err, "concurrent publication must not be returned as exclusive")
+
+	require.NoError(t, pub.Close())
+	require.True(t, pub.IsClosed())
+	require.Equal(t, 1, tc.proxy.called("RemovePublication"))
+	require.Len(t, tc.lingering, 1, "log buffers linger after explicit close")
+}
+
+func TestAsyncAddExclusivePublicationError(t *testing.T) {
+	tc := newTestConductor(t)
+	regID, err := tc.AsyncAddExclusivePublication(Channel, StreamId1)
+	require.NoError(t, err)
+
+	tc.OnErrorResponse(regID, 3, "invalid channel")
+	pub, err := tc.GetExclusivePublication(regID)
+	require.Nil(t, pub)
+	var regErr *RegistrationError
+	require.True(t, errors.As(err, &regErr))
+	require.Equal(t, int32(3), regErr.ErrorCodeValue)
+	require.Equal(t, regID, regErr.CorrelationID)
+
+	_, err = tc.GetExclusivePublication(regID)
+	require.ErrorIs(t, err, ErrUnknownRegistration)
+	require.Empty(t, tc.errors(), "async add errors are returned by Get, not the error handler")
+}
+
+func TestAsyncAddTimesOutWithoutResponse(t *testing.T) {
+	tc := newTestConductor(t)
+	now := time.Now().UnixNano()
+	tc.nanoClock = func() int64 { return now }
+	regID, err := tc.AsyncAddSubscription(Channel, StreamId1)
+	require.NoError(t, err)
+
+	now += tc.driverTimeoutNs + 1
+	_, err = tc.GetSubscription(regID)
+	var timeoutErr *DriverTimeoutError
+	require.True(t, errors.As(err, &timeoutErr))
+	require.False(t, tc.IsCommandActive(regID))
+}
+
+func TestBlockingAddSubscription(t *testing.T) {
+	tc := newTestConductor(t)
+	tc.events.respond = func() { tc.OnSubscriptionReady(1001, 7) }
+	sub, err := tc.AddSubscription(Channel, StreamId1)
+	require.NoError(t, err)
+	require.Equal(t, int64(1001), sub.RegistrationID())
+	require.Equal(t, int32(7), sub.ChannelStatusId())
+	require.False(t, tc.HasActiveCommands())
+}
+
+func TestBlockingAddSubscriptionError(t *testing.T) {
+	tc := newTestConductor(t)
+	tc.events.respond = func() { tc.OnErrorResponse(1001, 11, "boom") }
+	sub, err := tc.AddSubscription(Channel, StreamId1)
+	require.Nil(t, sub)
+	var regErr *RegistrationError
+	require.True(t, errors.As(err, &regErr))
+	require.Equal(t, int32(11), regErr.ErrorCodeValue)
+	require.Empty(t, tc.resources)
+}
+
+func TestBlockingAddTimesOut(t *testing.T) {
+	tc := newTestConductor(t)
+	start := time.Now()
+	pub, err := tc.AddPublication(Channel, StreamId1)
+	require.Nil(t, pub)
+	var timeoutErr *DriverTimeoutError
+	require.True(t, errors.As(err, &timeoutErr), "got %v", err)
+	require.GreaterOrEqual(t, time.Since(start), 200*time.Millisecond)
+	require.Empty(t, tc.resources)
+	require.False(t, tc.IsClosed(), "a command timeout does not terminate the client")
+}
+
+func TestSendFailureIsReturned(t *testing.T) {
+	tc := newTestConductor(t)
+	tc.proxy.sendErr = errors.New("ring buffer full")
+	_, err := tc.AsyncAddPublication(Channel, StreamId1)
+	require.EqualError(t, err, "ring buffer full")
+	require.Empty(t, tc.resources)
+}
+
+func addReadySubscription(t *testing.T, tc *testConductor, onAvailable, onUnavailable func(Image)) *Subscription {
+	regID, err := tc.AsyncAddSubscriptionWithHandlers(Channel, StreamId1, onAvailable, onUnavailable)
+	require.NoError(t, err)
+	tc.OnSubscriptionReady(regID, 5)
+	sub, err := tc.GetSubscription(regID)
+	require.NoError(t, err)
+	require.NotNil(t, sub)
+	return sub
+}
+
+func newMockImage(corrID int64) *MockImage {
+	img := new(MockImage)
+	img.On("CorrelationID").Return(corrID)
+	img.On("Close").Return(nil)
+	return img
+}
+
+func TestImageLifecycleHandlersRunOutsideLock(t *testing.T) {
+	tc := newTestConductor(t)
+	var available, unavailable []Image
+	sub := addReadySubscription(t, tc,
+		func(img Image) { available = append(available, img); tc.HasActiveCommands() }, // re-entrant call
+		func(img Image) { unavailable = append(unavailable, img); tc.HasActiveCommands() })
+	img := newMockImage(CorrelationId1)
+	tc.imageFactory = func(int32, int64, string, int64, string, *atomic.Buffer, int32) Image { return img }
+
+	tc.OnAvailableImage(StreamId1, SessionId1, "log", "src", 1, sub.RegistrationID(), CorrelationId1)
+	tc.OnAvailableImage(StreamId1, SessionId1, "log", "src", 1, sub.RegistrationID(), CorrelationId1) // duplicate
+	tc.OnAvailableImage(StreamId1, SessionId1, "log", "src", 1, 999, CorrelationId1+1)                // unknown sub
+	tc.flush()
+	require.Len(t, available, 1)
+	require.Equal(t, 1, sub.ImageCount())
+
+	tc.OnUnavailableImage(CorrelationId1+5, sub.RegistrationID()) // unknown image
+	tc.OnUnavailableImage(CorrelationId1, sub.RegistrationID())
+	tc.flush()
+	require.Len(t, unavailable, 1)
+	require.Equal(t, 0, sub.ImageCount())
+	require.Len(t, tc.lingering, 1)
+
+	tc.nanoClock = func() int64 { return time.Now().UnixNano() + int64(time.Hour) }
+	tc.checkLingeringResources(tc.nanoClock())
+	img.AssertCalled(t, "Close")
+	require.Empty(t, tc.lingering)
+}
+
+func TestImageFactoryPanicIsReported(t *testing.T) {
+	tc := newTestConductor(t)
+	sub := addReadySubscription(t, tc, nil, nil)
+	tc.imageFactory = func(int32, int64, string, int64, string, *atomic.Buffer, int32) Image { panic("no file") }
+	tc.OnAvailableImage(StreamId1, SessionId1, "log", "src", 1, sub.RegistrationID(), CorrelationId1)
+	tc.flush()
+	require.Len(t, tc.errors(), 1)
+	require.Equal(t, 0, sub.ImageCount())
+}
+
+func TestDestinations(t *testing.T) {
+	tc := newTestConductor(t)
+	corrID, err := tc.AsyncAddDestination(1, "aeron:udp?endpoint=localhost:4000")
+	require.NoError(t, err)
+	require.True(t, tc.IsCommandActive(corrID))
+	tc.OnOperationSuccess(corrID)
+	require.False(t, tc.IsCommandActive(corrID))
+
+	tc.events.respond = func() { tc.OnOperationSuccess(tc.proxy.nextCorr) }
+	require.NoError(t, tc.RemoveDestinationByID(1, corrID))
+	tc.events.respond = func() { tc.OnOperationSuccess(tc.proxy.nextCorr) }
+	destID, err := tc.AddDestinationWithID(1, "aeron:udp?endpoint=localhost:4001")
+	require.NoError(t, err)
+	require.Equal(t, tc.proxy.nextCorr, destID)
+	tc.events.respond = func() { tc.OnErrorResponse(tc.proxy.nextCorr, 11, "unknown destination") }
+	err = tc.RemoveRcvDestination(2, "aeron:udp?endpoint=localhost:4002")
+	var regErr *RegistrationError
+	require.True(t, errors.As(err, &regErr))
+
+	// Async destination failures go to the error handler.
+	corrID, err = tc.AsyncRemoveRcvDestination(2, "aeron:udp?endpoint=localhost:4003")
+	require.NoError(t, err)
+	tc.OnErrorResponse(corrID, 11, "unknown destination")
+	tc.flush()
+	require.Len(t, tc.errors(), 1)
+	require.False(t, tc.HasActiveCommands())
+}
+
+type recordingCounterHandler struct {
+	ids []int64
+}
+
+func (h *recordingCounterHandler) Handle(_ *counters.Reader, registrationId int64, _ int32) {
+	h.ids = append(h.ids, registrationId)
+}
+
+func TestCounterLifecycle(t *testing.T) {
+	tc := newTestConductor(t)
+	availableH, unavailableH := &recordingCounterHandler{}, &recordingCounterHandler{}
+	tc.AddAvailableCounterHandler(availableH)
+	tc.AddUnavailableCounterHandler(unavailableH)
+
+	firstID, err := tc.AddCounterByLabel(CounterTypeId, CounterLabel)
+	require.NoError(t, err)
+	tc.OnAvailableCounter(firstID, CounterId)
+	tc.flush()
+	counter, err := tc.GetCounter(firstID)
+	require.NoError(t, err)
+	require.Equal(t, CounterId, counter.Id())
+	require.Equal(t, []int64{counter.RegistrationId()}, availableH.ids)
+
+	got, err := tc.GetCounter(counter.RegistrationId())
+	require.NoError(t, err)
+	require.Same(t, counter, got)
+
+	tc.OnUnavailableCounter(counter.RegistrationId(), CounterId)
+	tc.flush()
+	require.True(t, counter.IsClosed())
+	require.Equal(t, []int64{counter.RegistrationId()}, unavailableH.ids)
+
+	require.True(t, tc.RemoveUnavailableCounterHandler(unavailableH), "remove by value must match")
+	require.False(t, tc.RemoveUnavailableCounterHandler(unavailableH))
+
+	regID, err := tc.AddCounterByLabel(CounterTypeId, CounterLabel)
+	require.NoError(t, err)
+	tc.OnAvailableCounter(regID, CounterId)
+	c2, err := tc.GetCounter(regID)
+	require.NoError(t, err)
+	require.NoError(t, c2.Close())
+	require.Equal(t, 1, tc.proxy.called("RemoveCounter"))
+}
+
+func TestStaticCounterIsNotRemoved(t *testing.T) {
+	tc := newTestConductor(t)
+	corrID, err := tc.AddStaticCounterByLabel(CounterTypeId, CounterLabel, 555)
+	require.NoError(t, err)
+	tc.OnStaticCounter(corrID, CounterId)
+	counter, err := tc.GetCounter(corrID)
+	require.NoError(t, err)
+	require.Equal(t, CounterId, counter.Id())
+	require.NoError(t, counter.Close())
+	require.Equal(t, 0, tc.proxy.called("RemoveCounter"))
+}
+
+func TestNextSessionID(t *testing.T) {
+	tc := newTestConductor(t)
+	tc.events.respond = func() { tc.OnNextAvailableSessionID(tc.proxy.nextCorr, 4242) }
+	id, err := tc.NextSessionID(StreamId1)
+	require.NoError(t, err)
+	require.Equal(t, int32(4242), id)
+}
+
+func TestPublicationErrorFrameRouted(t *testing.T) {
+	tc := newTestConductor(t)
+	var frames []*PublicationErrorFrame
+	tc.publicationErrorFrameHandler = func(f *PublicationErrorFrame) { frames = append(frames, f) }
+	regID, err := tc.AsyncAddPublication(Channel, StreamId1)
+	require.NoError(t, err)
+	preloadLogBuffers(t, tc, regID)
+	tc.OnNewPublication(StreamId1, SessionId1, 1, 2, "unused", regID, regID)
+
+	buf, n := encodePublicationErrorFrame(regID, 9, "bad")
+	tc.OnPublicationError(buf, 0, n)
+	buf, n = encodePublicationErrorFrame(regID+100, 9, "other")
+	tc.OnPublicationError(buf, 0, n)
+	tc.flush()
+	require.Len(t, frames, 1)
+	require.Equal(t, "bad", frames[0].ErrorMessage)
+}
+
+func TestChannelEndpointErrorReported(t *testing.T) {
+	tc := newTestConductor(t)
+	sub := addReadySubscription(t, tc, nil, nil)
+	tc.OnChannelEndpointError(int64(sub.ChannelStatusId()), "address in use")
+	tc.flush()
+	errs := tc.errors()
+	require.Len(t, errs, 1)
+	var epErr *ChannelEndpointError
+	require.True(t, errors.As(errs[0], &epErr))
+	require.Equal(t, sub.ChannelStatusId(), epErr.StatusIndicatorID)
+}
+
+func TestDriverTimeoutTerminatesAndForceCloses(t *testing.T) {
+	tc := newTestConductor(t)
+	sub := addReadySubscription(t, tc, nil, nil)
+	closed := 0
+	tc.AddCloseHandler(func() { closed++ })
+
+	tc.proxy.keepaliveMs = func() int64 { return time.Now().UnixMilli() - 10_000 }
+	tc.timeOfLastServiceNs -= int64(time.Second)
+	tc.timeOfLastKeepaliveNs -= int64(time.Second)
+	workCount, terminated := tc.doWork()
+	require.Equal(t, 0, workCount)
+	require.True(t, terminated)
+	require.True(t, tc.IsClosed())
+	require.True(t, sub.IsClosed(), "resources are force closed on driver timeout")
+	var timeoutErr *DriverTimeoutError
+	require.True(t, errors.As(tc.TerminalError(), &timeoutErr))
+	require.Len(t, tc.errors(), 1)
+
+	_, err := tc.AsyncAddPublication(Channel, StreamId1)
+	require.ErrorIs(t, err, ErrClientClosed)
+
+	require.NoError(t, tc.Close())
+	require.NoError(t, tc.Close())
+	require.Equal(t, 1, closed)
+	require.Equal(t, 1, tc.proxy.clientClose)
+}
+
+func TestDriverShutdownMessage(t *testing.T) {
+	tc := newTestConductor(t)
+	tc.proxy.keepaliveMs = func() int64 { return 0 }
+	tc.timeOfLastServiceNs -= int64(time.Second)
+	tc.timeOfLastKeepaliveNs -= int64(time.Second)
+	_, err := tc.service(nullValue)
+	require.ErrorContains(t, err, "has been shutdown")
+}
+
+func TestConductorServiceTimeout(t *testing.T) {
+	tc := newTestConductor(t)
+	tc.timeOfLastServiceNs -= tc.interServiceTimeoutNs + int64(time.Second)
+	_, err := tc.service(nullValue)
+	var svcErr *ConductorServiceTimeoutError
+	require.True(t, errors.As(err, &svcErr))
+	require.True(t, tc.IsClosed())
+}
+
+func TestClientTimeoutFromDriver(t *testing.T) {
+	tc := newTestConductor(t)
+	tc.OnClientTimeout(testClientID + 1)
+	require.False(t, tc.IsClosed())
+	tc.OnClientTimeout(testClientID)
+	tc.flush()
+	require.True(t, tc.IsClosed())
+	errs := tc.errors()
+	require.Len(t, errs, 1)
+	var ctErr *ClientTimeoutError
+	require.True(t, errors.As(errs[0], &ctErr))
+}
+
+func TestCloseSemantics(t *testing.T) {
+	tc := newTestConductor(t)
+	var unavailable int
+	sub := addReadySubscription(t, tc, nil, func(Image) { unavailable++ })
+	img := newMockImage(CorrelationId1)
+	tc.imageFactory = func(int32, int64, string, int64, string, *atomic.Buffer, int32) Image { return img }
+	tc.OnAvailableImage(StreamId1, SessionId1, "log", "src", 1, sub.RegistrationID(), CorrelationId1)
+
+	order := []string{}
+	id := tc.AddCloseHandler(func() { order = append(order, "removed") })
+	tc.AddCloseHandler(func() { order = append(order, "h") })
+	require.True(t, tc.RemoveCloseHandler(id))
+
+	require.NoError(t, tc.Close())
+	require.Equal(t, []string{"h"}, order)
+	require.True(t, sub.IsClosed())
+	require.Equal(t, 1, unavailable)
+	img.AssertCalled(t, "Close")
+	require.Equal(t, 1, tc.proxy.clientClose)
+	require.NoError(t, sub.Close(), "closing a resource after client close is a no-op")
+	require.Equal(t, 0, tc.proxy.called("RemoveSubscription"))
+}
+
+func TestStartedConductorConcurrentUseAndClose(t *testing.T) {
+	tc := newTestConductor(t)
+	tc.Start(idleStrategyForTest{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				regID, err := tc.AsyncAddSubscription(Channel, StreamId1)
+				if err != nil {
+					return
+				}
+				tc.adminLock.Lock()
+				tc.OnSubscriptionReady(regID, 1)
+				tc.unlock()
+				if sub, err := tc.GetSubscription(regID); err == nil && sub != nil {
+					_ = sub.Close()
+				}
+			}
+		}()
 	}
-	c.cc.onAvailableImageHandler = failHandler
-	c.cc.onUnavailableImageHandler = failHandler
-
-	var availableHandler = FakeImageHandler{}
-	var unavailableHandler = FakeImageHandler{}
-
-	c.driverProxy.On("AddSubscription", Channel, StreamId1).
-		Return(CorrelationId1, nil)
-	reg, err := c.cc.AddSubscriptionWithHandlers(Channel, StreamId1, availableHandler.Handle, unavailableHandler.Handle)
-	c.Require().NoError(err)
-	c.Require().Equal(reg, CorrelationId1)
-
-	c.cc.OnSubscriptionReady(CorrelationId1, -1)
-	sub, err := c.cc.FindSubscription(CorrelationId1)
-	c.Require().NoError(err)
-	c.Require().NotNil(sub)
-
-	var image MockImage
-	c.cc.imageFactory = func(_ int32, _ int64, _ string, _ int64, _ string, _ *atomic.Buffer, _ int32) Image {
-		return &image
-	}
-
-	c.Require().Equal(sub.ImageCount(), 0)
-	c.cc.OnAvailableImage(StreamId1, SessionId1, fmt.Sprintf("%d-log", SessionId1), SourceInfo,
-		SubscriptionPositionId, CorrelationId1, CorrelationId1)
-	c.Require().Equal(sub.ImageCount(), 1)
-	c.Require().Equal(availableHandler.GetHandledImage(), &image)
-	c.Require().Nil(availableHandler.GetHandledImage())
-	c.Require().Nil(unavailableHandler.GetHandledImage())
-
-	image.On("CorrelationID").Return(CorrelationId1)
-	c.cc.OnUnavailableImage(CorrelationId1, sub.RegistrationID())
-	c.Require().Equal(sub.ImageCount(), 0)
-	c.Require().Equal(unavailableHandler.GetHandledImage(), &image)
-	c.Require().Nil(unavailableHandler.GetHandledImage())
-	c.Require().Nil(availableHandler.GetHandledImage())
+	wg.Wait()
+	require.NoError(t, tc.Close())
+	require.True(t, tc.IsClosed())
+	require.Equal(t, 1, tc.proxy.clientClose)
 }
 
-func (c *ClientConductorTestSuite) TestShouldIgnoreUnknownNewImage() {
-	var failHandler = func(_ Image) {
-		c.Fail("Unknown image should not trigger any handler")
-	}
-	c.cc.onAvailableImageHandler = failHandler
-	c.cc.onUnavailableImageHandler = failHandler
-
-	c.cc.OnAvailableImage(StreamId1, SessionId1, fmt.Sprintf("%d-log", SessionId1), SourceInfo,
-		SubscriptionPositionId, SubscriptionPositionRegistrationId, CorrelationId1)
-}
-
-func (c *ClientConductorTestSuite) TestShouldIgnoreUnknownInactiveImage() {
-	var failHandler = func(_ Image) {
-		c.Fail("Unknown image should not trigger any handler")
-	}
-	c.cc.onAvailableImageHandler = failHandler
-	c.cc.onUnavailableImageHandler = failHandler
-
-	c.cc.OnUnavailableImage(CorrelationId1, SubscriptionPositionRegistrationId)
-}
-
-func (c *ClientConductorTestSuite) TestShouldReturnNullForUnknownCounter() {
-	counter, err := c.cc.FindCounter(100)
-	c.Assert().Nil(counter)
-	c.Assert().Error(err)
-}
-
-// Also indirectly tests C++'s shouldSendAddCounterToDriver.  We mock out driverProxy.  They check that driverProxy
-// wrote the correct data to a test ring buffer.
-func (c *ClientConductorTestSuite) TestShouldReturnNullForCounterWithoutOnAvailableCounter() {
-	c.driverProxy.On("AddCounterByLabel", CounterTypeId, CounterLabel).
-		Return(CounterRegId, nil)
-
-	id, err := c.cc.AddCounterByLabel(CounterTypeId, CounterLabel)
-	c.Require().NoError(err)
-	c.Require().Equal(id, CounterRegId)
-
-	counter, err := c.cc.FindCounter(id)
-	c.Assert().Nil(counter)
-	c.Assert().NoError(err)
-}
-
-func (c *ClientConductorTestSuite) TestShouldReturnCounterAfterOnAvailableCounter() {
-	c.driverProxy.On("AddCounterByLabel", CounterTypeId, CounterLabel).
-		Return(CounterRegId, nil)
-	handler := testdata.NewMockAvailableCounterHandler(c.T())
-	handler.On("Handle", mock.Anything, CounterRegId, CounterId).Once()
-	c.cc.AddAvailableCounterHandler(handler)
-
-	id, err := c.cc.AddCounterByLabel(CounterTypeId, CounterLabel)
-	c.Require().NoError(err)
-	c.Require().Equal(id, CounterRegId)
-
-	c.cc.OnAvailableCounter(CounterRegId, CounterId)
-
-	counter, err := c.cc.FindCounter(id)
-	c.Require().NotNil(counter)
-	c.Require().NoError(err)
-	c.Assert().Equal(counter.RegistrationId(), CounterRegId)
-	c.Assert().Equal(counter.counterId, CounterId)
-}
-
-// C++ uses a shared_ptr's implicit destructor to call Close().  Here we just call Close() manually.
-func (c *ClientConductorTestSuite) TestShouldReleaseCounterAfterGoingOutOfScope() {
-	c.driverProxy.On("AddCounterByLabel", CounterTypeId, CounterLabel).
-		Return(CounterRegId, nil)
-
-	id, err := c.cc.AddCounterByLabel(CounterTypeId, CounterLabel)
-	c.Require().NoError(err)
-	c.Require().Equal(id, CounterRegId)
-
-	c.cc.OnAvailableCounter(CounterRegId, CounterId)
-
-	counter, err := c.cc.FindCounter(id)
-	c.Require().NotNil(counter)
-	c.Require().NoError(err)
-
-	c.driverProxy.On("RemoveCounter", CounterRegId).
-		Return(int64(123), nil)
-	counter.Close()
-
-	counter, err = c.cc.FindCounter(id)
-	c.Require().Nil(counter)
-	c.Require().Error(err)
-}
-
-func (c *ClientConductorTestSuite) TestShouldReturnDifferentIdsForDuplicateAddCounter() {
-	c.driverProxy.On("AddCounterByLabel", CounterTypeId, CounterLabel).
-		Once().Return(CounterRegId, nil)
-	id, err := c.cc.AddCounterByLabel(CounterTypeId, CounterLabel)
-	c.Require().NoError(err)
-	c.Require().Equal(id, CounterRegId)
-
-	c.driverProxy.On("AddCounterByLabel", CounterTypeId, CounterLabel).
-		Once().Return(CounterRegId2, nil)
-	id, err = c.cc.AddCounterByLabel(CounterTypeId, CounterLabel)
-	c.Require().NoError(err)
-	c.Require().Equal(id, CounterRegId2)
-}
-
-func (c *ClientConductorTestSuite) TestShouldReturnSameFindCounterAfterOnAvailableCounter() {
-	c.driverProxy.On("AddCounterByLabel", CounterTypeId, CounterLabel).
-		Return(CounterRegId, nil)
-
-	id, err := c.cc.AddCounterByLabel(CounterTypeId, CounterLabel)
-
-	c.cc.OnAvailableCounter(CounterRegId, CounterId)
-
-	counter1, err := c.cc.FindCounter(id)
-	c.Require().NotNil(counter1)
-	c.Require().NoError(err)
-	counter2, err := c.cc.FindCounter(id)
-	c.Require().NotNil(counter2)
-	c.Require().NoError(err)
-	c.Require().Equal(counter1, counter2)
-}
-
-func (c *ClientConductorTestSuite) TestShouldReturnDifferentCounterAfterOnAvailableCounter() {
-	c.driverProxy.On("AddCounterByLabel", CounterTypeId, CounterLabel).
-		Once().Return(CounterRegId, nil)
-	c.driverProxy.On("AddCounterByLabel", CounterTypeId, CounterLabel).
-		Once().Return(CounterRegId2, nil)
-	handler := testdata.NewMockAvailableCounterHandler(c.T())
-	handler.On("Handle", mock.Anything, CounterRegId, CounterId).Once()
-	handler.On("Handle", mock.Anything, CounterRegId2, CounterId).Once()
-	c.cc.AddAvailableCounterHandler(handler)
-
-	id1, err := c.cc.AddCounterByLabel(CounterTypeId, CounterLabel)
-	c.Require().Equal(id1, CounterRegId)
-	id2, err := c.cc.AddCounterByLabel(CounterTypeId, CounterLabel)
-	c.Require().Equal(id2, CounterRegId2)
-
-	c.cc.OnAvailableCounter(CounterRegId, CounterId)
-	c.cc.OnAvailableCounter(CounterRegId2, CounterId)
-
-	counter1, err := c.cc.FindCounter(id1)
-	c.Require().NotNil(counter1)
-	c.Require().NoError(err)
-	counter2, err := c.cc.FindCounter(id2)
-	c.Require().NotNil(counter2)
-	c.Require().NoError(err)
-	c.Require().NotEqual(counter1, counter2)
-}
-
-func (c *ClientConductorTestSuite) TestShouldNotFindCounterOnAvailableCounterForUnknownCorrelationId() {
-	c.driverProxy.On("AddCounterByLabel", CounterTypeId, CounterLabel).
-		Return(CounterRegId, nil)
-	handler := testdata.NewMockAvailableCounterHandler(c.T())
-	handler.On("Handle", mock.Anything, CounterRegId2, CounterId).Once()
-	c.cc.AddAvailableCounterHandler(handler)
-
-	id, err := c.cc.AddCounterByLabel(CounterTypeId, CounterLabel)
-
-	c.cc.OnAvailableCounter(CounterRegId2, CounterId)
-
-	counter1, err := c.cc.FindCounter(id)
-	c.Require().Nil(counter1)
-	c.Require().NoError(err)
-}
-
-func (c *ClientConductorTestSuite) TestShouldTimeoutAddCounterWithoutOnAvailableCounter() {
-	c.cc.driverTimeoutNs = 1
-	c.driverProxy.On("AddCounterByLabel", CounterTypeId, CounterLabel).
-		Return(CounterRegId, nil)
-	id, err := c.cc.AddCounterByLabel(CounterTypeId, CounterLabel)
-
-	counter, err := c.cc.FindCounter(id)
-	c.Require().Nil(counter)
-	c.Require().Error(err)
-}
-
-func (c *ClientConductorTestSuite) TestShouldErrorOnFindWhenReceivingErrorResponseOnAddCounter() {
-	c.driverProxy.On("AddCounterByLabel", CounterTypeId, CounterLabel).
-		Return(CounterRegId, nil)
-	id, err := c.cc.AddCounterByLabel(CounterTypeId, CounterLabel)
-
-	c.cc.OnErrorResponse(id, 123, "can't add counter")
-
-	counter, err := c.cc.FindCounter(id)
-	c.Require().Nil(counter)
-	c.Require().ErrorContains(err, "can't add counter")
-}
-
-func (c *ClientConductorTestSuite) TestShouldCallOnUnavailableCounter() {
-	id := int64(101)
-	handler := testdata.NewMockUnavailableCounterHandler(c.T())
-	handler.On("Handle", mock.Anything, id, CounterId).Once()
-	c.cc.AddUnavailableCounterHandler(handler)
-
-	c.cc.OnUnavailableCounter(id, CounterId)
-}
-
-func TestClientConductor(t *testing.T) {
-	suite.Run(t, new(ClientConductorTestSuite))
-}
-
-type FakeImageHandler struct {
-	images []Image
-}
-
-func (f *FakeImageHandler) Handle(image Image) {
-	if f.images == nil {
-		f.images = make([]Image, 0)
-	}
-	f.images = append(f.images, image)
-}
-
-func (f *FakeImageHandler) GetHandledImage() Image {
-	if len(f.images) == 0 {
-		return nil
-	}
-	ret := f.images[0]
-	f.images = f.images[1:]
-	return ret
-}
-
-// Everything below is auto generated by mockery using this command:
-// mockery --name=DriverProxy --inpackage --structname=MockDriverProxy --print
-
-// Code generated by mockery v2.14.0. DO NOT EDIT.
-
-// MockDriverProxy is an autogenerated mock type for the DriverProxy type
-type MockDriverProxy struct {
-	mock.Mock
-}
-
-// AddCounter provides a mock function with given fields: typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength
-func (_m *MockDriverProxy) AddCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32, labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (int64, error) {
-	ret := _m.Called(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func(int32, *atomic.Buffer, int32, int32, *atomic.Buffer, int32, int32) int64); ok {
-		r0 = rf(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(int32, *atomic.Buffer, int32, int32, *atomic.Buffer, int32, int32) error); ok {
-		r1 = rf(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// AddCounterByLabel provides a mock function with given fields: typeId, label
-func (_m *MockDriverProxy) AddCounterByLabel(typeId int32, label string) (int64, error) {
-	ret := _m.Called(typeId, label)
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func(int32, string) int64); ok {
-		r0 = rf(typeId, label)
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(int32, string) error); ok {
-		r1 = rf(typeId, label)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// AddDestination provides a mock function with given fields: registrationID, channel
-func (_m *MockDriverProxy) AddDestination(registrationID int64, channel string) (int64, error) {
-	ret := _m.Called(registrationID, channel)
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func(int64, string) int64); ok {
-		r0 = rf(registrationID, channel)
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(int64, string) error); ok {
-		r1 = rf(registrationID, channel)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// AddExclusivePublication provides a mock function with given fields: channel, streamID
-func (_m *MockDriverProxy) AddExclusivePublication(channel string, streamID int32) (int64, error) {
-	ret := _m.Called(channel, streamID)
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func(string, int32) int64); ok {
-		r0 = rf(channel, streamID)
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(string, int32) error); ok {
-		r1 = rf(channel, streamID)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// AddPublication provides a mock function with given fields: channel, streamID
-func (_m *MockDriverProxy) AddPublication(channel string, streamID int32) (int64, error) {
-	ret := _m.Called(channel, streamID)
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func(string, int32) int64); ok {
-		r0 = rf(channel, streamID)
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(string, int32) error); ok {
-		r1 = rf(channel, streamID)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// AddRcvDestination provides a mock function with given fields: registrationID, channel
-func (_m *MockDriverProxy) AddRcvDestination(registrationID int64, channel string) (int64, error) {
-	ret := _m.Called(registrationID, channel)
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func(int64, string) int64); ok {
-		r0 = rf(registrationID, channel)
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(int64, string) error); ok {
-		r1 = rf(registrationID, channel)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// AddSubscription provides a mock function with given fields: channel, streamID
-func (_m *MockDriverProxy) AddSubscription(channel string, streamID int32) (int64, error) {
-	ret := _m.Called(channel, streamID)
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func(string, int32) int64); ok {
-		r0 = rf(channel, streamID)
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(string, int32) error); ok {
-		r1 = rf(channel, streamID)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// ClientClose provides a mock function with given fields:
-func (_m *MockDriverProxy) ClientClose() error {
-	ret := _m.Called()
-
-	var r0 error
-	if rf, ok := ret.Get(0).(func() error); ok {
-		r0 = rf()
-	} else {
-		r0 = ret.Error(0)
-	}
-
-	return r0
-}
-
-// ClientID provides a mock function with given fields:
-func (_m *MockDriverProxy) ClientID() int64 {
-	ret := _m.Called()
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func() int64); ok {
-		r0 = rf()
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	return r0
-}
-
-// NextCorrelationID provides a mock function with given fields:
-func (_m *MockDriverProxy) NextCorrelationID() int64 {
-	ret := _m.Called()
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func() int64); ok {
-		r0 = rf()
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	return r0
-}
-
-// RemoveCounter provides a mock function with given fields: registrationId
-func (_m *MockDriverProxy) RemoveCounter(registrationId int64) (int64, error) {
-	ret := _m.Called(registrationId)
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func(int64) int64); ok {
-		r0 = rf(registrationId)
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(int64) error); ok {
-		r1 = rf(registrationId)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// RemoveDestination provides a mock function with given fields: registrationID, channel
-func (_m *MockDriverProxy) RemoveDestination(registrationID int64, channel string) (int64, error) {
-	ret := _m.Called(registrationID, channel)
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func(int64, string) int64); ok {
-		r0 = rf(registrationID, channel)
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(int64, string) error); ok {
-		r1 = rf(registrationID, channel)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// RemovePublication provides a mock function with given fields: registrationID, revoke
-func (_m *MockDriverProxy) RemovePublication(registrationID int64, revoke bool) (int64, error) {
-	ret := _m.Called(registrationID, revoke)
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func(int64, bool) int64); ok {
-		r0 = rf(registrationID, revoke)
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(int64, bool) error); ok {
-		r1 = rf(registrationID, revoke)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// RemoveRcvDestination provides a mock function with given fields: registrationID, channel
-func (_m *MockDriverProxy) RemoveRcvDestination(registrationID int64, channel string) (int64, error) {
-	ret := _m.Called(registrationID, channel)
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func(int64, string) int64); ok {
-		r0 = rf(registrationID, channel)
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(int64, string) error); ok {
-		r1 = rf(registrationID, channel)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// RemoveSubscription provides a mock function with given fields: registrationID
-func (_m *MockDriverProxy) RemoveSubscription(registrationID int64) (int64, error) {
-	ret := _m.Called(registrationID)
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func(int64) int64); ok {
-		r0 = rf(registrationID)
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(int64) error); ok {
-		r1 = rf(registrationID)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// TimeOfLastDriverKeepalive provides a mock function with given fields:
-func (_m *MockDriverProxy) TimeOfLastDriverKeepalive() int64 {
-	ret := _m.Called()
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func() int64); ok {
-		r0 = rf()
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	return r0
-}
-
-type mockConstructorTestingTNewMockDriverProxy interface {
-	mock.TestingT
-	Cleanup(func())
-}
-
-// NewMockDriverProxy creates a new instance of MockDriverProxy. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
-func NewMockDriverProxy(t mockConstructorTestingTNewMockDriverProxy) *MockDriverProxy {
-	mock := &MockDriverProxy{}
-	mock.Mock.Test(t)
-
-	t.Cleanup(func() { mock.AssertExpectations(t) })
-
-	return mock
+type idleStrategyForTest struct{}
+
+func (idleStrategyForTest) Idle(int) { time.Sleep(time.Millisecond) }
+
+var _ = mock.Anything
+
+func encodePublicationErrorFrame(regID int64, code int32, msg string) (*atomic.Buffer, int32) {
+	length := int32(pubErrErrorMessageOffset + 4 + len(msg))
+	buf := atomic.MakeBuffer(make([]byte, length))
+	buf.PutInt64(pubErrRegistrationIDOffset, regID)
+	buf.PutInt32(pubErrErrorCodeOffset, code)
+	buf.PutInt32(pubErrErrorMessageOffset, int32(len(msg)))
+	b := []byte(msg)
+	buf.PutBytesArray(pubErrErrorMessageOffset+4, &b, 0, int32(len(msg)))
+	return buf, length
 }

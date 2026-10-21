@@ -1,7 +1,10 @@
 package aeron
 
 import (
+	"testing"
+
 	"github.com/lirm/aeron-go/aeron/atomic"
+	"github.com/stretchr/testify/require"
 )
 
 // AddStaticCounter provides a mock function.
@@ -19,78 +22,69 @@ func (_m *MockDriverProxy) AddStaticCounterByLabel(typeId int32, label string, r
 
 const staticCounterRegId = int64(98765)
 
-func (c *ClientConductorTestSuite) TestStaticCounterIsNotClientOwnedAndNotRemovedOnClose() {
-	c.driverProxy.On("AddStaticCounterByLabel", CounterTypeId, CounterLabel, staticCounterRegId).
-		Return(int64(555), nil)
-
-	corrId, err := c.cc.AddStaticCounterByLabel(CounterTypeId, CounterLabel, staticCounterRegId)
-	c.Require().NoError(err)
-
-	counter, err := c.cc.GetCounter(corrId)
-	c.Require().NoError(err)
-	c.Require().Nil(counter, "pending until ON_STATIC_COUNTER")
+func TestStaticCounterIsNotClientOwnedAndNotRemovedOnClose(t *testing.T) {
+	tc := newTestConductor(t)
+	corrID, err := tc.AddStaticCounterByLabel(CounterTypeId, CounterLabel, staticCounterRegId)
+	require.NoError(t, err)
+	counter, err := tc.GetCounter(corrID)
+	require.NoError(t, err)
+	require.Nil(t, counter, "pending until ON_STATIC_COUNTER")
 
 	// The driver records the user registration id in the counter's values.
-	c.cc.counterReader.ValuesBuffer().PutInt64(CounterId*128+8, staticCounterRegId)
-	c.cc.OnStaticCounter(corrId, CounterId)
-
-	counter, err = c.cc.GetCounter(corrId)
-	c.Require().NoError(err)
-	c.Require().NotNil(counter)
-	c.Assert().False(counter.IsClientOwned())
-	c.Assert().Equal(corrId, counter.CorrelationId())
-	c.Assert().Equal(staticCounterRegId, counter.RegistrationId())
-	c.Assert().Equal(CounterId, counter.Id())
-
+	tc.counterReader.ValuesBuffer().PutInt64(CounterId*128+8, staticCounterRegId)
+	tc.OnStaticCounter(corrID, CounterId)
+	counter, err = tc.GetCounter(corrID)
+	require.NoError(t, err)
+	require.NotNil(t, counter)
+	require.False(t, counter.IsClientOwned())
+	require.Equal(t, corrID, counter.CorrelationId())
+	require.Equal(t, staticCounterRegId, counter.RegistrationId())
+	require.Equal(t, CounterId, counter.Id())
 	counter.Increment()
-	c.Assert().EqualValues(1, c.cc.counterReader.GetCounterValue(CounterId))
+	require.EqualValues(t, 1, tc.counterReader.GetCounterValue(CounterId))
 
-	// Close must not send RemoveCounter (the mock would panic on an unexpected call).
-	c.Require().NoError(counter.Close())
-	c.Assert().True(counter.IsClosed())
-	_, err = c.cc.GetCounter(corrId)
-	c.Assert().Error(err)
-	c.driverProxy.AssertNotCalled(c.T(), "RemoveCounter", staticCounterRegId)
+	require.NoError(t, counter.Close())
+	require.True(t, counter.IsClosed())
+	_, err = tc.GetCounter(corrID)
+	require.Error(t, err)
+	require.Equal(t, 0, tc.proxy.called("RemoveCounter"))
 }
 
-func (c *ClientConductorTestSuite) TestStaticCounterErrorIsReturned() {
-	c.driverProxy.On("AddStaticCounterByLabel", CounterTypeId, CounterLabel, staticCounterRegId).
-		Return(int64(556), nil)
-	corrId, err := c.cc.AddStaticCounterByLabel(CounterTypeId, CounterLabel, staticCounterRegId)
-	c.Require().NoError(err)
-	c.cc.OnErrorResponse(corrId, 0, "cannot add static counter, because a non-static counter exists")
-	counter, err := c.cc.GetCounter(corrId)
-	c.Assert().Nil(counter)
-	c.Assert().ErrorContains(err, "non-static counter exists")
+func TestStaticCounterErrorIsReturned(t *testing.T) {
+	tc := newTestConductor(t)
+	corrID, err := tc.AddStaticCounterByLabel(CounterTypeId, CounterLabel, staticCounterRegId)
+	require.NoError(t, err)
+	tc.OnErrorResponse(corrID, 0, "cannot add static counter, because a non-static counter exists")
+	counter, err := tc.GetCounter(corrID)
+	require.Nil(t, counter)
+	require.ErrorContains(t, err, "non-static counter exists")
 }
 
-func (c *ClientConductorTestSuite) TestClientOwnedCounterClosedOnUnavailable() {
-	c.driverProxy.On("AddCounterByLabel", CounterTypeId, CounterLabel).Return(CounterRegId, nil)
-	id, err := c.cc.AddCounterByLabel(CounterTypeId, CounterLabel)
-	c.Require().NoError(err)
-	c.cc.OnAvailableCounter(CounterRegId, CounterId)
-	counter, err := c.cc.GetCounter(id)
-	c.Require().NoError(err)
-	c.Require().True(counter.IsClientOwned())
-	c.Assert().Equal(id, counter.RegistrationId())
-	c.Assert().Equal(id, counter.CorrelationId())
+func TestClientOwnedCounterClosedOnUnavailable(t *testing.T) {
+	tc := newTestConductor(t)
+	id, err := tc.AddCounterByLabel(CounterTypeId, CounterLabel)
+	require.NoError(t, err)
+	tc.OnAvailableCounter(id, CounterId)
+	counter, err := tc.GetCounter(id)
+	require.NoError(t, err)
+	require.True(t, counter.IsClientOwned())
+	require.Equal(t, id, counter.RegistrationId())
+	require.Equal(t, id, counter.CorrelationId())
 
-	c.cc.OnUnavailableCounter(CounterRegId, CounterId)
-	c.Assert().True(counter.IsClosed())
-	_, err = c.cc.GetCounter(id)
-	c.Assert().Error(err)
+	tc.OnUnavailableCounter(id, CounterId)
+	require.True(t, counter.IsClosed())
+	_, err = tc.GetCounter(id)
+	require.Error(t, err)
 }
 
-func (c *ClientConductorTestSuite) TestAsyncRemoveCounter() {
-	c.driverProxy.On("AddCounterByLabel", CounterTypeId, CounterLabel).Return(CounterRegId, nil)
-	c.driverProxy.On("RemoveCounter", CounterRegId).Return(int64(124), nil)
-	id, err := c.cc.AddCounterByLabel(CounterTypeId, CounterLabel)
-	c.Require().NoError(err)
-	c.cc.OnAvailableCounter(CounterRegId, CounterId)
-	counter, err := c.cc.GetCounter(id)
-	c.Require().NoError(err)
-
-	c.Require().NoError(c.cc.AsyncRemoveCounter(id))
-	c.Assert().True(counter.IsClosed())
-	c.driverProxy.AssertCalled(c.T(), "RemoveCounter", CounterRegId)
+func TestAsyncRemoveCounter(t *testing.T) {
+	tc := newTestConductor(t)
+	id, err := tc.AddCounterByLabel(CounterTypeId, CounterLabel)
+	require.NoError(t, err)
+	tc.OnAvailableCounter(id, CounterId)
+	counter, err := tc.GetCounter(id)
+	require.NoError(t, err)
+	require.NoError(t, tc.AsyncRemoveCounter(id))
+	require.True(t, counter.IsClosed())
+	require.Equal(t, 1, tc.proxy.called("RemoveCounter"))
 }
