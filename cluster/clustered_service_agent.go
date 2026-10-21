@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	syncatomic "sync/atomic"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
@@ -28,6 +29,7 @@ import (
 	"github.com/lirm/aeron-go/aeron/logging"
 	"github.com/lirm/aeron-go/aeron/util"
 	"github.com/lirm/aeron-go/archive"
+	"github.com/lirm/aeron-go/archive/status"
 	"github.com/lirm/aeron-go/cluster/codecs"
 )
 
@@ -36,9 +38,12 @@ const NullPosition = -1
 const markFileUpdateIntervalMs = 1000
 const terminationAckAttempts = 5
 const slowTickIntervalNs = int64(time.Millisecond)
+const closeSessionAttempts = 3
+
+// maxUdpPayloadLength mirrors io.aeron.driver.Configuration.MAX_UDP_PAYLOAD_LENGTH.
+const maxUdpPayloadLength = 65504
 
 const (
-	recordingPosCounterTypeId  = 100
 	commitPosCounterTypeId     = 203
 	recoveryStateCounterTypeId = 204
 )
@@ -99,7 +104,8 @@ type ClusteredServiceAgent struct {
 	backgroundWorker         BackgroundWorker
 	sessionByIdMap           map[int64]*containerClientSession
 	sessions                 []*containerClientSession
-	commitPosition           *counters.ReadableCounter
+	commitPosition           syncatomic.Pointer[counters.ReadableCounter]
+	unavailableCounterRegId  int64
 	sessionMsgHdrBuffer      *atomic.Buffer
 	messageBuffer            *atomic.Buffer
 }
@@ -251,14 +257,49 @@ func (agent *ClusteredServiceAgent) recoveredError(r interface{}) error {
 
 // OnStart awaits the consensus module counters and recovers service state from the latest snapshot.
 func (agent *ClusteredServiceAgent) OnStart() error {
+	agent.unavailableCounterRegId = agent.aeronClient.AddUnavailableCounterHandler(
+		unavailableCounterFunc(agent.counterUnavailable))
 	if err := agent.awaitCommitPositionCounter(); err != nil {
 		return err
 	}
-	return agent.recoverState()
+	if err := agent.recoverState(); err != nil {
+		return err
+	}
+	agent.isServiceActive = true
+	return nil
+}
+
+func (agent *ClusteredServiceAgent) loadCommitPosition() *counters.ReadableCounter {
+	return agent.commitPosition.Load()
+}
+
+func (agent *ClusteredServiceAgent) storeCommitPosition(c *counters.ReadableCounter) {
+	agent.commitPosition.Store(c)
+}
+
+type unavailableCounterFunc func(countersReader *counters.Reader, registrationId int64, counterId int32)
+
+func (f unavailableCounterFunc) Handle(countersReader *counters.Reader, registrationId int64, counterId int32) {
+	f(countersReader, registrationId, counterId)
+}
+
+// counterUnavailable closes the commit position counter when the consensus module removes it (Java
+// ClusteredServiceAgent.counterUnavailable). Called from the client conductor goroutine.
+func (agent *ClusteredServiceAgent) counterUnavailable(_ *counters.Reader, registrationId int64, counterId int32) {
+	if commitPos := agent.loadCommitPosition(); commitPos != nil &&
+		commitPos.CounterId == counterId && commitPos.RegistrationId == registrationId {
+		commitPos.Close()
+	}
 }
 
 func (agent *ClusteredServiceAgent) onClose() {
-	agent.isServiceActive = false
+	if agent.unavailableCounterRegId != 0 && !agent.aeronClient.IsClosed() {
+		agent.aeronClient.RemoveUnavailableCounterHandlerById(agent.unavailableCounterRegId)
+	}
+	if agent.isServiceActive {
+		agent.isServiceActive = false
+		agent.invokeOnTerminate()
+	}
 	for _, session := range agent.sessions {
 		session.disconnect()
 	}
@@ -286,12 +327,13 @@ func (agent *ClusteredServiceAgent) awaitCommitPositionCounter() error {
 			return keyBuffer.GetInt32(0) == agent.opts.ClusterId
 		})
 		if id != counters.NullCounterId {
-			commitPos, err := counters.NewReadableCounter(agent.counters, id)
+			commitPos, err := counters.NewReadableRegisteredCounter(
+				agent.counters, agent.counters.GetCounterRegistrationId(id), id)
 			if err != nil {
 				return err
 			}
 			logger.Debugf("found commit position counter - id=%d value=%d", id, commitPos.Get())
-			agent.commitPosition = commitPos
+			agent.storeCommitPosition(commitPos)
 			return nil
 		}
 		agent.idle(0)
@@ -303,11 +345,23 @@ func (agent *ClusteredServiceAgent) recoverState() error {
 	logger.Debugf("found recovery counter - id=%d leadershipTermId=%d logPos=%d clusterTime=%d",
 		counterId, leadershipTermId, agent.logPosition, agent.clusterTime)
 	agent.sessionMsgHdrBuffer.PutInt64(SBEHeaderLength, leadershipTermId)
-	agent.isServiceActive = true
 
-	if leadershipTermId == NullValue {
-		agent.invokeOnStart(nil)
-	} else {
+	snapshotRecId := int64(NullValue)
+	err := func() (err error) {
+		agent.activeLifecycleCallback = lifecycleOnStart
+		defer func() {
+			agent.activeLifecycleCallback = lifecycleNone
+			if r := recover(); r != nil {
+				err = agent.recoveredError(r)
+				if err == nil {
+					err = errors.New("cluster terminated during start")
+				}
+			}
+		}()
+		if leadershipTermId == NullValue {
+			agent.service.OnStart(agent, nil)
+			return nil
+		}
 		serviceCount, err := agent.counters.GetKeyPartInt32(counterId, 28)
 		if err != nil {
 			return err
@@ -315,26 +369,49 @@ func (agent *ClusteredServiceAgent) recoverState() error {
 		if agent.opts.ServiceId >= serviceCount {
 			return fmt.Errorf("serviceId=%d not in recovery state serviceCount=%d", agent.opts.ServiceId, serviceCount)
 		}
-		snapshotRecId, err := agent.counters.GetKeyPartInt64(counterId, 32+(agent.opts.ServiceId*util.SizeOfInt64))
-		if err != nil {
+		if snapshotRecId, err = agent.counters.GetKeyPartInt64(
+			counterId, 32+(agent.opts.ServiceId*util.SizeOfInt64)); err != nil {
 			return err
 		}
-		if err := agent.loadSnapshot(snapshotRecId); err != nil {
-			return err
-		}
-	}
+		return agent.loadSnapshot(snapshotRecId)
+	}()
 
+	// Java acks with relevantId=NULL_VALUE when recovery fails so the consensus module does not wait on the service.
+	relevantId := agent.aeronClient.ClientID()
+	if err != nil {
+		relevantId = NullValue
+	}
 	id := agent.nextAckId()
-	for !agent.proxy.ack(agent.logPosition, agent.clusterTime, id, agent.aeronClient.ClientID(), agent.opts.ServiceId) {
+	for !agent.proxy.ack(agent.logPosition, agent.clusterTime, id, relevantId, agent.opts.ServiceId) {
 		agent.idle(0)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to start service=%d leadershipTermId=%d logPosition=%d clusterTime=%d "+
+			"snapshotRecordingId=%d: %w", agent.opts.ServiceId, leadershipTermId, agent.logPosition,
+			agent.clusterTime, snapshotRecId, err)
 	}
 	return nil
 }
 
-func (agent *ClusteredServiceAgent) invokeOnStart(img aeron.Image) {
-	agent.activeLifecycleCallback = lifecycleOnStart
-	defer func() { agent.activeLifecycleCallback = lifecycleNone }()
-	agent.service.OnStart(agent, img)
+func (agent *ClusteredServiceAgent) invokeOnTerminate() {
+	agent.activeLifecycleCallback = lifecycleOnTerminate
+	defer func() {
+		agent.activeLifecycleCallback = lifecycleNone
+		if r := recover(); r != nil {
+			logger.Errorf("error in OnTerminate: %v", r)
+		}
+	}()
+	agent.service.OnTerminate(agent)
+}
+
+func (agent *ClusteredServiceAgent) invokeBackgroundWork(nowNs int64) int {
+	if agent.backgroundWorker == nil {
+		return 0
+	}
+	prev := agent.activeLifecycleCallback
+	agent.activeLifecycleCallback = lifecycleDoBackgroundWork
+	defer func() { agent.activeLifecycleCallback = prev }()
+	return agent.backgroundWorker.DoBackgroundWork(nowNs)
 }
 
 func (agent *ClusteredServiceAgent) awaitRecoveryCounter() (int32, int64) {
@@ -383,11 +460,20 @@ func (agent *ClusteredServiceAgent) loadSnapshot(recordingId int64) error {
 
 	img := agent.awaitImage(archive.ReplaySessionIdToSessionId(replaySessionId), subscription)
 	loader := newSnapshotLoader(agent, img)
-	for !loader.isDone {
-		if img.IsClosed() {
-			return fmt.Errorf("snapshot ended unexpectedly: recordingId=%d", recordingId)
+	for {
+		fragments := loader.poll()
+		if loader.isDone {
+			break
 		}
-		agent.idle(loader.poll())
+		if fragments == 0 {
+			if _, err := arch.PollForErrorResponse(); err != nil {
+				return err
+			}
+			if img.IsClosed() {
+				return fmt.Errorf("snapshot ended unexpectedly: recordingId=%d", recordingId)
+			}
+		}
+		agent.idle(fragments)
 	}
 	if loader.err != nil {
 		return loader.err
@@ -398,7 +484,7 @@ func (agent *ClusteredServiceAgent) loadSnapshot(recordingId int64) error {
 			util.SemanticVersionToString(uint32(loader.appVersion)))
 	}
 	agent.timeUnit = loader.timeUnit
-	agent.invokeOnStart(img)
+	agent.service.OnStart(agent, img)
 	return nil
 }
 
@@ -428,15 +514,19 @@ func (agent *ClusteredServiceAgent) addSessionFromSnapshot(session *containerCli
 }
 
 func (agent *ClusteredServiceAgent) checkForClockTick(nowNs int64) bool {
-	if agent.isTerminated || nowNs-agent.lastSlowTickNs <= slowTickIntervalNs {
+	if agent.isTerminated {
+		return false
+	}
+	if agent.aeronClient.IsClosed() {
+		agent.abort(newClusterError("unexpected Aeron close"))
+	}
+	if nowNs-agent.lastSlowTickNs <= slowTickIntervalNs {
 		return false
 	}
 	agent.lastSlowTickNs = nowNs
-	if agent.aeronClient.IsClosed() {
-		agent.abort(newClusterError("aeron client closed"))
-	}
-	if agent.commitPosition != nil && agent.commitPosition.IsClosed() {
-		agent.abort(&ClusterTerminationError{Expected: false})
+	if commitPos := agent.loadCommitPosition(); commitPos != nil && commitPos.IsClosed() {
+		logger.Warningf("commit-pos counter unexpectedly closed, terminating")
+		agent.abort(&ClusterTerminationError{Expected: true})
 	}
 	nowMs := nowNs / int64(time.Millisecond)
 	if nowMs >= agent.markFileUpdateDeadlineMs {
@@ -457,19 +547,29 @@ func (agent *ClusteredServiceAgent) pollServiceAdapter() int {
 	work := agent.serviceAdapter.poll()
 
 	if agent.activeLogEvent != nil && agent.logAdapter.image == nil {
-		event := agent.activeLogEvent
-		agent.activeLogEvent = nil
-		if err := agent.joinActiveLog(event); err != nil {
-			panic(err)
+		if err := agent.joinActiveLog(agent.activeLogEvent); err != nil {
+			var regErr *aeron.RegistrationError
+			if !errors.As(err, &regErr) {
+				panic(err)
+			}
+			logger.Warningf("failed to join active log, will retry: %v", err)
+		} else {
+			agent.activeLogEvent = nil
 		}
 	}
 
+	agent.checkServiceProtocolPositions()
+	return work
+}
+
+// checkServiceProtocolPositions handles termination and requested acks once the log reaches their position.
+func (agent *ClusteredServiceAgent) checkServiceProtocolPositions() {
 	if agent.terminationPosition != NullPosition && agent.logPosition >= agent.terminationPosition {
 		if agent.logPosition > agent.terminationPosition {
 			logger.Errorf("service terminate: logPos=%d > terminationPos=%d", agent.logPosition, agent.terminationPosition)
 		}
-		agent.terminate(true)
-		return work
+		agent.terminate(agent.logPosition == agent.terminationPosition)
+		return
 	}
 
 	if agent.requestedAckPosition != NullPosition && agent.logPosition >= agent.requestedAckPosition {
@@ -482,21 +582,11 @@ func (agent *ClusteredServiceAgent) pollServiceAdapter() int {
 		}
 		agent.requestedAckPosition = NullPosition
 	}
-	return work
 }
 
 func (agent *ClusteredServiceAgent) terminate(isTerminationExpected bool) {
 	agent.isServiceActive = false
-	func() {
-		agent.activeLifecycleCallback = lifecycleOnTerminate
-		defer func() {
-			agent.activeLifecycleCallback = lifecycleNone
-			if r := recover(); r != nil {
-				logger.Errorf("error in OnTerminate: %v", r)
-			}
-		}()
-		agent.service.OnTerminate(agent)
-	}()
+	agent.invokeOnTerminate()
 
 	if agent.terminationAckRequired {
 		id := agent.nextAckId()
@@ -504,7 +594,7 @@ func (agent *ClusteredServiceAgent) terminate(isTerminationExpected bool) {
 			if agent.proxy.ack(agent.logPosition, agent.clusterTime, id, NullValue, agent.opts.ServiceId) {
 				break
 			}
-			agent.opts.IdleStrategy.Idle(0)
+			agent.idle(0)
 		}
 	}
 	agent.terminationPosition = NullPosition
@@ -518,25 +608,21 @@ func (agent *ClusteredServiceAgent) DoWork() int {
 	nowNs := time.Now().UnixNano()
 
 	if agent.checkForClockTick(nowNs) {
-		work += agent.pollServiceAdapter() + 1
+		work += agent.pollServiceAdapter()
 	}
 	if agent.isTerminated {
 		return work
 	}
 
 	if agent.logAdapter.image != nil {
-		polled := agent.logAdapter.poll(agent.commitPosition.Get())
+		polled := agent.logAdapter.poll(agent.loadCommitPosition().Get())
 		work += polled
 		if polled == 0 && agent.logAdapter.isDone() {
 			agent.closeLog()
 		}
 	}
 
-	if agent.backgroundWorker != nil {
-		agent.activeLifecycleCallback = lifecycleDoBackgroundWork
-		work += agent.backgroundWorker.DoBackgroundWork(nowNs)
-		agent.activeLifecycleCallback = lifecycleNone
-	}
+	work += agent.invokeBackgroundWork(nowNs)
 	return work
 }
 
@@ -608,10 +694,10 @@ func (agent *ClusteredServiceAgent) joinActiveLog(event *activeLogEvent) error {
 		return err
 	}
 	img := agent.awaitImage(event.logSessionId, logSub)
-	if img.Position() != agent.logPosition {
+	if img.JoinPosition() != agent.logPosition {
 		closeSubscription(logSub)
 		return newClusterError("cluster log must be contiguous for joining image: expectedPosition=%d joinPosition=%d",
-			agent.logPosition, img.Position())
+			agent.logPosition, img.JoinPosition())
 	}
 	if event.logPosition != agent.logPosition {
 		closeSubscription(logSub)
@@ -716,9 +802,8 @@ func (agent *ClusteredServiceAgent) onSessionClose(
 	agent.clusterTime = timestamp
 
 	if session := agent.removeSession(clusterSessionId); session != nil {
-		session.markClosing()
-		agent.service.OnSessionClose(session, timestamp, closeReason)
 		session.disconnect()
+		agent.service.OnSessionClose(session, timestamp, closeReason)
 	} else {
 		logger.Errorf("onSessionClose: unknown session - id=%d leaderTermId=%d logPos=%d reason=%v",
 			clusterSessionId, leadershipTermId, logPosition, closeReason)
@@ -850,6 +935,9 @@ func (agent *ClusteredServiceAgent) takeSnapshot(logPos int64, leadershipTermId 
 		return NullValue, err
 	}
 	agent.checkForClockTick(time.Now().UnixNano())
+	if _, err := arch.PollForErrorResponse(); err != nil {
+		return NullValue, err
+	}
 	agent.service.OnTakeSnapshot(pub)
 
 	if err := agent.awaitRecordingComplete(recordingId, pub.Position(), counterId, arch); err != nil {
@@ -861,16 +949,9 @@ func (agent *ClusteredServiceAgent) takeSnapshot(logPos int64, leadershipTermId 
 func (agent *ClusteredServiceAgent) awaitRecordingCounter(sessionId int32, arch *archive.Archive) (int32, int64, error) {
 	start := time.Now()
 	for time.Since(start) < agent.opts.Timeout {
-		recId := int64(NullValue)
-		counterId := agent.counters.FindCounter(recordingPosCounterTypeId, func(keyBuffer *atomic.Buffer) bool {
-			if keyBuffer.GetInt32(8) == sessionId {
-				recId = keyBuffer.GetInt64(0)
-				return true
-			}
-			return false
-		})
+		counterId := status.FindCounterIdBySession(agent.counters, sessionId, arch.ArchiveID())
 		if counterId != counters.NullCounterId {
-			return counterId, recId, nil
+			return counterId, status.GetRecordingId(agent.counters, counterId), nil
 		}
 		if _, err := arch.PollForErrorResponse(); err != nil {
 			return counters.NullCounterId, NullValue, err
@@ -887,7 +968,7 @@ func (agent *ClusteredServiceAgent) awaitRecordingComplete(recordingId, position
 		if agent.counters.GetCounterValue(counterId) >= position {
 			return nil
 		}
-		if !agent.counters.IsCounterAllocated(counterId) {
+		if !status.IsActive(agent.counters, counterId, recordingId) {
 			return newClusterError("recording stopped unexpectedly: recordingId=%d", recordingId)
 		}
 		if _, err := arch.PollForErrorResponse(); err != nil {
@@ -942,6 +1023,10 @@ func (agent *ClusteredServiceAgent) tryClaimToSession(
 ) int64 {
 	agent.checkForValidInvocation()
 	if agent.role != Leader {
+		if maxPayloadLength := maxUdpPayloadLength - logbuffer.DataFrameHeader.Length - SBEHeaderLength -
+			SessionMessageHeaderLength; length > maxPayloadLength {
+			panic(fmt.Errorf("claim exceeds maxPayloadLength=%d, length=%d", maxPayloadLength, length))
+		}
 		claimLength := logbuffer.DataFrameHeader.Length + SBEHeaderLength + SessionMessageHeaderLength + length
 		if agent.messageBuffer == nil || agent.messageBuffer.Capacity() < claimLength {
 			agent.messageBuffer = atomic.MakeBuffer(make([]byte, claimLength))
@@ -968,8 +1053,14 @@ func (agent *ClusteredServiceAgent) writeSessionHeader(claim *logbuffer.Claim, c
 
 // idle runs the idle strategy while checking for liveness so long-running operations do not stall the agent.
 func (agent *ClusteredServiceAgent) idle(workCount int) {
-	agent.checkForClockTick(time.Now().UnixNano())
 	agent.opts.IdleStrategy.Idle(workCount)
+	if workCount <= 0 {
+		nowNs := time.Now().UnixNano()
+		agent.checkForClockTick(nowNs)
+		if agent.isServiceActive {
+			agent.invokeBackgroundWork(nowNs)
+		}
+	}
 }
 
 // Idle implements idlestrategy.Idler so the agent can be returned from Cluster.IdleStrategy().
@@ -1048,9 +1139,12 @@ func (agent *ClusteredServiceAgent) CloseClientSession(clusterSessionId int64) b
 	if session.IsClosing() {
 		return true
 	}
-	if agent.proxy.closeSession(clusterSessionId) {
-		session.markClosing()
-		return true
+	for attempts := closeSessionAttempts; attempts > 0; attempts-- {
+		if agent.proxy.closeSession(clusterSessionId) {
+			session.markClosing()
+			return true
+		}
+		agent.idle(0)
 	}
 	return false
 }

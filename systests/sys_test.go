@@ -56,7 +56,11 @@ func (suite *SysTestSuite) SetupTest() {
 }
 
 func (suite *SysTestSuite) TearDownTest() {
+	if suite.mediaDriver == nil {
+		return // SetupTest skipped
+	}
 	suite.mediaDriver.StopMediaDriver()
+	suite.mediaDriver = nil
 }
 
 func (suite *SysTestSuite) send(n int, pub *aeron.Publication) {
