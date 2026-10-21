@@ -36,14 +36,14 @@ func newTestLog(t testing.TB, termLength, initialTermID, mtu int32) *testLog {
 	buf := atomic.MakeBuffer(ptr, logbuffer.LogMetaDataLength)
 	var meta logbuffer.LogBufferMetaData
 	meta.Wrap(buf, 0)
-	meta.TermLen.Set(termLength)
-	meta.MTULen.Set(mtu)
-	meta.InitTermID.Set(initialTermID)
-	meta.PageSize.Set(4096)
-	meta.IsConnected.Set(1)
-	meta.TailCounter[0].Set(int64(initialTermID) << 32)
+	meta.SetTermLength(termLength)
+	meta.SetMtuLength(mtu)
+	meta.SetInitialTermID(initialTermID)
+	meta.SetPageSize(4096)
+	meta.SetIsConnected(true)
+	meta.SetRawTail(0, int64(initialTermID)<<32)
 	for i := 1; i < logbuffer.PartitionCount; i++ {
-		meta.TailCounter[i].Set(int64(initialTermID+int32(i)-logbuffer.PartitionCount) << 32)
+		meta.SetRawTail(int32(i), int64(initialTermID+int32(i)-logbuffer.PartitionCount)<<32)
 	}
 	hdr := meta.DefaultFrameHeader.Get()
 	hdr.PutUInt8(logbuffer.DataFrameHeader.VersionFieldOffset, 0)
@@ -353,7 +353,7 @@ func TestBackPressureAndNotConnected(t *testing.T) {
 	pub := newTestPublication(t, l, 0)
 	msg := bufOf(make([]byte, 64))
 	assert.Equal(t, BackPressured, pub.Offer(msg, 0, 64, nil))
-	l.lb.Meta().IsConnected.Set(0)
+	l.lb.Meta().SetIsConnected(false)
 	assert.Equal(t, NotConnected, pub.Offer(msg, 0, 64, nil))
 	var claim BufferClaim
 	assert.Equal(t, NotConnected, pub.TryClaim(10, &claim))
@@ -361,7 +361,7 @@ func TestBackPressureAndNotConnected(t *testing.T) {
 	ex := newTestExclusivePublication(t, l, 0)
 	assert.Equal(t, NotConnected, ex.Offer(msg, 0, 64, nil))
 	assert.Equal(t, NotConnected, ex.AppendPadding(64))
-	l.lb.Meta().IsConnected.Set(1)
+	l.lb.Meta().SetIsConnected(true)
 	assert.Equal(t, BackPressured, ex.Offer(msg, 0, 64, nil))
 }
 
