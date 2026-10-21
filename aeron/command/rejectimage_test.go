@@ -23,17 +23,19 @@ import (
 
 func TestRejectImageMessageLayout(t *testing.T) {
 	reason := "bad data"
-	buf := atomic.MakeBuffer(make([]byte, RejectImageMessageMinLength+len(reason)))
+	length := ComputeRejectImageMessageLength(len(reason))
+	buf := atomic.MakeBuffer(make([]byte, length))
 	var m RejectImageMessage
 	m.Wrap(buf, 0)
-	m.ClientID.Set(1)
-	m.CorrelationID.Set(2)
-	m.ImageCorrelationID.Set(3)
-	m.Position.Set(4096)
-	m.Reason.Set(reason)
+	m.SetClientID(1)
+	m.SetCorrelationID(2)
+	m.SetImageCorrelationID(3)
+	m.SetPosition(4096)
+	m.SetReason(reason)
 
 	require.Equal(t, int32(0x10), RejectImage)
-	require.Equal(t, RejectImageMessageMinLength+len(reason), m.Size())
+	require.Equal(t, int32(36+len(reason)), length)
+	require.Equal(t, length, m.Length())
 	require.Equal(t, int64(1), buf.GetInt64(0))
 	require.Equal(t, int64(2), buf.GetInt64(8))
 	require.Equal(t, int64(3), buf.GetInt64(16))
