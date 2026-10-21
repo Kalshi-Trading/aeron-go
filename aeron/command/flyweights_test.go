@@ -63,10 +63,10 @@ func (s *FlyweightsTestSuite) TestCounterMessageLabelBuffer() {
 
 	s.Assert().EqualValues(9, s.flyweight.key.Length())
 	s.Assert().EqualValues(21, s.flyweight.label.Length())
-	// Expected is sizes of: long, long, int, length field, keyCopySize
-	s.Assert().EqualValues(8+8+4+4+keyCopySize, s.flyweight.getLabelOffset())
+	// Expected is sizes of: long, long, int, length field, keyCopySize aligned to 4 bytes (Java alignment)
+	s.Assert().EqualValues(8+8+4+4+12, s.flyweight.getLabelOffset())
 	// Above, plus label length and size
-	s.Assert().EqualValues(8+8+4+4+keyCopySize+4+labelCopySize, s.flyweight.Size())
+	s.Assert().EqualValues(8+8+4+4+12+4+labelCopySize, s.flyweight.Size())
 }
 
 func (s *FlyweightsTestSuite) TestCounterMessageLabelString() {
