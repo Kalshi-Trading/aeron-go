@@ -15,6 +15,10 @@ Example subscriber can be found [here](https://github.com/lirm/aeron-go/tree/mas
 
 Example publication can be found [here](https://github.com/lirm/aeron-go/tree/master/examples/basic_publisher).
 
+The full set of ported Java samples (throughput, ping/pong, AeronStat/ErrorStat/LossStat/BacklogStat,
+archive record/replay, cluster echo client) is listed in [examples/README.md](examples/README.md); a
+public API audit against Java 1.53.3 is in [docs/API_AUDIT.md](docs/API_AUDIT.md).
+
 ## Common
 
 Instantiate Aeron with Context:
@@ -28,17 +32,19 @@ a := aeron.Connect(ctx)
 
 Create subscription:
 ```go
-subscription := <-a.AddSubscription("aeron:ipc", 10)
-
+subscription, err := a.AddSubscription("aeron:ipc", 10)
+if err != nil {
+    log.Fatal(err)
+}
 defer subscription.Close()
 ```
 
-`aeron.AddSubscription()` returns a channel, so that the user has the choice
-of blocking waiting for subscription to register with the driver or do async `select` poll.
+`aeron.AddSubscription()` blocks until the driver has registered the subscription. Use
+`AsyncAddSubscription()` + `GetSubscription()` to poll for registration without blocking.
 
 Define callback for message processing:
 ```go
-handler := func(buffer *buffers.Atomic, offset int32, length int32, header *logbuffer.Header) {
+handler := func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
     bytes := buffer.GetBytesArray(offset, length)
 
     fmt.Printf("Received a fragment with payload: %s\n", string(bytes))
@@ -47,7 +53,7 @@ handler := func(buffer *buffers.Atomic, offset int32, length int32, header *logb
 
 Poll for messages:
 ```go
-idleStrategy := idlestrategy.Sleeping{time.Millisecond}
+idleStrategy := idlestrategy.Sleeping{SleepFor: time.Millisecond}
 
 for {
     fragmentsRead := subscription.Poll(handler, 10)
@@ -59,19 +65,21 @@ for {
 
 Create publication:
 ```go
-publication := <-a.AddPublication("aeron:ipc", 10)
-
+publication, err := a.AddPublication("aeron:ipc", 10)
+if err != nil {
+    log.Fatal(err)
+}
 defer publication.Close()
 ```
 
-`aeron.AddPublication()` returns a channel, so that the user has the choice
-of blocking waiting for publication to register with the driver or do async `select` poll.
+`aeron.AddPublication()` blocks until the driver has registered the publication. Use
+`AsyncAddPublication()` + `GetPublication()` to poll for registration without blocking.
 
 Create Aeron buffer to send the message:
 ```go
 message := fmt.Sprintf("this is a message %d", counter)
 
-srcBuffer := buffers.MakeAtomic(([]byte)(message))
+srcBuffer := atomic.MakeBuffer(([]byte)(message))
 ```
 
 Optionally make sure that there are connected subscriptions:
