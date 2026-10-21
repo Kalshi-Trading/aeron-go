@@ -14,10 +14,6 @@
 
 package codecs
 
-import (
-	"bytes"
-)
-
 // ReplicateRequest2Params holds every field of the ReplicateRequest2 message (schema v14). Java's
 // ArchiveProxy sends all replicate and taggedReplicate variants through this message.
 type ReplicateRequest2Params struct {
@@ -55,13 +51,16 @@ func ReplicateRequest2FullPacket(marshaller *SbeGoMarshaller, rangeChecking bool
 	request.EncodedCredentials = params.EncodedCredentials
 	request.SrcResponseChannel = []uint8(params.SrcResponseChannel)
 
-	header := MessageHeader{BlockLength: request.SbeBlockLength(), TemplateId: request.SbeTemplateId(), SchemaId: request.SbeSchemaId(), Version: request.SbeSchemaVersion()}
-	buffer := new(bytes.Buffer)
-	if err := header.Encode(marshaller, buffer); err != nil {
-		return nil, err
+	return encodePacket(marshaller, rangeChecking, &request)
+}
+
+// UpdateChannelRequestPacket encodes an UpdateChannelRequest (Java ArchiveProxy.updateChannel).
+func UpdateChannelRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64, channel string) ([]byte, error) {
+	request := UpdateChannelRequest{
+		ControlSessionId: controlSessionId,
+		CorrelationId:    correlationId,
+		RecordingId:      recordingId,
+		Channel:          []uint8(channel),
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
-		return nil, err
-	}
-	return buffer.Bytes(), nil
+	return encodePacket(marshaller, rangeChecking, &request)
 }

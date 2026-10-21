@@ -56,11 +56,13 @@ func (loader *snapshotLoader) onControlledFragment(
 	return term.ControlledPollActionContinue
 }
 
+const snapshotLoaderFragmentLimit = 10
+
 func (loader *snapshotLoader) poll() int {
 	if loader.isDone {
 		return 0
 	}
-	return loader.img.ControlledPoll(loader.assembler.OnFragment, 1)
+	return loader.img.ControlledPoll(loader.assembler.OnFragment, snapshotLoaderFragmentLimit)
 }
 
 func (loader *snapshotLoader) onFragment(
@@ -114,6 +116,8 @@ func (loader *snapshotLoader) onFragment(
 				loader.inSnapshot = false
 				loader.isDone = true
 			}
+		} else if marker.Mark == codecs.SnapshotMark.SECTION || marker.Mark == codecs.SnapshotMark.NullValue {
+			// Java ServiceSnapshotLoader ignores SECTION and NULL_VAL marks.
 		} else {
 			loader.err = fmt.Errorf("unexpected snapshot mark, pos=%d inSnapshot=%v mark=%v", header.Position(), loader.inSnapshot, marker.Mark)
 			loader.isDone = true
