@@ -23,6 +23,7 @@ import (
 	"github.com/lirm/aeron-go/aeron"
 	aatomic "github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
+	"github.com/lirm/aeron-go/aeron/logbuffer/term"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,9 +63,20 @@ func udp() *aeron.ChannelUriStringBuilder {
 	return aeron.NewChannelUriStringBuilder().Media(aeron.UdpMedia)
 }
 
-func addPub(t *testing.T, a *aeron.Aeron, channel string, streamID int32, exclusive bool) *aeron.Publication {
+// e2ePub is the surface shared by *aeron.Publication and *aeron.ExclusivePublication used by these tests.
+type e2ePub interface {
+	Channel() string
+	SessionID() int32
+	InitialTermID() int32
+	IsConnected() bool
+	Position() int64
+	Offer(buffer *aatomic.Buffer, offset int32, length int32, reservedValueSupplier term.ReservedValueSupplier) int64
+	Close() error
+}
+
+func addPub(t *testing.T, a *aeron.Aeron, channel string, streamID int32, exclusive bool) e2ePub {
 	t.Helper()
-	var pub *aeron.Publication
+	var pub e2ePub
 	var err error
 	if exclusive {
 		pub, err = a.AddExclusivePublication(channel, streamID)
@@ -98,7 +110,7 @@ func awaitTrue(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-func offerN(t *testing.T, pub *aeron.Publication, prefix string, n int) {
+func offerN(t *testing.T, pub e2ePub, prefix string, n int) {
 	t.Helper()
 	for i := 0; i < n; i++ {
 		msg := []byte(fmt.Sprintf("%s-%d", prefix, i))
