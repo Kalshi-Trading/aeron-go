@@ -100,7 +100,7 @@ func NewChannelUriStringBuilderFromString(uri string) (*ChannelUriStringBuilder,
 
 // NewChannelUriStringBuilderFromUri returns a builder initialised from all known parameters of an existing
 // ChannelUri. Unknown parameters are dropped.
-func NewChannelUriStringBuilderFromUri(channelUri *ChannelUri) (*ChannelUriStringBuilder, error) {
+func NewChannelUriStringBuilderFromUri(channelUri ChannelUri) (*ChannelUriStringBuilder, error) {
 	b := NewChannelUriStringBuilder().Prefix(channelUri.Prefix()).Media(channelUri.Media())
 	b.CopyFrom(channelUri, channelUriBuilderParams...)
 	if b.err != nil {
@@ -743,7 +743,7 @@ func (b *ChannelUriStringBuilder) GetPublicationWindowLength() (int32, bool) {
 }
 
 // CopyFrom copies the given params from channelUri using SetParam, unsetting any that are absent from channelUri.
-func (b *ChannelUriStringBuilder) CopyFrom(channelUri *ChannelUri, paramNames ...string) *ChannelUriStringBuilder {
+func (b *ChannelUriStringBuilder) CopyFrom(channelUri ChannelUri, paramNames ...string) *ChannelUriStringBuilder {
 	for _, name := range paramNames {
 		if value, ok := channelUri.Lookup(name); ok {
 			b.SetParam(name, value)

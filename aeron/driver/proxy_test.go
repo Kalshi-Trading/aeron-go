@@ -155,7 +155,7 @@ func TestProxyEncodesEveryCommand(t *testing.T) {
 	id, err = p.AddCounter(1001, key, 1, 5, label, 2, 13)
 	require.NoError(t, err)
 	r = f.read(t)
-	assert.Equal(t, command.AddCounter, r.msgTypeID)
+	assert.Equal(t, int32(command.AddCounter), r.msgTypeID)
 	var ctr command.CounterMessage
 	ctr.Wrap(r.buffer, r.offset)
 	assert.Equal(t, id, ctr.CorrelationID())
@@ -198,7 +198,7 @@ func TestProxyEncodesEveryCommand(t *testing.T) {
 
 	require.NoError(t, p.ClientClose())
 	r = f.read(t)
-	assert.Equal(t, command.ClientClose, r.msgTypeID)
+	assert.Equal(t, int32(command.ClientClose), r.msgTypeID)
 	var cm command.CorrelatedMessage
 	cm.Wrap(r.buffer, r.offset)
 	assert.Equal(t, int64(42), cm.ClientID())
@@ -430,7 +430,7 @@ func TestListenerAdapterDispatch(t *testing.T) {
 	assert.Equal(t, []interface{}{int32(4), int32(3), int32(5), int32(6), "log", int64(1), int64(2)}, listener.args[0])
 	assert.Equal(t, []interface{}{int32(12), int32(11), "image.log", "127.0.0.1:1234", int32(14), int64(13),
 		int64(10)}, listener.args[2])
-	assert.Equal(t, []interface{}{int64(50), command.ErrorCodeInvalidChannel, "bad channel"}, listener.args[6])
+	assert.Equal(t, []interface{}{int64(50), int32(command.ErrorCodeInvalidChannel), "bad channel"}, listener.args[6])
 	pubErr := listener.args[12].([]interface{})[0].(command.PublicationError)
 	assert.Equal(t, int64(90), pubErr.RegistrationID)
 	assert.Equal(t, "127.0.0.1:9999", pubErr.SourceAddress.String())
@@ -472,5 +472,5 @@ func TestListenerAdapterRoutesOnErrorByCodeOnly(t *testing.T) {
 	er.SetErrorMessage("java.net.BindException: Address already in use")
 	adapter.OnMessage(command.OnError, buf, off, er.Length())
 	require.Equal(t, []string{"OnErrorResponse"}, listener.calls)
-	assert.Equal(t, []interface{}{int64(7), command.ErrorCodeGenericError, "java.net.BindException: Address already in use"}, listener.args[0])
+	assert.Equal(t, []interface{}{int64(7), int32(command.ErrorCodeGenericError), "java.net.BindException: Address already in use"}, listener.args[0])
 }

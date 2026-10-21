@@ -88,11 +88,49 @@ const (
 //
 // Multiple params with the same key are allowed, the last value specified takes precedence. Parameters are kept in
 // the order they were first inserted so that String() round-trips a parsed URI.
+//
+// ChannelUri has value semantics like upstream lirm/aeron-go: copies share their parameters (Set and Remove on a
+// copy are visible through the original), while prefix and media are per copy. Use Clone for an independent copy.
+// Obtain values from ParseChannelUri or NewChannelUri; Set on a zero ChannelUri panics, as upstream did.
 type ChannelUri struct {
 	prefix string
 	media  string
+	params *uriParams
+}
+
+// uriParams holds the parameters and their insertion order behind a pointer so value-receiver Set/Remove mutate the
+// shared state.
+type uriParams struct {
 	keys   []string
-	params map[string]string
+	values map[string]string
+}
+
+func newUriParams() *uriParams {
+	return &uriParams{values: make(map[string]string)}
+}
+
+func (p *uriParams) len() int {
+	if p == nil {
+		return 0
+	}
+	return len(p.values)
+}
+
+func (p *uriParams) lookup(key string) (string, bool) {
+	if p == nil {
+		return "", false
+	}
+	v, ok := p.values[key]
+	return v, ok
+}
+
+func (p *uriParams) put(key string, value string) string {
+	prev, ok := p.values[key]
+	if !ok {
+		p.keys = append(p.keys, key)
+	}
+	p.values[key] = value
+	return prev
 }
 
 type parseState int8
@@ -104,29 +142,29 @@ const (
 )
 
 // NewChannelUri creates an empty ChannelUri for the given prefix (may be empty) and media.
-func NewChannelUri(prefix string, media string) (*ChannelUri, error) {
+func NewChannelUri(prefix string, media string) (ChannelUri, error) {
 	if err := validateMedia(media); err != nil {
-		return nil, err
+		return ChannelUri{}, err
 	}
-	return &ChannelUri{prefix: prefix, media: media, params: make(map[string]string)}, nil
+	return ChannelUri{prefix: prefix, media: media, params: newUriParams()}, nil
 }
 
 // ParseChannelUri parses a string which contains an Aeron URI.
-func ParseChannelUri(uriStr string) (*ChannelUri, error) {
+func ParseChannelUri(uriStr string) (ChannelUri, error) {
 	if uriLength := utf16Length(uriStr); uriLength > MaxUriLength {
-		return nil, fmt.Errorf("URI length (%d) exceeds max supported length (%d): %s",
+		return ChannelUri{}, fmt.Errorf("URI length (%d) exceeds max supported length (%d): %s",
 			uriLength, MaxUriLength, utf16Prefix(uriStr, MaxUriLength))
 	}
 	length := len(uriStr)
 
-	uri := &ChannelUri{params: make(map[string]string)}
+	uri := ChannelUri{params: newUriParams()}
 	position := 0
 	if strings.HasPrefix(uriStr, SpyPrefix) {
 		uri.prefix = SpyQualifier
 		position = len(SpyPrefix)
 	}
 	if !strings.HasPrefix(uriStr[position:], AeronPrefix) {
-		return nil, fmt.Errorf("Aeron URIs must start with 'aeron:', found: %s", uriStr)
+		return ChannelUri{}, fmt.Errorf("Aeron URIs must start with 'aeron:', found: %s", uriStr)
 	}
 	position += len(AeronPrefix)
 
@@ -144,7 +182,7 @@ func ParseChannelUri(uriStr string) (*ChannelUri, error) {
 				sb.Reset()
 				state = parseStateParamsKey
 			case ':', '|', '=':
-				return nil, fmt.Errorf("encountered '%c' within media definition at index %d in %s", c, i, uriStr)
+				return ChannelUri{}, fmt.Errorf("encountered '%c' within media definition at index %d in %s", c, i, uriStr)
 			default:
 				sb.WriteByte(c)
 			}
@@ -152,13 +190,13 @@ func ParseChannelUri(uriStr string) (*ChannelUri, error) {
 			switch c {
 			case '=':
 				if sb.Len() == 0 {
-					return nil, fmt.Errorf("empty key not allowed at index %d in %s", i, uriStr)
+					return ChannelUri{}, fmt.Errorf("empty key not allowed at index %d in %s", i, uriStr)
 				}
 				key = sb.String()
 				sb.Reset()
 				state = parseStateParamsValue
 			case '|':
-				return nil, fmt.Errorf("invalid end of key at index %d in %s", i, uriStr)
+				return ChannelUri{}, fmt.Errorf("invalid end of key at index %d in %s", i, uriStr)
 			default:
 				sb.WriteByte(c)
 			}
@@ -177,12 +215,12 @@ func ParseChannelUri(uriStr string) (*ChannelUri, error) {
 	case parseStateMedia:
 		uri.media = sb.String()
 		if err := validateMedia(uri.media); err != nil {
-			return nil, err
+			return ChannelUri{}, err
 		}
 	case parseStateParamsValue:
 		uri.Put(key, sb.String())
 	default:
-		return nil, fmt.Errorf("no more input found, state=PARAMS_KEY in %s", uriStr)
+		return ChannelUri{}, fmt.Errorf("no more input found, state=PARAMS_KEY in %s", uriStr)
 	}
 	return uri, nil
 }
@@ -216,7 +254,7 @@ func utf16Prefix(s string, maxLength int) string {
 }
 
 // MustParseChannelUri is like ParseChannelUri but panics on error.
-func MustParseChannelUri(uriStr string) *ChannelUri {
+func MustParseChannelUri(uriStr string) ChannelUri {
 	uri, err := ParseChannelUri(uriStr)
 	if err != nil {
 		panic(err)
@@ -232,122 +270,114 @@ func validateMedia(media string) error {
 }
 
 // Clone returns a deep copy of a ChannelUri.
-func (uri *ChannelUri) Clone() *ChannelUri {
-	res := &ChannelUri{
-		prefix: uri.prefix,
-		media:  uri.media,
-		keys:   append([]string(nil), uri.keys...),
-		params: make(map[string]string, len(uri.params)),
-	}
-	for k, v := range uri.params {
-		res.params[k] = v
-	}
+func (uri ChannelUri) Clone() ChannelUri {
+	res := ChannelUri{prefix: uri.prefix, media: uri.media, params: newUriParams()}
+	uri.ForEachParameter(func(k, v string) { res.params.put(k, v) })
 	return res
 }
 
 // Scheme always returns "aeron".
-func (uri *ChannelUri) Scheme() string {
+func (uri ChannelUri) Scheme() string {
 	return AeronScheme
 }
 
 // Prefix returns the prefix, e.g. "aeron-spy", or "" if none.
-func (uri *ChannelUri) Prefix() string {
+func (uri ChannelUri) Prefix() string {
 	return uri.prefix
 }
 
 // SetPrefix sets the prefix, e.g. "aeron-spy".
-func (uri *ChannelUri) SetPrefix(prefix string) *ChannelUri {
+func (uri *ChannelUri) SetPrefix(prefix string) {
 	uri.prefix = prefix
-	return uri
 }
 
 // Media returns the media, "udp" or "ipc".
-func (uri *ChannelUri) Media() string {
+func (uri ChannelUri) Media() string {
 	return uri.media
 }
 
-// SetMedia sets the media, which must be "udp" or "ipc".
-func (uri *ChannelUri) SetMedia(media string) error {
-	if err := validateMedia(media); err != nil {
-		return err
-	}
+// SetMedia sets the media. Like upstream it is not validated; String() of an unknown media will not parse.
+func (uri *ChannelUri) SetMedia(media string) {
 	uri.media = media
-	return nil
 }
 
 // IsUdp returns true if the media is "udp".
-func (uri *ChannelUri) IsUdp() bool {
+func (uri ChannelUri) IsUdp() bool {
 	return uri.media == UdpMedia
 }
 
 // IsIpc returns true if the media is "ipc".
-func (uri *ChannelUri) IsIpc() bool {
+func (uri ChannelUri) IsIpc() bool {
 	return uri.media == IpcMedia
 }
 
 // Get returns the value for a key or "" if not present. Use Lookup to distinguish absent from empty.
-func (uri *ChannelUri) Get(key string) string {
-	return uri.params[key]
+func (uri ChannelUri) Get(key string) string {
+	v, _ := uri.params.lookup(key)
+	return v
 }
 
 // GetOrDefault returns the value for a key or defaultValue if not present.
-func (uri *ChannelUri) GetOrDefault(key string, defaultValue string) string {
-	if v, ok := uri.params[key]; ok {
+func (uri ChannelUri) GetOrDefault(key string, defaultValue string) string {
+	if v, ok := uri.params.lookup(key); ok {
 		return v
 	}
 	return defaultValue
 }
 
 // Lookup returns the value for a key and whether it was present.
-func (uri *ChannelUri) Lookup(key string) (string, bool) {
-	v, ok := uri.params[key]
-	return v, ok
+func (uri ChannelUri) Lookup(key string) (string, bool) {
+	return uri.params.lookup(key)
 }
 
-// Put sets a key/value pair, returning the previous value ("" if none).
+// Put sets a key/value pair, returning the previous value ("" if none). Unlike Set it also works on a zero
+// ChannelUri.
 func (uri *ChannelUri) Put(key string, value string) string {
 	if uri.params == nil {
-		uri.params = make(map[string]string)
+		uri.params = newUriParams()
 	}
-	prev, ok := uri.params[key]
-	if !ok {
-		uri.keys = append(uri.keys, key)
-	}
-	uri.params[key] = value
-	return prev
+	return uri.params.put(key, value)
 }
 
-// Set sets a key/value pair. Equivalent to Put ignoring the previous value.
-func (uri *ChannelUri) Set(key string, value string) {
-	uri.Put(key, value)
+// Set sets a key/value pair. Copies of uri share the change. Panics on a zero ChannelUri (use Put).
+func (uri ChannelUri) Set(key string, value string) {
+	if uri.params == nil {
+		panic("aeron: Set on a zero ChannelUri; use ParseChannelUri, NewChannelUri or Put")
+	}
+	uri.params.put(key, value)
 }
 
-// Remove removes a key, returning the previous value ("" if none).
-func (uri *ChannelUri) Remove(key string) string {
-	prev, ok := uri.params[key]
-	if !ok {
-		return ""
+// Remove removes a key. Use Lookup first if the previous value is needed.
+func (uri ChannelUri) Remove(key string) {
+	p := uri.params
+	if p == nil {
+		return
 	}
-	delete(uri.params, key)
-	for i, k := range uri.keys {
+	if _, ok := p.values[key]; !ok {
+		return
+	}
+	delete(p.values, key)
+	for i, k := range p.keys {
 		if k == key {
-			uri.keys = append(uri.keys[:i], uri.keys[i+1:]...)
+			p.keys = append(p.keys[:i], p.keys[i+1:]...)
 			break
 		}
 	}
-	return prev
 }
 
 // ContainsKey returns true if the key is present.
-func (uri *ChannelUri) ContainsKey(key string) bool {
-	_, ok := uri.params[key]
+func (uri ChannelUri) ContainsKey(key string) bool {
+	_, ok := uri.params.lookup(key)
 	return ok
 }
 
 // ForEachParameter calls fn for every parameter in insertion order.
-func (uri *ChannelUri) ForEachParameter(fn func(key, value string)) {
-	for _, k := range uri.keys {
-		fn(k, uri.params[k])
+func (uri ChannelUri) ForEachParameter(fn func(key, value string)) {
+	if uri.params == nil {
+		return
+	}
+	for _, k := range uri.params.keys {
+		fn(k, uri.params.values[k])
 	}
 }
 
@@ -361,8 +391,8 @@ func (uri *ChannelUri) SetSessionID(sessionID int32) {
 	uri.Put(SessionIdParamName, strconv.Itoa(int(sessionID)))
 }
 
-func (uri *ChannelUri) tags() []string {
-	v, ok := uri.params[TagsParamName]
+func (uri ChannelUri) tags() []string {
+	v, ok := uri.params.lookup(TagsParamName)
 	if !ok {
 		return nil
 	}
@@ -370,7 +400,7 @@ func (uri *ChannelUri) tags() []string {
 }
 
 // ChannelTag returns the channel tag (first element of the tags param) or "" if not present.
-func (uri *ChannelUri) ChannelTag() string {
+func (uri ChannelUri) ChannelTag() string {
 	if tags := uri.tags(); len(tags) > 0 {
 		return tags[0]
 	}
@@ -379,7 +409,7 @@ func (uri *ChannelUri) ChannelTag() string {
 
 // EntityTag returns the entity (publication/subscription) tag (second element of the tags param) or "" if not
 // present.
-func (uri *ChannelUri) EntityTag() string {
+func (uri ChannelUri) EntityTag() string {
 	if tags := uri.tags(); len(tags) > 1 {
 		return tags[1]
 	}
@@ -387,31 +417,26 @@ func (uri *ChannelUri) EntityTag() string {
 }
 
 // HasControlModeResponse returns true if control-mode=response.
-func (uri *ChannelUri) HasControlModeResponse() bool {
-	return uri.params[MdcControlModeParamName] == ControlModeResponse
+func (uri ChannelUri) HasControlModeResponse() bool {
+	return uri.Get(MdcControlModeParamName) == ControlModeResponse
 }
 
 // Equals compares prefix, media and parameters (order independent).
-func (uri *ChannelUri) Equals(other *ChannelUri) bool {
-	if uri == other {
-		return true
-	}
-	if uri == nil || other == nil {
+func (uri ChannelUri) Equals(other ChannelUri) bool {
+	if uri.prefix != other.prefix || uri.media != other.media || uri.params.len() != other.params.len() {
 		return false
 	}
-	if uri.prefix != other.prefix || uri.media != other.media || len(uri.params) != len(other.params) {
-		return false
-	}
-	for k, v := range uri.params {
-		if ov, ok := other.params[k]; !ok || ov != v {
-			return false
+	equal := true
+	uri.ForEachParameter(func(k, v string) {
+		if ov, ok := other.params.lookup(k); !ok || ov != v {
+			equal = false
 		}
-	}
-	return true
+	})
+	return equal
 }
 
 // diff returns the differing values between two URIs, keyed by param name (or "prefix"/"media").
-func (uri *ChannelUri) diff(that *ChannelUri) map[string]string {
+func (uri ChannelUri) diff(that ChannelUri) map[string]string {
 	d := make(map[string]string)
 	if uri.prefix != that.prefix {
 		d["prefix"] = uri.prefix + " != " + that.prefix
@@ -419,26 +444,26 @@ func (uri *ChannelUri) diff(that *ChannelUri) map[string]string {
 	if uri.media != that.media {
 		d["media"] = uri.media + " != " + that.media
 	}
-	for k, v := range uri.params {
-		tv, ok := that.params[k]
+	uri.ForEachParameter(func(k, v string) {
+		tv, ok := that.params.lookup(k)
 		if !ok {
 			d[k] = v + " != <nil>"
 		} else if tv != v {
 			d[k] = v + " != " + tv
 		}
-	}
-	for k, tv := range that.params {
-		if _, ok := uri.params[k]; !ok {
+	})
+	that.ForEachParameter(func(k, tv string) {
+		if !uri.ContainsKey(k) {
 			d[k] = "<nil> != " + tv
 		}
-	}
+	})
 	return d
 }
 
 // String renders the URI, with parameters in insertion order.
-func (uri *ChannelUri) String() string {
+func (uri ChannelUri) String() string {
 	var sb strings.Builder
-	sb.Grow(len(uri.params)*20 + 20)
+	sb.Grow(uri.params.len()*20 + 20)
 	if uri.prefix != "" {
 		sb.WriteString(uri.prefix)
 		if !strings.HasSuffix(uri.prefix, ":") {
@@ -447,17 +472,18 @@ func (uri *ChannelUri) String() string {
 	}
 	sb.WriteString(AeronPrefix)
 	sb.WriteString(uri.media)
-	if len(uri.keys) > 0 {
-		sb.WriteByte('?')
-		for i, k := range uri.keys {
-			if i > 0 {
-				sb.WriteByte('|')
-			}
-			sb.WriteString(k)
-			sb.WriteByte('=')
-			sb.WriteString(uri.params[k])
+	first := true
+	uri.ForEachParameter(func(k, v string) {
+		if first {
+			sb.WriteByte('?')
+			first = false
+		} else {
+			sb.WriteByte('|')
 		}
-	}
+		sb.WriteString(k)
+		sb.WriteByte('=')
+		sb.WriteString(v)
+	})
 	return sb.String()
 }
 

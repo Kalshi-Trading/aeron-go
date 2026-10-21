@@ -44,19 +44,19 @@ const (
 	// ClientKeepalive is a keepalive from a client.
 	ClientKeepalive int32 = 0x06
 	// AddDestination adds a destination to an existing Publication.
-	AddDestination int32 = 0x07
+	AddDestination = 0x07
 	// RemoveDestination removes a destination from an existing Publication.
-	RemoveDestination int32 = 0x08
+	RemoveDestination = 0x08
 	// AddCounter adds a Counter.
-	AddCounter int32 = 0x09
+	AddCounter = 0x09
 	// RemoveCounter removes a Counter.
-	RemoveCounter int32 = 0x0A
+	RemoveCounter = 0x0A
 	// ClientClose closes indication from a client.
-	ClientClose int32 = 0x0B
+	ClientClose = 0x0B
 	// AddRcvDestination adds a destination for an existing Subscription.
-	AddRcvDestination int32 = 0x0C
+	AddRcvDestination = 0x0C
 	// RemoveRcvDestination removes a destination for an existing Subscription.
-	RemoveRcvDestination int32 = 0x0D
+	RemoveRcvDestination = 0x0D
 	// TerminateDriver requests the driver to terminate.
 	TerminateDriver int32 = 0x0E
 	// AddStaticCounter adds a static Counter (one with a fixed registration id).
@@ -99,24 +99,24 @@ const (
 	OnNextAvailableSessionID int32 = 0x0F0D
 )
 
-// Error codes sent by the media driver in an ErrorResponse (io.aeron.ErrorCode).
+// Error codes sent by the media driver in an ErrorResponse (io.aeron.ErrorCode). Untyped, as upstream lirm/aeron-go.
 const (
-	ErrorCodeUnknownCodeValue               int32 = -1
-	ErrorCodeUnused                         int32 = 0
-	ErrorCodeInvalidChannel                 int32 = 1
-	ErrorCodeUnknownSubscription            int32 = 2
-	ErrorCodeUnknownPublication             int32 = 3
-	ErrorCodeChannelEndpointError           int32 = 4
-	ErrorCodeUnknownCounter                 int32 = 5
-	ErrorCodeUnknownCommandTypeID           int32 = 6
-	ErrorCodeMalformedCommand               int32 = 7
-	ErrorCodeNotSupported                   int32 = 8
-	ErrorCodeUnknownHost                    int32 = 9
-	ErrorCodeResourceTemporarilyUnavailable int32 = 10
-	ErrorCodeGenericError                   int32 = 11
-	ErrorCodeStorageSpace                   int32 = 12
-	ErrorCodeImageRejected                  int32 = 13
-	ErrorCodePublicationRevoked             int32 = 14
+	ErrorCodeUnknownCodeValue               = -1
+	ErrorCodeUnused                         = 0
+	ErrorCodeInvalidChannel                 = 1
+	ErrorCodeUnknownSubscription            = 2
+	ErrorCodeUnknownPublication             = 3
+	ErrorCodeChannelEndpointError           = 4
+	ErrorCodeUnknownCounter                 = 5
+	ErrorCodeUnknownCommandTypeID           = 6
+	ErrorCodeMalformedCommand               = 7
+	ErrorCodeNotSupported                   = 8
+	ErrorCodeUnknownHost                    = 9
+	ErrorCodeResourceTemporarilyUnavailable = 10
+	ErrorCodeGenericError                   = 11
+	ErrorCodeStorageSpace                   = 12
+	ErrorCodeImageRejected                  = 13
+	ErrorCodePublicationRevoked             = 14
 )
 
 // ErrorCodeName returns the Java ErrorCode name for a code value, or "UNKNOWN_CODE_VALUE".

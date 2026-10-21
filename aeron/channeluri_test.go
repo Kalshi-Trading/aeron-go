@@ -123,15 +123,32 @@ func TestChannelUriCloneIsDeep(t *testing.T) {
 
 func TestChannelUriPutRemove(t *testing.T) {
 	uri := MustParseChannelUri("aeron:udp?endpoint=a:1|ttl=3|mtu=8k")
-	assert.Equal(t, "3", uri.Remove("ttl"))
-	assert.Equal(t, "", uri.Remove("ttl"))
+	uri.Remove("ttl")
+	assert.False(t, uri.ContainsKey("ttl"))
+	uri.Remove("ttl")
 	assert.Equal(t, "a:1", uri.Put("endpoint", "b:2"))
 	assert.Equal(t, "", uri.Put("alias", "x"))
 	assert.Equal(t, "aeron:udp?endpoint=b:2|mtu=8k|alias=x", uri.String())
-	require.NoError(t, uri.SetMedia("ipc"))
-	assert.Error(t, uri.SetMedia("tcp"))
+	uri.SetMedia("ipc")
 	uri.SetPrefix(SpyQualifier)
 	assert.Equal(t, "aeron-spy:aeron:ipc?endpoint=b:2|mtu=8k|alias=x", uri.String())
+}
+
+func TestChannelUriValueCopiesShareParams(t *testing.T) {
+	uri := MustParseChannelUri("aeron:udp?endpoint=a:1|ttl=3")
+	cp := uri
+	cp.Set("mtu", "8k")
+	cp.Remove("ttl")
+	assert.Equal(t, "aeron:udp?endpoint=a:1|mtu=8k", uri.String())
+	cp.SetMedia("ipc")
+	assert.Equal(t, "udp", uri.Media())
+
+	var zero ChannelUri
+	assert.Equal(t, "", zero.Get("x"))
+	zero.Remove("x")
+	assert.Panics(t, func() { zero.Set("x", "y") })
+	zero.Put("x", "y")
+	assert.Equal(t, "y", zero.Get("x"))
 }
 
 func TestChannelUriEquality(t *testing.T) {
@@ -155,7 +172,7 @@ func TestChannelUriEquality(t *testing.T) {
 	}
 	uri := MustParseChannelUri("aeron:ipc")
 	assert.True(t, uri.Equals(uri))
-	assert.False(t, uri.Equals(nil))
+	assert.False(t, uri.Equals(ChannelUri{}))
 }
 
 func TestChannelUriCreateDestinationUri(t *testing.T) {
