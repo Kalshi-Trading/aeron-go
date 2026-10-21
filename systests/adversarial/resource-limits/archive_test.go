@@ -112,8 +112,16 @@ func TestArchiveDiskFull(t *testing.T) {
 	err = arch.PurgeRecording(recs[0].RecordingId)
 	require.NoError(t, err)
 
-	_, err = arch.StartRecording(channel, stream+1, true, false)
-	require.NoError(t, err)
+	// As in Java, the archive answers the purge once it has queued the segment files for deletion and deletes them
+	// over later duty cycles, so the space comes back shortly after PurgeRecording returns.
+	awaitTrue(t, "StartRecording once the purged segments are deleted", 10*time.Second, func() bool {
+		_, err = arch.StartRecording(channel, stream+1, true, false)
+		if errors.As(err, &ae) && ae.ErrorCode == archive.ErrorCodeStorageSpace {
+			return false
+		}
+		require.NoError(t, err)
+		return true
+	})
 	pub2, err := arch.AddExclusivePublication(channel, stream+1)
 	require.NoError(t, err)
 	awaitTrue(t, "recording resumed", 10*time.Second, func() bool { return pub2.IsConnected() })
