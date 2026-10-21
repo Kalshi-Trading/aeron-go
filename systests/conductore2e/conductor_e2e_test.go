@@ -127,7 +127,7 @@ func TestAsyncAddsAndData(t *testing.T) {
 
 	sub := await(t, "subscription", func() (*aeron.Subscription, error) { return a.GetSubscription(subID) })
 	pub := await(t, "publication", func() (*aeron.Publication, error) { return a.GetPublication(pubID) })
-	ex := await(t, "exclusive publication", func() (*aeron.Publication, error) { return a.GetExclusivePublication(exID) })
+	ex := await(t, "exclusive publication", func() (*aeron.ExclusivePublication, error) { return a.GetExclusivePublication(exID) })
 	require.False(t, a.IsCommandActive(subID))
 	require.NotEqual(t, ex.SessionID(), int32(0))
 

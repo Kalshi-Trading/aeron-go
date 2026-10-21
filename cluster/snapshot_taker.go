@@ -14,12 +14,12 @@ const snapshotTypeId = 2
 type snapshotTaker struct {
 	marshaller  *codecs.SbeGoMarshaller // currently shared as we're not reentrant (but could be here)
 	options     *Options
-	publication *aeron.Publication
+	publication aeron.Publisher
 }
 
 func newSnapshotTaker(
 	options *Options,
-	publication *aeron.Publication,
+	publication aeron.Publisher,
 ) *snapshotTaker {
 	return &snapshotTaker{
 		marshaller:  codecs.NewSbeGoMarshaller(),

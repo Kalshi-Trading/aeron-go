@@ -18,322 +18,214 @@ limitations under the License.
 package aeron
 
 import (
-	"fmt"
-
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/lirm/aeron-go/aeron/logbuffer/term"
-	"github.com/lirm/aeron-go/aeron/logging"
-	"github.com/lirm/aeron-go/aeron/util"
 )
 
+// Offer/TryClaim result codes. Values match io.aeron.Publication.
 const (
-	// NotConnected indicates that this Publication is not connected to the driver
+	// NotConnected indicates that the publication is not connected to a subscriber (NOT_CONNECTED).
 	NotConnected int64 = -1
-	// BackPressured indicates that sending ring buffer is full
+	// BackPressured indicates that the offer failed due to back pressure from subscribers (BACK_PRESSURED).
 	BackPressured int64 = -2
-	// AdminAction indicates that terms needs to be rotated. User should retry the Offer
+	// AdminAction indicates that the offer failed due to an administration action (e.g. log rotation) and should be
+	// retried (ADMIN_ACTION).
 	AdminAction int64 = -3
-	// PublicationClosed indicates that this Publication is closed and no further Offers shall succeed
+	// PublicationClosed indicates that the Publication has been closed (CLOSED).
 	PublicationClosed int64 = -4
-	// MaxPositionExceeded indicates that ...
+	// MaxPositionExceeded indicates that the offer would exceed the maximum possible position for the stream
+	// (MAX_POSITION_EXCEEDED).
 	MaxPositionExceeded int64 = -5
 )
 
-// Publication is a sender structure
+// Publication is a concurrent publication (io.aeron.ConcurrentPublication): safe for use by multiple goroutines.
+// Space in the log is reserved with an atomic add on the term tail.
 type Publication struct {
-	conductor                *ClientConductor
-	channel                  string
-	regID                    int64
-	originalRegID            int64
-	maxPossiblePosition      int64
-	streamID                 int32
-	sessionID                int32
-	initialTermID            int32
-	maxPayloadLength         int32
-	maxMessageLength         int32
-	positionBitsToShift      int32
-	pubLimit                 Position
-	channelStatusIndicatorID int32
-
-	isClosed atomic.Bool
-	metaData *logbuffer.LogBufferMetaData
+	publicationBase
 
 	appenders [logbuffer.PartitionCount]*term.Appender
 }
 
 // NewPublication is a factory method create new publications
 func NewPublication(logBuffers *logbuffer.LogBuffers) *Publication {
-	termBufferCapacity := logBuffers.Buffer(0).Capacity()
-
 	pub := new(Publication)
-	pub.metaData = logBuffers.Meta()
-	pub.initialTermID = pub.metaData.InitTermID.Get()
-	pub.maxPayloadLength = pub.metaData.MTULen.Get() - logbuffer.DataFrameHeader.Length
-	pub.maxMessageLength = logbuffer.ComputeMaxMessageLength(termBufferCapacity)
-	pub.positionBitsToShift = int32(util.NumberOfTrailingZeroes(uint32(termBufferCapacity)))
-	pub.maxPossiblePosition = int64(termBufferCapacity) * (1 << 31)
-
-	pub.isClosed.Set(false)
-
+	pub.init(logBuffers)
 	for i := 0; i < logbuffer.PartitionCount; i++ {
-		appender := term.MakeAppender(logBuffers, i)
-		logger.Debugf("TermAppender[%d]: %v", i, appender)
-		pub.appenders[i] = appender
+		pub.appenders[i] = term.MakeAppender(logBuffers, i)
 	}
-
 	return pub
 }
 
-// ChannelStatusID returns the counter used to represent the channel status
-// for this publication.
-func (pub *Publication) ChannelStatusID() int32 {
-	return pub.channelStatusIndicatorID
-}
-
-// RegistrationID returns the registration id.
-func (pub *Publication) RegistrationID() int64 {
-	return pub.regID
-}
-
-// OriginalRegistrationID returns the original registration id.
-func (pub *Publication) OriginalRegistrationID() int64 {
-	return pub.originalRegID
-}
-
-// Channel returns the media address for delivery to the channel.
-func (pub *Publication) Channel() string {
-	return pub.channel
-}
-
-// StreamID returns Stream identity for scoping within the channel media address.
-func (pub *Publication) StreamID() int32 {
-	return pub.streamID
-}
-
-// SessionID returns the session id for this publication.
-func (pub *Publication) SessionID() int32 {
-	return pub.sessionID
-}
-
-// InitialTermID returns the initial term id assigned when this publication was
-// created. This can be used to determine how many terms have passed since
-// creation.
-func (pub *Publication) InitialTermID() int32 {
-	return pub.initialTermID
-}
-
-// IsConnected returns whether this publication is connected to the driver (not whether it has any Subscriptions)
-func (pub *Publication) IsConnected() bool {
-	return !pub.IsClosed() && pub.metaData.IsConnected()
-}
-
-// IsClosed returns whether this Publication has been closed
-func (pub *Publication) IsClosed() bool {
-	return pub.isClosed.Get()
-}
-
-// IsOriginal return true if this instance is the first added otherwise false.
-func (pub *Publication) IsOriginal() bool {
-	return pub.originalRegID == pub.regID
-}
-
-// Close will close this publication with the driver. This is a blocking call.
-func (pub *Publication) Close() error {
-	// FIXME Why can pub be nil?!
-	if pub != nil && pub.isClosed.CompareAndSet(false, true) {
-		return pub.conductor.releasePublication(pub.regID)
-	}
-
-	return nil
-}
-
-// Position returns the current position to which the publication has advanced
-// for this stream or PublicationClosed if closed.
+// Position returns the current position to which the publication has advanced for this stream, or
+// PublicationClosed if closed.
 func (pub *Publication) Position() int64 {
 	if pub.IsClosed() {
 		return PublicationClosed
 	}
-
-	// Spelled out for clarity, the compiler will optimize
-	termCount := pub.metaData.ActiveTermCountOff.Get()
-	termIndex := termCount % logbuffer.PartitionCount
-	termAppender := pub.appenders[termIndex]
-	rawTail := termAppender.RawTail()
-	termOffset := rawTail & 0xFFFFFFFF
-	termId := logbuffer.TermID(rawTail)
-
-	return computeTermBeginPosition(termId, pub.positionBitsToShift, pub.initialTermID) + termOffset
+	rawTail := pub.rawTailVolatile(pub.activeTermCount() % logbuffer.PartitionCount)
+	termOffset := termOffsetOf(rawTail, pub.termBufferLength)
+	return computeTermBeginPosition(logbuffer.TermID(rawTail), pub.positionBitsToShift, pub.initialTermID) +
+		int64(termOffset)
 }
 
-// Offer is the primary send mechanism on Publication
-func (pub *Publication) Offer(buffer *atomic.Buffer, offset int32, length int32, reservedValueSupplier term.ReservedValueSupplier) int64 {
+// AvailableWindow returns the number of bytes that can be offered before back pressure, or PublicationClosed.
+func (pub *Publication) AvailableWindow() int64 {
 	if pub.IsClosed() {
 		return PublicationClosed
 	}
+	return pub.pubLimit.get() - pub.Position()
+}
 
-	if reservedValueSupplier == nil {
-		reservedValueSupplier = term.DefaultReservedValueSupplier
+func termOffsetOf(rawTail int64, termLength int32) int32 {
+	tail := rawTail & 0xFFFFFFFF
+	if tail > int64(termLength) {
+		return termLength
 	}
+	return int32(tail)
+}
 
+// activeState reads the active term state. ok is false when the term count and tail are out of step, i.e. a
+// rotation is in progress, and the caller must return AdminAction.
+func (pub *Publication) activeState() (termCount int32, appender *term.Appender, position int64, ok bool) {
+	termCount = pub.activeTermCount()
+	index := termCount % logbuffer.PartitionCount
+	appender = pub.appenders[index]
+	rawTail := appender.RawTail()
+	termID := logbuffer.TermID(rawTail)
+	if termCount != termID-pub.initialTermID {
+		return termCount, appender, 0, false
+	}
+	termOffset := termOffsetOf(rawTail, pub.termBufferLength)
+	position = computeTermBeginPosition(termID, pub.positionBitsToShift, pub.initialTermID) + int64(termOffset)
+	return termCount, appender, position, true
+}
+
+// newPosition converts an appender result into a stream position or an error code, rotating the log when the
+// appender tripped the end of the term.
+func (pub *Publication) newPosition(resultingOffset int64, termID int32) int64 {
+	termBeginPosition := computeTermBeginPosition(termID, pub.positionBitsToShift, pub.initialTermID)
+	if resultingOffset > 0 {
+		return termBeginPosition + resultingOffset
+	}
+	if termBeginPosition+int64(pub.termBufferLength) >= pub.maxPossiblePosition {
+		return MaxPositionExceeded
+	}
+	pub.rotateLog(termID-pub.initialTermID, termID)
+	return AdminAction
+}
+
+// Offer a message of length bytes from buffer at offset, fragmenting it if larger than MaxPayloadLength.
+// reservedValueSupplier may be nil. Returns the new stream position or a negative result code
+// (NotConnected, BackPressured, AdminAction, PublicationClosed, MaxPositionExceeded).
+// Panics if length is negative or exceeds MaxMessageLength (Java throws IllegalArgumentException).
+func (pub *Publication) Offer(buffer *atomic.Buffer, offset int32, length int32,
+	reservedValueSupplier term.ReservedValueSupplier) int64 {
+	if pub.IsClosed() {
+		return PublicationClosed
+	}
 	limit := pub.pubLimit.get()
-	termCount := pub.metaData.ActiveTermCountOff.Get()
-	termIndex := termCount % logbuffer.PartitionCount
-	termAppender := pub.appenders[termIndex]
-	rawTail := termAppender.RawTail()
-	termOffset := rawTail & 0xFFFFFFFF
-	termId := logbuffer.TermID(rawTail)
-	position := computeTermBeginPosition(termId, pub.positionBitsToShift, pub.initialTermID) + termOffset
-
-	if termCount != (termId - pub.metaData.InitTermID.Get()) {
+	_, appender, position, ok := pub.activeState()
+	if !ok {
 		return AdminAction
-	}
-
-	if logger.IsEnabledFor(logging.DEBUG) {
-		logger.Debugf("Offering at %d of %d (pubLmt: %v)", position, limit, pub.pubLimit)
 	}
 	if position >= limit {
 		return pub.backPressureStatus(position, length)
 	}
+
 	var resultingOffset int64
+	var termID int32
 	if length <= pub.maxPayloadLength {
-		resultingOffset, termId = termAppender.AppendUnfragmentedMessage(buffer, offset, length, reservedValueSupplier)
+		checkPositiveLength(length)
+		resultingOffset, termID = appender.AppendUnfragmentedMessage(buffer, offset, length, reservedValueSupplier)
 	} else {
 		pub.checkForMaxMessageLength(length)
-		resultingOffset, termId = termAppender.AppendFragmentedMessage(buffer, offset, length, pub.maxPayloadLength, reservedValueSupplier)
+		resultingOffset, termID = appender.AppendFragmentedMessage(buffer, offset, length, pub.maxPayloadLength,
+			reservedValueSupplier)
 	}
-
-	return pub.newPosition(termCount, termOffset, termId, position, resultingOffset)
+	return pub.newPosition(resultingOffset, termID)
 }
 
-// Offer2 attempts to publish a message composed of two parts, e.g. a header and encapsulated payload.
+// Offer2 offers the concatenation of two buffers as one message (Java offer(bufferOne, ..., bufferTwo, ...)).
 func (pub *Publication) Offer2(
 	bufferOne *atomic.Buffer, offsetOne int32, lengthOne int32,
 	bufferTwo *atomic.Buffer, offsetTwo int32, lengthTwo int32,
 	reservedValueSupplier term.ReservedValueSupplier,
 ) int64 {
-	if lengthOne < 0 {
-		logger.Debugf("Offered negative length (lengthOne: %d)", lengthOne)
-		return 0
-	} else if lengthTwo < 0 {
-		logger.Debugf("Offered negative length (lengthTwo: %d)", lengthTwo)
-		return 0
-	}
-	length := lengthOne + lengthTwo
-	if length < 0 {
-		panic(fmt.Sprintf("Length overflow (lengthOne: %d lengthTwo: %d)", lengthOne, lengthTwo))
-	}
 	if pub.IsClosed() {
 		return PublicationClosed
 	}
-
-	if reservedValueSupplier == nil {
-		reservedValueSupplier = term.DefaultReservedValueSupplier
-	}
-
+	length := validateAndComputeLength(lengthOne, lengthTwo)
 	limit := pub.pubLimit.get()
-	termCount := pub.metaData.ActiveTermCountOff.Get()
-	termIndex := termCount % logbuffer.PartitionCount
-	termAppender := pub.appenders[termIndex]
-	rawTail := termAppender.RawTail()
-	termOffset := rawTail & 0xFFFFFFFF
-	termId := logbuffer.TermID(rawTail)
-	position := computeTermBeginPosition(termId, pub.positionBitsToShift, pub.initialTermID) + termOffset
-
-	if termCount != (termId - pub.metaData.InitTermID.Get()) {
+	_, appender, position, ok := pub.activeState()
+	if !ok {
 		return AdminAction
-	}
-
-	if logger.IsEnabledFor(logging.DEBUG) {
-		logger.Debugf("Offering at %d of %d (pubLmt: %v)", position, limit, pub.pubLimit)
 	}
 	if position >= limit {
 		return pub.backPressureStatus(position, length)
 	}
 
 	var resultingOffset int64
+	var termID int32
 	if length <= pub.maxPayloadLength {
-		resultingOffset, termId = termAppender.AppendUnfragmentedMessage2(
-			bufferOne, offsetOne, lengthOne,
-			bufferTwo, offsetTwo, lengthTwo,
-			reservedValueSupplier)
+		resultingOffset, termID = appender.AppendUnfragmentedMessage2(bufferOne, offsetOne, lengthOne,
+			bufferTwo, offsetTwo, lengthTwo, reservedValueSupplier)
 	} else {
 		pub.checkForMaxMessageLength(length)
-		resultingOffset, termId = termAppender.AppendFragmentedMessage2(
-			bufferOne, offsetOne, lengthOne,
-			bufferTwo, offsetTwo, lengthTwo,
-			pub.maxPayloadLength, reservedValueSupplier)
+		resultingOffset, termID = appender.AppendFragmentedMessage2(bufferOne, offsetOne, lengthOne,
+			bufferTwo, offsetTwo, lengthTwo, pub.maxPayloadLength, reservedValueSupplier)
 	}
-	return pub.newPosition(termCount, termOffset, termId, position, resultingOffset)
+	return pub.newPosition(resultingOffset, termID)
 }
 
-func (pub *Publication) newPosition(termCount int32, termOffset int64, termId int32, position int64, resultingOffset int64) int64 {
-	if resultingOffset > 0 {
-		return (position - termOffset) + resultingOffset
-	}
-
-	if (position + termOffset) > pub.maxPossiblePosition {
-		return MaxPositionExceeded
-	}
-
-	logbuffer.RotateLog(pub.metaData, termCount, termId)
-	return AdminAction
-}
-
-func (pub *Publication) backPressureStatus(currentPosition int64, messageLength int32) int64 {
-
-	if (currentPosition + int64(messageLength)) >= pub.maxPossiblePosition {
-		return MaxPositionExceeded
-	}
-
-	if pub.metaData.IsConnected() {
-		return BackPressured
-	}
-
-	return NotConnected
-}
-
-func (pub *Publication) TryClaim(length int32, bufferClaim *logbuffer.Claim) int64 {
+// OfferVectors offers the concatenation of vectors as one message (Java offer(DirectBufferVector[], ...)).
+// Panics if a vector is invalid or the total exceeds MaxMessageLength.
+func (pub *Publication) OfferVectors(vectors []term.DirectBufferVector,
+	reservedValueSupplier term.ReservedValueSupplier) int64 {
 	if pub.IsClosed() {
 		return PublicationClosed
 	}
-	pub.checkForMaxPayloadLength(length)
-
+	length, err := term.ValidateAndComputeLength(vectors)
+	if err != nil {
+		panic(err)
+	}
 	limit := pub.pubLimit.get()
-	termCount := pub.metaData.ActiveTermCountOff.Get()
-	termIndex := termCount % logbuffer.PartitionCount
-	termAppender := pub.appenders[termIndex]
-	rawTail := termAppender.RawTail()
-	termOffset := rawTail & 0xFFFFFFFF
-	position := computeTermBeginPosition(logbuffer.TermID(rawTail), pub.positionBitsToShift, pub.initialTermID) + termOffset
-
-	if position < limit {
-		resultingOffset, termId := termAppender.Claim(length, bufferClaim)
-
-		return pub.newPosition(termCount, termOffset, termId, position, resultingOffset)
-	} else {
+	_, appender, position, ok := pub.activeState()
+	if !ok {
+		return AdminAction
+	}
+	if position >= limit {
 		return pub.backPressureStatus(position, length)
 	}
-}
 
-func (pub *Publication) checkForMaxMessageLength(length int32) {
-	if length > pub.maxMessageLength {
-		panic(fmt.Sprintf("Encoded message exceeds maxMessageLength of %d, length=%d", pub.maxMessageLength, length))
+	var resultingOffset int64
+	var termID int32
+	if length <= pub.maxPayloadLength {
+		resultingOffset, termID = appender.AppendUnfragmentedMessageVectors(vectors, length, reservedValueSupplier)
+	} else {
+		pub.checkForMaxMessageLength(length)
+		resultingOffset, termID = appender.AppendFragmentedMessageVectors(vectors, length, pub.maxPayloadLength,
+			reservedValueSupplier)
 	}
+	return pub.newPosition(resultingOffset, termID)
 }
 
-func (pub *Publication) checkForMaxPayloadLength(length int32) {
-	if length > pub.maxPayloadLength {
-		panic(fmt.Sprintf("Encoded message exceeds maxPayloadLength of %d, length=%d", pub.maxPayloadLength, length))
+// TryClaim reserves length bytes (at most MaxPayloadLength) in the log for zero-copy publication. On success the
+// claim must be completed with Commit() or Abort(). Panics if length exceeds MaxPayloadLength.
+func (pub *Publication) TryClaim(length int32, bufferClaim *logbuffer.Claim) int64 {
+	pub.checkForMaxPayloadLength(length)
+	if pub.IsClosed() {
+		return PublicationClosed
 	}
-}
-
-func computeTermBeginPosition(activeTermID, positionBitsToShift, initialTermID int32) int64 {
-	termCount := int64(activeTermID - initialTermID)
-
-	return termCount << uint32(positionBitsToShift)
-}
-
-func nextPartitionIndex(currentIndex int32) int32 {
-	return util.FastMod3(uint64(currentIndex) + 1)
+	limit := pub.pubLimit.get()
+	_, appender, position, ok := pub.activeState()
+	if !ok {
+		return AdminAction
+	}
+	if position >= limit {
+		return pub.backPressureStatus(position, length)
+	}
+	checkPositiveLength(length)
+	resultingOffset, termID := appender.Claim(length, bufferClaim)
+	return pub.newPosition(resultingOffset, termID)
 }

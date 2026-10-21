@@ -63,7 +63,7 @@ func main() {
 		log.Fatalf("Failed to add ping subscription: %v", err)
 	}
 	defer sub.Close()
-	var pub *aeron.Publication
+	var pub aeron.Publisher
 	if *examples.ExamplesConfig.Exclusive {
 		pub, err = a.AddExclusivePublication(pongChannel, pongStream)
 	} else {

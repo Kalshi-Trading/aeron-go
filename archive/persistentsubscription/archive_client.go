@@ -87,7 +87,7 @@ type asyncArchive struct {
 	nextConnectNs int64
 	nanoClock     func() int64
 
-	proxies       map[*aeron.Publication]*archive.Proxy
+	proxies       map[*aeron.ExclusivePublication]*archive.Proxy
 	assembler     *aeron.ControlledFragmentAssembler
 	marshaller    *codecs.SbeGoMarshaller
 	rangeChecking bool
@@ -104,7 +104,7 @@ func newAsyncArchive(options *archive.Options, aeronContext func() *aeron.Contex
 		listener:       listener,
 		state:          asyncArchiveConnecting,
 		nanoClock:      nanoClock,
-		proxies:        map[*aeron.Publication]*archive.Proxy{},
+		proxies:        map[*aeron.ExclusivePublication]*archive.Proxy{},
 		marshaller:     codecs.NewSbeGoMarshaller(),
 		rangeChecking:  options.RangeChecking,
 		connectArchive: archive.NewArchive,
@@ -157,7 +157,7 @@ func (a *asyncArchive) pollConnecting() int {
 			return 1
 		}
 		a.archive = result.archive
-		a.proxies = map[*aeron.Publication]*archive.Proxy{}
+		a.proxies = map[*aeron.ExclusivePublication]*archive.Proxy{}
 		a.state = asyncArchiveConnected
 		a.listener.onConnected()
 		return 1

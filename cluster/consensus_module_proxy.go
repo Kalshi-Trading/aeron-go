@@ -20,11 +20,11 @@ const (
 // consensusModuleProxy encodes messages from the service to the consensus module on the control channel.
 // Mirrors io.aeron.cluster.service.ConsensusModuleProxy for schema v17.
 type consensusModuleProxy struct {
-	publication *aeron.Publication
+	publication aeron.Publisher
 	buffer      *atomic.Buffer
 }
 
-func newConsensusModuleProxy(publication *aeron.Publication) *consensusModuleProxy {
+func newConsensusModuleProxy(publication aeron.Publisher) *consensusModuleProxy {
 	return &consensusModuleProxy{
 		publication: publication,
 		buffer:      atomic.MakeBuffer(make([]byte, 128)),

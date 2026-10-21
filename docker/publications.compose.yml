@@ -1,0 +1,19 @@
+# Java 1.53.3 subscriber for the aeron-go publication E2E tests. Use together with the shared compose file:
+#   docker compose -f docker/docker-compose.yml -f docker/publications.compose.yml up -d --build archiving-driver pub-verifier
+#   AERON_E2E=1 AERON_DIR=/dev/shm/aeron-compose go test ./systests/ -run TestPublicationsE2E -v
+# The verifier subscribes to aeron:udp?endpoint=localhost:20140 streams 3001-3006 and replies with a per-message
+# summary (length, CRC32, reserved value, position) on aeron:udp?endpoint=localhost:20141 stream 3100.
+services:
+  pub-verifier:
+    build: ./publications
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    volumes:
+      - /dev/shm:/dev/shm
+    depends_on:
+      archiving-driver:
+        condition: service_healthy
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-compose

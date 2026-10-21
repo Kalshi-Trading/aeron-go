@@ -89,6 +89,8 @@ type conductorResource struct {
 	streamID             int32
 	timeOfRegistrationNs int64
 	publication          *Publication
+	exclusivePublication *ExclusivePublication
+	pubBase              *publicationBase
 	logBuffers           *logbuffer.LogBuffers
 	subscription         *Subscription
 	counter              *Counter
@@ -594,8 +596,8 @@ func (cc *ClientConductor) forceCloseResources() {
 	for id, res := range cc.resources {
 		switch res.kind {
 		case kindPublication, kindExclusivePublication:
-			res.publication.isClosed.Set(true)
-			cc.releaseLogBuffers(res.logBuffers, res.publication.originalRegID, nullValue)
+			res.pubBase.isClosed.Set(true)
+			cc.releaseLogBuffers(res.logBuffers, res.pubBase.originalRegID, nullValue)
 		case kindSubscription:
 			sub := res.subscription
 			sub.isClosed.Set(true)
@@ -650,15 +652,23 @@ func (cc *ClientConductor) releaseLogBuffers(lb *logbuffer.LogBuffers, registrat
 
 // AddPublication adds a concurrent publication and blocks until the driver responds.
 func (cc *ClientConductor) AddPublication(channel string, streamID int32) (*Publication, error) {
-	return cc.addPublication(kindPendingPublication, channel, streamID)
+	res, err := cc.addPublication(kindPendingPublication, channel, streamID)
+	if err != nil {
+		return nil, err
+	}
+	return res.publication, nil
 }
 
 // AddExclusivePublication adds an exclusive publication and blocks until the driver responds.
-func (cc *ClientConductor) AddExclusivePublication(channel string, streamID int32) (*Publication, error) {
-	return cc.addPublication(kindPendingExclusivePublication, channel, streamID)
+func (cc *ClientConductor) AddExclusivePublication(channel string, streamID int32) (*ExclusivePublication, error) {
+	res, err := cc.addPublication(kindPendingExclusivePublication, channel, streamID)
+	if err != nil {
+		return nil, err
+	}
+	return res.exclusivePublication, nil
 }
 
-func (cc *ClientConductor) addPublication(kind resourceKind, channel string, streamID int32) (*Publication, error) {
+func (cc *ClientConductor) addPublication(kind resourceKind, channel string, streamID int32) (*conductorResource, error) {
 	cc.adminLock.Lock()
 	defer cc.unlock()
 	corrID, err := cc.sendAddPublication(kind, channel, streamID)
@@ -670,10 +680,10 @@ func (cc *ClientConductor) addPublication(kind resourceKind, channel string, str
 		return nil, err
 	}
 	res := cc.resources[corrID]
-	if res == nil || res.publication == nil {
+	if res == nil || res.pubBase == nil {
 		return nil, fmt.Errorf("publication %d not available after response", corrID)
 	}
-	return res.publication, nil
+	return res, nil
 }
 
 // AsyncAddPublication sends ADD_PUBLICATION without waiting; poll GetPublication with the returned registration id.
@@ -721,7 +731,7 @@ func (cc *ClientConductor) sendAddPublication(kind resourceKind, channel string,
 // GetPublication polls for a publication added with AsyncAddPublication. It returns (nil, nil) while the command is
 // in flight, the error if the driver rejected it, and a DriverTimeoutError if no response arrived in time.
 func (cc *ClientConductor) GetPublication(registrationID int64) (*Publication, error) {
-	res, err := cc.getResource(registrationID, kindPendingPublication, kindPublication, kindExclusivePublication)
+	res, err := cc.getResource(registrationID, kindPendingPublication, kindPublication)
 	if res == nil || err != nil {
 		return nil, err
 	}
@@ -729,15 +739,20 @@ func (cc *ClientConductor) GetPublication(registrationID int64) (*Publication, e
 }
 
 // GetExclusivePublication polls for a publication added with AsyncAddExclusivePublication.
-func (cc *ClientConductor) GetExclusivePublication(registrationID int64) (*Publication, error) {
+func (cc *ClientConductor) GetExclusivePublication(registrationID int64) (*ExclusivePublication, error) {
 	res, err := cc.getResource(registrationID, kindPendingExclusivePublication, kindExclusivePublication)
 	if res == nil || err != nil {
 		return nil, err
 	}
-	return res.publication, nil
+	return res.exclusivePublication, nil
 }
 
-// FindPublication is the pre-parity name of GetPublication; it accepts both concurrent and exclusive publications.
+// FindExclusivePublication is an alias of GetExclusivePublication.
+func (cc *ClientConductor) FindExclusivePublication(registrationID int64) (*ExclusivePublication, error) {
+	return cc.GetExclusivePublication(registrationID)
+}
+
+// FindPublication is the pre-parity name of GetPublication.
 //
 // Deprecated: use GetPublication or GetExclusivePublication.
 func (cc *ClientConductor) FindPublication(registrationID int64) (*Publication, error) {
@@ -761,7 +776,7 @@ func (cc *ClientConductor) getResource(registrationID int64, pendingKind resourc
 		return nil, fmt.Errorf("%w: %d", ErrUnknownRegistration, registrationID)
 	}
 	if res.kind.isPending() {
-		if res.kind != pendingKind && !(pendingKind == kindPendingPublication && res.kind == kindPendingExclusivePublication) {
+		if res.kind != pendingKind {
 			return nil, fmt.Errorf("registration id %d is not of the requested resource type", registrationID)
 		}
 		if cc.nanoClock()-res.timeOfRegistrationNs > cc.driverTimeoutNs {
@@ -782,13 +797,20 @@ func (cc *ClientConductor) getResource(registrationID int64, pendingKind resourc
 }
 
 // releasePublication is called by Publication.Close.
-func (cc *ClientConductor) releasePublication(regID int64) error {
+func (cc *ClientConductor) releasePublication(regID int64, revoke bool) error {
 	cc.adminLock.Lock()
 	defer cc.unlock()
-	return cc.releasePublicationLocked(regID)
+	return cc.releasePublicationLocked(regID, revoke)
 }
 
-func (cc *ClientConductor) releasePublicationLocked(regID int64) error {
+// getDriverStatus returns an error once the client is closed or terminating.
+func (cc *ClientConductor) getDriverStatus() error {
+	cc.adminLock.Lock()
+	defer cc.unlock()
+	return cc.ensureOpen()
+}
+
+func (cc *ClientConductor) releasePublicationLocked(regID int64, revoke bool) error {
 	if cc.isTerminating.Get() || cc.isClosed.Get() {
 		return nil
 	}
@@ -796,10 +818,10 @@ func (cc *ClientConductor) releasePublicationLocked(regID int64) error {
 	if res == nil || (res.kind != kindPublication && res.kind != kindExclusivePublication) {
 		return nil
 	}
-	res.publication.isClosed.Set(true)
+	res.pubBase.isClosed.Set(true)
 	delete(cc.resources, regID)
-	cc.releaseLogBuffers(res.logBuffers, res.publication.originalRegID, explicitCloseLingerNs)
-	_, err := cc.driverProxy.RemovePublication(regID, false)
+	cc.releaseLogBuffers(res.logBuffers, res.pubBase.originalRegID, explicitCloseLingerNs)
+	_, err := cc.driverProxy.RemovePublication(regID, revoke)
 	return err
 }
 
@@ -810,7 +832,7 @@ func (cc *ClientConductor) AsyncRemovePublication(registrationID int64) error {
 	if err := cc.ensureOpen(); err != nil {
 		return err
 	}
-	return cc.releasePublicationLocked(registrationID)
+	return cc.releasePublicationLocked(registrationID, false)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1352,18 +1374,27 @@ func (cc *ClientConductor) onNewPublication(pendingKind, readyKind resourceKind,
 		cc.failCommand(corrID, err)
 		return
 	}
-	pub := NewPublication(lb)
-	pub.conductor = cc
-	pub.channel = res.channel
-	pub.regID = corrID
-	pub.originalRegID = regID
-	pub.streamID = streamID
-	pub.sessionID = sessionID
-	pub.pubLimit = NewPosition(cc.counterValuesBuffer, posLimitCounterID)
-	pub.channelStatusIndicatorID = channelStatusIndicatorID
+	var base *publicationBase
+	if readyKind == kindExclusivePublication {
+		pub := NewExclusivePublication(lb)
+		res.exclusivePublication = pub
+		base = &pub.publicationBase
+	} else {
+		pub := NewPublication(lb)
+		res.publication = pub
+		base = &pub.publicationBase
+	}
+	base.conductor = cc
+	base.channel = res.channel
+	base.regID = corrID
+	base.originalRegID = regID
+	base.streamID = streamID
+	base.sessionID = sessionID
+	base.pubLimit = NewPosition(cc.counterValuesBuffer, posLimitCounterID)
+	base.channelStatusIndicatorID = channelStatusIndicatorID
 
 	res.kind = readyKind
-	res.publication = pub
+	res.pubBase = base
 	res.logBuffers = lb
 	cc.completeCommand(corrID)
 
@@ -1406,7 +1437,7 @@ func (cc *ClientConductor) OnChannelEndpointError(corrID int64, errorMessage str
 		match := false
 		switch res.kind {
 		case kindPublication, kindExclusivePublication:
-			match = res.publication.ChannelStatusID() == statusIndicatorID
+			match = res.pubBase.ChannelStatusID() == statusIndicatorID
 		case kindSubscription:
 			match = res.subscription.ChannelStatusId() == statusIndicatorID
 		}
@@ -1479,7 +1510,7 @@ func (cc *ClientConductor) OnPublicationError(buffer *atomic.Buffer, offset int3
 	logger.Debugf("OnPublicationError: %v", &frame)
 	for _, res := range cc.resources {
 		if (res.kind == kindPublication || res.kind == kindExclusivePublication) &&
-			res.publication.originalRegID == frame.RegistrationID {
+			res.pubBase.originalRegID == frame.RegistrationID {
 			cc.queueCallback(func() { h(&frame) })
 			return
 		}

@@ -120,7 +120,7 @@ func (s *totalService) OnTimerEvent(correlationId, _ int64) {
 	}
 }
 
-func (s *totalService) OnTakeSnapshot(publication *aeron.Publication) {
+func (s *totalService) OnTakeSnapshot(publication *aeron.ExclusivePublication) {
 	buf := atomic.MakeBuffer(make([]byte, 8))
 	s.mu.Lock()
 	buf.PutInt64(0, s.total)

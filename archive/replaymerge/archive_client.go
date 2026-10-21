@@ -170,7 +170,7 @@ var ErrArchiveConnectionClosed = errors.New("connection to the archive has been 
 // ErrArchiveConnectionUnavailable is returned when the archive control request publication is not connected.
 var ErrArchiveConnectionUnavailable = errors.New("connection to the archive is no longer available")
 
-func offer(publication *aeron.Publication, buffer *atomic.Buffer, length int32) (bool, error) {
+func offer(publication aeron.Publisher, buffer *atomic.Buffer, length int32) (bool, error) {
 	if publication == nil {
 		return false, ErrArchiveConnectionClosed
 	}

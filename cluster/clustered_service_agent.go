@@ -989,7 +989,7 @@ func closeSubscription(sub *aeron.Subscription) {
 	}
 }
 
-func closePublication(pub *aeron.Publication) {
+func closePublication(pub aeron.Publisher) {
 	if err := pub.Close(); err != nil {
 		logger.Errorf("error closing publication, streamId=%d channel=%s: %v", pub.StreamID(), pub.Channel(), err)
 	}

@@ -256,7 +256,7 @@ func (aeron *Aeron) AddPublication(channel string, streamID int32) (*Publication
 //
 // Deprecated: use AddPublication, which reports errors.
 func (aeron *Aeron) AddPublicationDeprecated(channel string, streamID int32) chan *Publication {
-	return aeron.deprecatedPublication(func() (*Publication, error) { return aeron.AddPublication(channel, streamID) })
+	return deprecatedPublication(aeron, func() (*Publication, error) { return aeron.AddPublication(channel, streamID) })
 }
 
 // AsyncAddPublication sends ADD_PUBLICATION without blocking; poll GetPublication with the returned id.
@@ -270,21 +270,21 @@ func (aeron *Aeron) GetPublication(registrationID int64) (*Publication, error) {
 }
 
 // AddExclusivePublication adds an exclusive publication, blocking until the driver confirms it.
-func (aeron *Aeron) AddExclusivePublication(channel string, streamID int32) (*Publication, error) {
+func (aeron *Aeron) AddExclusivePublication(channel string, streamID int32) (*ExclusivePublication, error) {
 	return aeron.conductor.AddExclusivePublication(channel, streamID)
 }
 
 // AddExclusivePublicationDeprecated adds an exclusive publication and returns a channel delivering it (nil on error).
 //
 // Deprecated: use AddExclusivePublication, which reports errors.
-func (aeron *Aeron) AddExclusivePublicationDeprecated(channel string, streamID int32) chan *Publication {
-	return aeron.deprecatedPublication(func() (*Publication, error) {
+func (aeron *Aeron) AddExclusivePublicationDeprecated(channel string, streamID int32) chan *ExclusivePublication {
+	return deprecatedPublication(aeron, func() (*ExclusivePublication, error) {
 		return aeron.AddExclusivePublication(channel, streamID)
 	})
 }
 
-func (aeron *Aeron) deprecatedPublication(add func() (*Publication, error)) chan *Publication {
-	ch := make(chan *Publication, 1)
+func deprecatedPublication[T any](aeron *Aeron, add func() (*T, error)) chan *T {
+	ch := make(chan *T, 1)
 	go func() {
 		pub, err := add()
 		if err != nil {
@@ -302,7 +302,7 @@ func (aeron *Aeron) AsyncAddExclusivePublication(channel string, streamID int32)
 }
 
 // GetExclusivePublication polls an async exclusive publication add: (nil, nil) while pending.
-func (aeron *Aeron) GetExclusivePublication(registrationID int64) (*Publication, error) {
+func (aeron *Aeron) GetExclusivePublication(registrationID int64) (*ExclusivePublication, error) {
 	return aeron.conductor.GetExclusivePublication(registrationID)
 }
 
