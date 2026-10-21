@@ -19,6 +19,7 @@ package archive
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	stdatomic "sync/atomic"
 	"time"
@@ -46,9 +47,9 @@ type Archive struct {
 
 // Constant values used to control behaviour of StartReplay
 const (
-	RecordingPositionNull = int64(-1)        // Replay a stream from the start.
-	RecordingLengthNull   = int64(-1)        // Replay will follow a live recording
-	RecordingLengthMax    = int64(2<<31 - 1) // Replay the whole stream
+	RecordingPositionNull = int64(-1)            // Replay a stream from the start.
+	RecordingLengthNull   = int64(-1)            // Replay will follow a live recording
+	RecordingLengthMax    = int64(math.MaxInt64) // Replay the whole stream and follow a live recording
 )
 
 // replication flag used for duplication instead of extension, see Replicate and variants
@@ -430,14 +431,11 @@ func (archive *Archive) StopRecordingByIdentity(recordingID int64) (bool, error)
 		return false, err
 	}
 	res, err := archive.Control.PollForResponse(correlationID, archive.SessionID)
-	if res < 0 {
-		logger.Debugf("StopRecordingByIdentity result was %d", res)
-	}
-
 	if err != nil {
 		return false, err
 	}
-	return res >= 0, err
+	// Java semantics: relevantId is non-zero iff an active recording was stopped
+	return res != 0, nil
 }
 
 // StopRecordingBySubscriptionId as returned by StartRecording
@@ -714,7 +712,7 @@ func (archive *Archive) GetRecordingPosition(recordingID int64) (int64, error) {
 //
 // Returns the count of deleted segment files (as Java truncateRecording does).
 func (archive *Archive) TruncateRecording(recordingID int64, position int64) (int64, error) {
-	return archive.simpleRequest(func(correlationID int64) error {
+	return archive.request(func(correlationID int64) error {
 		return archive.Proxy.TruncateRecordingRequest(correlationID, recordingID, position)
 	})
 }
@@ -887,7 +885,7 @@ func (archive *Archive) AttachSegments(recordingID int64) (int64, error) {
 //
 // Returns the count of attached segment files.
 func (archive *Archive) MigrateSegments(srcRecordingID int64, dstRecordingID int64) (int64, error) {
-	return archive.simpleRequest(func(correlationID int64) error {
+	return archive.request(func(correlationID int64) error {
 		return archive.Proxy.MigrateSegmentsRequest(correlationID, srcRecordingID, dstRecordingID)
 	})
 }
@@ -1043,7 +1041,7 @@ func (archive *Archive) StopReplication(replicationID int64) error {
 //
 // Returns the count of deleted segment files (as Java purgeRecording does).
 func (archive *Archive) PurgeRecording(recordingID int64) (int64, error) {
-	return archive.simpleRequest(func(correlationID int64) error {
+	return archive.request(func(correlationID int64) error {
 		return archive.Proxy.PurgeRecordingRequest(correlationID, recordingID)
 	})
 }

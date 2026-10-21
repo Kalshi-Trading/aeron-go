@@ -93,26 +93,7 @@ func StopRecordingRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool,
 }
 
 func ReplayRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64, position int64, length int64, replayStream int32, replayChannel string) ([]byte, error) {
-	var request ReplayRequest
-	request.ControlSessionId = controlSessionId
-	request.CorrelationId = correlationId
-	request.RecordingId = recordingId
-	request.Position = position
-	request.Length = length
-	request.ReplayStreamId = replayStream
-	request.ReplayChannel = []uint8(replayChannel)
-
-	// Marshal it
-	header := MessageHeader{BlockLength: request.SbeBlockLength(), TemplateId: request.SbeTemplateId(), SchemaId: request.SbeSchemaId(), Version: request.SbeSchemaVersion()}
-	buffer := new(bytes.Buffer)
-	if err := header.Encode(marshaller, buffer); err != nil {
-		return nil, err
-	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
-		return nil, err
-	}
-
-	return buffer.Bytes(), nil
+	return ReplayRequestWithParamsPacket(marshaller, rangeChecking, controlSessionId, correlationId, recordingId, position, length, replayStream, NullValue, NullValue, replayChannel)
 }
 
 func StopReplayRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, replaySessionId int64) ([]byte, error) {
@@ -369,27 +350,7 @@ func ListRecordingSubscriptionsPacket(marshaller *SbeGoMarshaller, rangeChecking
 }
 
 func BoundedReplayPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64, position int64, length int64, limitCounterId int32, replayStream int32, replayChannel string) ([]byte, error) {
-	var request BoundedReplayRequest
-	request.ControlSessionId = controlSessionId
-	request.CorrelationId = correlationId
-	request.RecordingId = recordingId
-	request.Position = position
-	request.Length = length
-	request.LimitCounterId = limitCounterId
-	request.ReplayStreamId = replayStream
-	request.ReplayChannel = []uint8(replayChannel)
-
-	// Marshal it
-	header := MessageHeader{BlockLength: request.SbeBlockLength(), TemplateId: request.SbeTemplateId(), SchemaId: request.SbeSchemaId(), Version: request.SbeSchemaVersion()}
-	buffer := new(bytes.Buffer)
-	if err := header.Encode(marshaller, buffer); err != nil {
-		return nil, err
-	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
-		return nil, err
-	}
-
-	return buffer.Bytes(), nil
+	return BoundedReplayWithParamsPacket(marshaller, rangeChecking, controlSessionId, correlationId, recordingId, position, length, limitCounterId, replayStream, NullValue, NullValue, replayChannel)
 }
 
 func StopAllReplaysPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {

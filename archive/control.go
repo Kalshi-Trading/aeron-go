@@ -361,6 +361,9 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 	case codecIds.ping:
 		// Liveness message from the archive's control session, nothing to do.
 
+	// The archive pings control sessions to check liveness; nothing to do on receipt
+	case codecIds.ping:
+
 	default:
 		fmt.Printf("errorResponseFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
 	}

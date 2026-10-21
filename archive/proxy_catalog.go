@@ -15,21 +15,8 @@
 package archive
 
 import (
-	"fmt"
-
-	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/archive/codecs"
 )
-
-func (proxy *Proxy) offerPacket(bytes []byte, err error) error {
-	if err != nil {
-		return err
-	}
-	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
-	}
-	return nil
-}
 
 // ReplicateRequestWithParams sends a ReplicateRequest2 carrying every ReplicationParams field,
 // matching Java ArchiveProxy.replicate(srcRecordingId, srcControlStreamId, srcControlChannel, replicationParams, ...).
@@ -41,10 +28,4 @@ func (proxy *Proxy) ReplicateRequestWithParams(correlationID int64, srcRecording
 	return proxy.offerPacket(codecs.ReplicateRequest2FullPacket(
 		proxy.marshaller, proxy.archive.Options.RangeChecking, proxy.archive.SessionID, correlationID,
 		params.toCodec(srcRecordingID, srcControlStreamID, srcControlChannel)))
-}
-
-// MaxRecordedPositionRequest sends a request for the max recorded position of a recording.
-func (proxy *Proxy) MaxRecordedPositionRequest(correlationID int64, recordingID int64) error {
-	return proxy.offerPacket(codecs.MaxRecordedPositionRequestPacket(
-		proxy.marshaller, proxy.archive.Options.RangeChecking, proxy.archive.SessionID, correlationID, recordingID))
 }

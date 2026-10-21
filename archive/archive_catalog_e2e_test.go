@@ -19,11 +19,11 @@ import (
 // docker/replication.compose.yml (archive 2, 256KiB segment files). Gated by AERON_E2E=1.
 
 const (
-	e2eTermLength   = 64 * 1024
-	e2eFrameLength  = 4096 // payload + 32 byte header: frames tile terms and segments exactly
-	e2ePayload      = e2eFrameLength - 32
-	e2eArchive1Ctrl = "aeron:udp?endpoint=localhost:8010"
-	e2eArchive2Ctrl = "aeron:udp?endpoint=localhost:8011"
+	e2eTermLength         = 64 * 1024
+	e2eCatalogFrameLength = 4096 // payload + 32 byte header: frames tile terms and segments exactly
+	e2ePayload            = e2eCatalogFrameLength - 32
+	e2eArchive1Ctrl       = "aeron:udp?endpoint=localhost:8010"
+	e2eArchive2Ctrl       = "aeron:udp?endpoint=localhost:8011"
 )
 
 func e2eEnv(key, def string) string {
@@ -142,12 +142,12 @@ func listOne(t *testing.T, a *Archive, recordingID int64) *codecs.RecordingDescr
 func TestE2ECatalog(t *testing.T) {
 	requireE2E(t)
 	a := e2eArchive1(t)
-	channel := fmt.Sprintf("aeron:ipc?term-length=%d|mtu=%d", e2eTermLength, e2eFrameLength)
+	channel := fmt.Sprintf("aeron:ipc?term-length=%d|mtu=%d", e2eTermLength, e2eCatalogFrameLength)
 	stream := e2eStream()
 
 	r := startRecording(t, a, channel, stream)
 	stopPos := r.publish(t, a, 20)
-	assert.Equal(t, int64(20*e2eFrameLength), stopPos)
+	assert.Equal(t, int64(20*e2eCatalogFrameLength), stopPos)
 
 	// Active recording subscriptions, filtered by stream and channel fragment.
 	var subs []*codecs.RecordingSubscriptionDescriptor
@@ -213,10 +213,10 @@ func TestE2ECatalog(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, stopPos, pos)
 
-	deleted, err := a.TruncateRecording(r.recordingID, 4*e2eFrameLength)
+	deleted, err := a.TruncateRecording(r.recordingID, 4*e2eCatalogFrameLength)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), deleted, "truncating within the first segment deletes no segment files")
-	assert.Equal(t, int64(4*e2eFrameLength), listOne(t, a, r.recordingID).StopPosition)
+	assert.Equal(t, int64(4*e2eCatalogFrameLength), listOne(t, a, r.recordingID).StopPosition)
 
 	deleted, err = a.PurgeRecording(r.recordingID)
 	require.NoError(t, err)
@@ -229,14 +229,14 @@ func TestE2ECatalog(t *testing.T) {
 func TestE2ESegments(t *testing.T) {
 	requireE2E(t)
 	a := e2eArchive2(t)
-	channel := fmt.Sprintf("aeron:ipc?term-length=%d|mtu=%d", e2eTermLength, e2eFrameLength)
+	channel := fmt.Sprintf("aeron:ipc?term-length=%d|mtu=%d", e2eTermLength, e2eCatalogFrameLength)
 	stream := e2eStream()
 
 	recordingID, stopPos := recordMessages(t, a, channel, stream, 5*64+10) // 5 full 256KiB segments + 10 frames
 	desc := listOne(t, a, recordingID)
 	segLen := int64(desc.SegmentFileLength)
 	require.Equal(t, int64(256*1024), segLen, "archive 2 must run with -Daeron.archive.segment.file.length=262144")
-	require.Equal(t, 5*segLen+10*e2eFrameLength, stopPos)
+	require.Equal(t, 5*segLen+10*e2eCatalogFrameLength, stopPos)
 
 	base := SegmentFileBasePosition(desc.StartPosition, 2*segLen+100, desc.TermBufferLength, desc.SegmentFileLength)
 	assert.Equal(t, 2*segLen, base)
@@ -336,7 +336,7 @@ func TestE2EReplication(t *testing.T) {
 	signals := &signalCollector{}
 	dst.Listeners.RecordingSignalListener = signals.listen
 
-	channel := fmt.Sprintf("aeron:ipc?term-length=%d|mtu=%d", e2eTermLength, e2eFrameLength)
+	channel := fmt.Sprintf("aeron:ipc?term-length=%d|mtu=%d", e2eTermLength, e2eCatalogFrameLength)
 	stream := e2eStream()
 	srcID, srcStop := recordMessages(t, src, channel, stream, 50)
 
@@ -364,12 +364,12 @@ func TestE2EReplication(t *testing.T) {
 	// Bounded replication via StopPosition.
 	signals.reset()
 	params.Reset()
-	params.StopPosition = 10 * e2eFrameLength
+	params.StopPosition = 10 * e2eCatalogFrameLength
 	_, err = dst.ReplicateWithParams(srcID, 10, e2eArchive1Ctrl, params)
 	require.NoError(t, err)
 	replicate = awaitSignal(t, dst, signals, codecs.RecordingSignal.REPLICATE)
 	awaitSignal(t, dst, signals, codecs.RecordingSignal.REPLICATE_END)
-	assert.Equal(t, int64(10*e2eFrameLength), listOne(t, dst, replicate.RecordingId).StopPosition)
+	assert.Equal(t, int64(10*e2eCatalogFrameLength), listOne(t, dst, replicate.RecordingId).StopPosition)
 
 	// Extend the full copy with the rest of a recording via DstRecordingID (tagged variant).
 	signals.reset()

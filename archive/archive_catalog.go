@@ -16,6 +16,7 @@ package archive
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"time"
 
@@ -24,11 +25,6 @@ import (
 	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/lirm/aeron-go/aeron/logbuffer/term"
 	"github.com/lirm/aeron-go/archive/codecs"
-)
-
-// Archive error codes carried in ControlResponse.RelevantId when Code is ERROR (Java ArchiveException).
-const (
-	archiveErrorUnknownReplication = 12
 )
 
 // RecordingDescriptorConsumer receives each recording descriptor from ListRecordings, ListRecordingsForUri
@@ -149,22 +145,13 @@ func (archive *Archive) ListRecordingSubscriptionsWithConsumer(pseudoIndex int32
 	})
 }
 
-// GetMaxRecordedPosition returns the position recorded so far for an active recording, or the stop
-// position of a stopped one, without the active-recording requirement of GetRecordingPosition.
-// Mirrors Java AeronArchive.getMaxRecordedPosition.
-func (archive *Archive) GetMaxRecordedPosition(recordingID int64) (int64, error) {
-	return archive.simpleRequest(func(correlationID int64) error {
-		return archive.Proxy.MaxRecordedPositionRequest(correlationID, recordingID)
-	})
-}
-
 // ReplicateWithParams replicates srcRecordingID from the archive at srcControlChannel/srcControlStreamID
 // into this archive using every field of params. A nil params uses NewReplicationParams().
 // Returns the replication id, which can be passed to StopReplication / TryStopReplication.
 // Progress is reported via RecordingSignalListener (REPLICATE, EXTEND, SYNC, MERGE, REPLICATE_END, STOP).
 // Mirrors Java AeronArchive.replicate(long, int, String, ReplicationParams).
 func (archive *Archive) ReplicateWithParams(srcRecordingID int64, srcControlStreamID int32, srcControlChannel string, params *ReplicationParams) (int64, error) {
-	return archive.simpleRequest(func(correlationID int64) error {
+	return archive.request(func(correlationID int64) error {
 		return archive.Proxy.ReplicateRequestWithParams(correlationID, srcRecordingID, srcControlStreamID, srcControlChannel, params)
 	})
 }
@@ -172,30 +159,17 @@ func (archive *Archive) ReplicateWithParams(srcRecordingID int64, srcControlStre
 // TryStopReplication stops a replication session, returning false rather than an error if the
 // replication is unknown (e.g. already finished). Mirrors Java AeronArchive.tryStopReplication.
 func (archive *Archive) TryStopReplication(replicationID int64) (bool, error) {
-	_, err := archive.simpleRequest(func(correlationID int64) error {
+	_, err := archive.request(func(correlationID int64) error {
 		return archive.Proxy.StopReplicationRequest(correlationID, replicationID)
 	})
 	if err != nil {
-		if r := archive.Control.Results.ControlResponse; r != nil &&
-			r.Code == codecs.ControlResponseCode.ERROR && r.RelevantId == archiveErrorUnknownReplication {
+		var archiveErr *ArchiveError
+		if errors.As(err, &archiveErr) && archiveErr.ErrorCode == ErrorCodeUnknownReplication {
 			return false, nil
 		}
 		return false, err
 	}
 	return true, nil
-}
-
-func (archive *Archive) simpleRequest(send func(correlationID int64) error) (int64, error) {
-	correlationID := nextCorrelationID()
-	correlations.Store(correlationID, archive.Control)
-	defer correlations.Delete(correlationID)
-
-	archive.mtx.Lock()
-	defer archive.mtx.Unlock()
-	if err := send(correlationID); err != nil {
-		return 0, err
-	}
-	return archive.Control.PollForResponse(correlationID, archive.SessionID)
 }
 
 // descriptorPoller mirrors Java RecordingDescriptorPoller / RecordingSubscriptionDescriptorPoller.
