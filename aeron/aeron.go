@@ -16,6 +16,7 @@
 package aeron
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -137,6 +138,12 @@ func Connect(ctx *Context) (*Aeron, error) {
 	}
 
 	cc.errorHandler = ctx.errorHandler
+	if inv := ctx.driverAgentInvoker; inv != nil {
+		cc.awaitIdle = func() { inv.Invoke() }
+	} else {
+		idler := ctx.awaitingIdleStrategy
+		cc.awaitIdle = func() { idler.Idle(0) }
+	}
 
 	if ctx.useConductorAgentInvoker {
 		cc.initDutyCycleTimes()
@@ -166,12 +173,18 @@ func (aeron *Aeron) connectToDriver() error {
 func (aeron *Aeron) Close() error {
 	aeron.closeOnce.Do(func() {
 		if err := aeron.conductor.Close(); err != nil {
-			aeron.conductor.reportError(err)
+			if !errors.Is(err, ErrCloseFromCallback) {
+				aeron.conductor.reportError(err)
+			}
 			aeron.closeErr = err
 		}
-		if err := aeron.cncFile.Close(); err != nil && aeron.closeErr == nil {
-			aeron.closeErr = err
-		}
+		// The conductor goroutine may still be running (close from one of its callbacks, or a stop timeout): only
+		// unmap the CnC file once it has exited.
+		aeron.conductor.runAfterExit(func() {
+			if err := aeron.cncFile.Close(); err != nil && aeron.closeErr == nil {
+				aeron.closeErr = err
+			}
+		})
 	})
 	return aeron.closeErr
 }

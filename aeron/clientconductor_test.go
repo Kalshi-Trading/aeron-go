@@ -158,9 +158,13 @@ type testConductor struct {
 }
 
 func newTestConductor(t *testing.T) *testConductor {
+	return newTestConductorOn(t, new(ClientConductor))
+}
+
+func newTestConductorOn(t *testing.T, cc *ClientConductor) *testConductor {
 	metaBuf := atomic.MakeBuffer(make([]byte, 256*1024))
 	meta := counters.InitAndWrapMetaData(metaBuf, 0, 0, 0, 24*1024, 24*1024, 0)
-	tc := &testConductor{ClientConductor: new(ClientConductor), proxy: &fakeDriverProxy{nextCorr: 1000},
+	tc := &testConductor{ClientConductor: cc, proxy: &fakeDriverProxy{nextCorr: 1000},
 		events: &fakeEvents{}}
 	tc.Init(tc.proxy, nil, 10*time.Second, 200*time.Millisecond, time.Second, 50*time.Millisecond, meta)
 	tc.driverListenerAdapter = tc.events

@@ -158,7 +158,11 @@ func (i *ConductorAgentInvoker) Invoke() int {
 	if inv := i.aeron.context.driverAgentInvoker; inv != nil {
 		work += inv.Invoke()
 	}
-	n, _ := cc.doWork()
+	n, terminated := cc.doWork()
+	if terminated {
+		// Java AgentInvoker runs Agent.onClose on termination: close handlers, lingering cleanup and ClientClose.
+		cc.onClose()
+	}
 	return work + n
 }
 
@@ -175,11 +179,3 @@ func (aeron *Aeron) Context() *Context {
 
 // awaitIdle is called while a blocking call awaits a driver response. With the conductor agent invoker it performs a
 // duty cycle so responses are processed on the caller's goroutine.
-func (aeron *Aeron) awaitIdle() {
-	if aeron.invoker != nil {
-		if aeron.invoker.Invoke() > 0 {
-			return
-		}
-	}
-	aeron.context.awaitingIdleStrategy.Idle(0)
-}

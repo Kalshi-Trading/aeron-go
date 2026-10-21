@@ -218,6 +218,17 @@ type ClientConductor struct {
 	doneCh    chan struct{}
 	closeOnce sync.Once
 
+	// inRunCallbacks is set while user callbacks run on the conductor goroutine, so Close called from one of them
+	// does not wait for the goroutine it is running on.
+	inRunCallbacks atomic.Bool
+	exitMu         sync.Mutex
+	exited         bool
+	afterExit      func()
+
+	// awaitIdle is called between polls while a blocking call awaits a driver response (Context awaiting idle
+	// strategy, or the driver agent invoker).
+	awaitIdle func()
+
 	timeOfLastKeepaliveNs   int64
 	timeOfLastServiceNs     int64
 	driverTimeoutNs         int64
@@ -289,6 +300,7 @@ func (cc *ClientConductor) run(idleStrategy idlestrategy.Idler) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	defer close(cc.doneCh)
+	defer cc.runExited()
 	defer cc.onClose()
 
 	for {
@@ -297,7 +309,7 @@ func (cc *ClientConductor) run(idleStrategy idlestrategy.Idler) {
 			return
 		default:
 		}
-		workCount, terminated := cc.doWork()
+		workCount, terminated := cc.doWorkOn(true)
 		if terminated {
 			return
 		}
@@ -305,11 +317,43 @@ func (cc *ClientConductor) run(idleStrategy idlestrategy.Idler) {
 	}
 }
 
+func (cc *ClientConductor) runExited() {
+	cc.exitMu.Lock()
+	cc.exited = true
+	hook := cc.afterExit
+	cc.afterExit = nil
+	cc.exitMu.Unlock()
+	if hook != nil {
+		hook()
+	}
+}
+
+// runAfterExit runs fn once the conductor goroutine has exited: immediately if it already has (or never started),
+// otherwise from the goroutine on its way out. Used to defer unmapping the CnC file until nothing can touch it.
+func (cc *ClientConductor) runAfterExit(fn func()) {
+	cc.exitMu.Lock()
+	if cc.started && !cc.exited {
+		cc.afterExit = fn
+		cc.exitMu.Unlock()
+		return
+	}
+	cc.exitMu.Unlock()
+	fn()
+}
+
 func (cc *ClientConductor) doWork() (workCount int, terminated bool) {
+	return cc.doWorkOn(false)
+}
+
+func (cc *ClientConductor) doWorkOn(conductorGoroutine bool) (workCount int, terminated bool) {
 	if !cc.adminLock.TryLock() {
 		return 0, false
 	}
-	defer cc.unlock()
+	if conductorGoroutine {
+		defer cc.unlockOnConductor()
+	} else {
+		defer cc.unlock()
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			cc.queueError(fmt.Errorf("client conductor panic: %v", r))
@@ -327,12 +371,16 @@ func (cc *ClientConductor) doWork() (workCount int, terminated bool) {
 }
 
 // Close stops the conductor, force closes all resources (with linger), invokes close handlers and informs the driver.
-// It is idempotent and safe to call concurrently.
+// It is idempotent and safe to call concurrently. Called from a callback running on the conductor goroutine it does
+// not wait (the goroutine finishes closing once the callback returns) and returns ErrCloseFromCallback.
 func (cc *ClientConductor) Close() error {
 	cc.stopOnce.Do(func() { close(cc.stopCh) })
 	if !cc.started {
 		cc.onClose()
 		return nil
+	}
+	if cc.inRunCallbacks.Get() {
+		return ErrCloseFromCallback
 	}
 	select {
 	case <-cc.doneCh:
@@ -403,6 +451,12 @@ func (cc *ClientConductor) unlock() {
 	}
 }
 
+func (cc *ClientConductor) unlockOnConductor() {
+	cc.inRunCallbacks.Set(true)
+	defer cc.inRunCallbacks.Set(false)
+	cc.unlock()
+}
+
 func (cc *ClientConductor) invokeCallback(cb func()) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -468,7 +522,11 @@ func (cc *ClientConductor) service(correlationID int64) (int, error) {
 func (cc *ClientConductor) receiveDriverEvents() (n int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = cc.terminate(fmt.Errorf("failed to read driver events: %v", r))
+			if rErr, ok := r.(error); ok && errors.Is(rErr, broadcast.ErrUnableToKeepUp) {
+				err = cc.terminate(fmt.Errorf("driver events adapter is invalid: %w", rErr))
+				return
+			}
+			err = fmt.Errorf("failed to process driver event: %v", r)
 		}
 	}()
 	return cc.driverListenerAdapter.ReceiveMessages(), nil
@@ -500,7 +558,11 @@ func (cc *ClientConductor) awaitResponse(correlationID int64) error {
 				"no response from MediaDriver within %v (correlationId=%d)",
 				time.Duration(cc.driverTimeoutNs), correlationID))
 		}
-		time.Sleep(awaitingIdleSleep)
+		if cc.awaitIdle != nil {
+			cc.awaitIdle()
+		} else {
+			time.Sleep(awaitingIdleSleep)
+		}
 	}
 }
 
@@ -546,6 +608,7 @@ func (cc *ClientConductor) checkLiveness(nowNs int64) (int, error) {
 			return 0, cc.terminate(fmt.Errorf("unexpected close of heartbeat timestamp counter: %d", id))
 		}
 		cc.heartbeatTimestamp.Set(nowMs)
+		cc.timeOfLastKeepaliveNs = nowNs
 	} else {
 		counterID := cc.counterReader.FindCounter(heartbeatTypeId, func(keyBuffer *atomic.Buffer) bool {
 			return keyBuffer.GetInt64(heartheatRegistrationIdOffset) == clientID
@@ -558,10 +621,10 @@ func (cc *ClientConductor) checkLiveness(nowNs int64) (int, error) {
 				cc.heartbeatTimestamp = hb
 				cc.onHeartbeatCounterFound(counterID)
 				hb.Set(nowMs)
+				cc.timeOfLastKeepaliveNs = nowNs
 			}
 		}
 	}
-	cc.timeOfLastKeepaliveNs = nowNs
 	return 1, nil
 }
 
@@ -615,6 +678,7 @@ func (cc *ClientConductor) closeImages(images []Image, handler UnavailableImageH
 		if image == nil {
 			continue
 		}
+		closeImage(image)
 		cc.linger(image, lingerNs)
 		if handler != nil {
 			img := image
@@ -767,6 +831,12 @@ func (cc *ClientConductor) getResource(registrationID int64, pendingKind resourc
 	if err := cc.ensureOpen(); err != nil {
 		return nil, err
 	}
+	if _, ok := cc.asyncCommandIDs[registrationID]; ok {
+		cc.serviceForPoll()
+		if err := cc.ensureOpen(); err != nil {
+			return nil, err
+		}
+	}
 	if err, ok := cc.asyncErrors[registrationID]; ok {
 		delete(cc.asyncErrors, registrationID)
 		return nil, err
@@ -777,7 +847,7 @@ func (cc *ClientConductor) getResource(registrationID int64, pendingKind resourc
 	}
 	if res.kind.isPending() {
 		if res.kind != pendingKind {
-			return nil, fmt.Errorf("registration id %d is not of the requested resource type", registrationID)
+			return nil, fmt.Errorf("%w: %d", ErrWrongResourceType, registrationID)
 		}
 		if cc.nanoClock()-res.timeOfRegistrationNs > cc.driverTimeoutNs {
 			delete(cc.resources, registrationID)
@@ -793,7 +863,7 @@ func (cc *ClientConductor) getResource(registrationID int64, pendingKind resourc
 			return res, nil
 		}
 	}
-	return nil, fmt.Errorf("registration id %d is not of the requested resource type", registrationID)
+	return nil, fmt.Errorf("%w: %d", ErrWrongResourceType, registrationID)
 }
 
 // releasePublication is called by Publication.Close.
@@ -821,18 +891,42 @@ func (cc *ClientConductor) releasePublicationLocked(regID int64, revoke bool) er
 	res.pubBase.isClosed.Set(true)
 	delete(cc.resources, regID)
 	cc.releaseLogBuffers(res.logBuffers, res.pubBase.originalRegID, explicitCloseLingerNs)
-	_, err := cc.driverProxy.RemovePublication(regID, revoke)
-	return err
+	return cc.sendTrackedRemove(func() (int64, error) { return cc.driverProxy.RemovePublication(regID, revoke) })
 }
 
 // AsyncRemovePublication closes the publication with the given registration id without blocking.
 func (cc *ClientConductor) AsyncRemovePublication(registrationID int64) error {
 	cc.adminLock.Lock()
 	defer cc.unlock()
-	if err := cc.ensureOpen(); err != nil {
+	if registrationID == nullValue || cc.isTerminating.Get() || cc.isClosed.Get() {
+		return nil
+	}
+	res := cc.resources[registrationID]
+	if res != nil {
+		switch res.kind {
+		case kindPublication, kindExclusivePublication:
+			return cc.releasePublicationLocked(registrationID, res.pubBase.revokeOnClose)
+		case kindPendingPublication, kindPendingExclusivePublication:
+			delete(cc.resources, registrationID)
+		default:
+			return fmt.Errorf("%w: %d is not a publication", ErrWrongResourceType, registrationID)
+		}
+	} else if _, ok := cc.asyncCommandIDs[registrationID]; !ok {
+		return nil
+	}
+	delete(cc.asyncCommandIDs, registrationID)
+	return cc.sendTrackedRemove(func() (int64, error) { return cc.driverProxy.RemovePublication(registrationID, false) })
+}
+
+// sendTrackedRemove sends a remove command and tracks its correlation id as an active async command (Java adds every
+// remove to asyncCommandIdSet), so HasActiveCommands covers it and a driver error is reported to the error handler.
+func (cc *ClientConductor) sendTrackedRemove(send func() (int64, error)) error {
+	corrID, err := send()
+	if err != nil {
 		return err
 	}
-	return cc.releasePublicationLocked(registrationID, false)
+	cc.asyncCommandIDs[corrID] = cc.nanoClock()
+	return nil
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -925,25 +1019,35 @@ func (cc *ClientConductor) releaseSubscriptionLocked(regID int64, images []Image
 	}
 	delete(cc.resources, regID)
 	cc.closeImages(images, res.subscription.UnavailableImageHandler(), explicitCloseLingerNs)
-	_, err := cc.driverProxy.RemoveSubscription(regID)
-	return err
+	return cc.sendTrackedRemove(func() (int64, error) { return cc.driverProxy.RemoveSubscription(regID) })
 }
 
 // AsyncRemoveSubscription closes the subscription with the given registration id without blocking.
 func (cc *ClientConductor) AsyncRemoveSubscription(registrationID int64) error {
 	cc.adminLock.Lock()
 	defer cc.unlock()
-	if err := cc.ensureOpen(); err != nil {
-		return err
+	if registrationID == nullValue || cc.isTerminating.Get() || cc.isClosed.Get() {
+		return nil
 	}
 	res := cc.resources[registrationID]
-	if res == nil || res.kind != kindSubscription {
+	if res != nil {
+		switch res.kind {
+		case kindSubscription:
+			if !res.subscription.isClosed.CompareAndSet(false, true) {
+				return nil
+			}
+			return cc.releaseSubscriptionLocked(registrationID, res.subscription.images.Empty())
+		case kindPendingSubscription:
+			res.subscription.isClosed.Set(true)
+			delete(cc.resources, registrationID)
+		default:
+			return fmt.Errorf("%w: %d is not a subscription", ErrWrongResourceType, registrationID)
+		}
+	} else if _, ok := cc.asyncCommandIDs[registrationID]; !ok {
 		return nil
 	}
-	if !res.subscription.isClosed.CompareAndSet(false, true) {
-		return nil
-	}
-	return cc.releaseSubscriptionLocked(registrationID, res.subscription.images.Empty())
+	delete(cc.asyncCommandIDs, registrationID)
+	return cc.sendTrackedRemove(func() (int64, error) { return cc.driverProxy.RemoveSubscription(registrationID) })
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1053,14 +1157,32 @@ func (cc *ClientConductor) asyncCommand(send func() (int64, error)) (int64, erro
 func (cc *ClientConductor) IsCommandActive(correlationID int64) bool {
 	cc.adminLock.Lock()
 	defer cc.unlock()
+	if cc.ensureOpen() != nil {
+		return false
+	}
 	_, ok := cc.asyncCommandIDs[correlationID]
+	if ok {
+		cc.serviceForPoll()
+		_, ok = cc.asyncCommandIDs[correlationID]
+	}
 	return ok
+}
+
+// serviceForPoll services the conductor once from a polling API call (Java service(NO_CORRELATION_ID)), so
+// polling makes progress with the conductor agent invoker. Errors go to the error handler. adminLock must be held.
+func (cc *ClientConductor) serviceForPoll() {
+	if _, err := cc.service(nullValue); err != nil {
+		cc.queueError(err)
+	}
 }
 
 // HasActiveCommands reports whether any async commands are awaiting a response.
 func (cc *ClientConductor) HasActiveCommands() bool {
 	cc.adminLock.Lock()
 	defer cc.unlock()
+	if cc.ensureOpen() != nil {
+		return false
+	}
 	return len(cc.asyncCommandIDs) > 0
 }
 
@@ -1183,14 +1305,24 @@ func (cc *ClientConductor) releaseCounterLocked(registrationID int64, counterID 
 func (cc *ClientConductor) AsyncRemoveCounter(registrationID int64) error {
 	cc.adminLock.Lock()
 	defer cc.unlock()
-	if err := cc.ensureOpen(); err != nil {
-		return err
-	}
-	res := cc.resources[registrationID]
-	if res == nil || res.kind != kindCounter {
+	if registrationID == nullValue || cc.isTerminating.Get() || cc.isClosed.Get() {
 		return nil
 	}
-	return cc.releaseCounterLocked(registrationID, res.counter.Id())
+	res := cc.resources[registrationID]
+	if res != nil {
+		switch res.kind {
+		case kindCounter:
+			return cc.releaseCounterLocked(registrationID, res.counter.Id())
+		case kindPendingCounter:
+			delete(cc.resources, registrationID)
+		default:
+			return fmt.Errorf("%w: %d is not a client owned counter", ErrWrongResourceType, registrationID)
+		}
+	} else if _, ok := cc.asyncCommandIDs[registrationID]; !ok {
+		return nil
+	}
+	delete(cc.asyncCommandIDs, registrationID)
+	return cc.sendTrackedRemove(func() (int64, error) { return cc.driverProxy.RemoveCounter(registrationID) })
 }
 
 // NextSessionID asks the driver for the next available session id for a stream (driver >= 1.47).
