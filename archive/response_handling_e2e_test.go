@@ -100,6 +100,18 @@ func TestE2E_RecordingEventsAndSignals(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 	}
+	// pollControlUntil polls only through cond: pollAll's PollForErrorResponse would consume the
+	// responses meant for the standalone pollers on the same control subscription.
+	pollControlUntil := func(what string, cond func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
 	hasSignal := func(recordingId int64, s codecs.RecordingSignalEnum) func() bool {
 		return func() bool {
 			mu.Lock()
@@ -247,7 +259,7 @@ func TestE2E_RecordingEventsAndSignals(t *testing.T) {
 		listed = append(listed, id)
 	}))
 	require.NoError(t, arch.Proxy.ListRecordingsRequest(listCorrelationId, 0, 1000))
-	waitFor("descriptor poller completion", func() bool {
+	pollControlUntil("descriptor poller completion", func() bool {
 		_, err := descriptorPoller.Poll()
 		require.NoError(t, err)
 		return descriptorPoller.IsDispatchComplete()
@@ -259,7 +271,7 @@ func TestE2E_RecordingEventsAndSignals(t *testing.T) {
 	responsePoller := NewControlResponsePoller(arch.Control.Subscription, 0)
 	positionCorrelationId := nextCorrelationID()
 	require.NoError(t, arch.Proxy.RecordingPositionRequest(positionCorrelationId, recordingId))
-	waitFor("control response poller", func() bool {
+	pollControlUntil("control response poller", func() bool {
 		_, err := responsePoller.Poll()
 		require.NoError(t, err)
 		return responsePoller.IsControlResponse() && responsePoller.CorrelationId() == positionCorrelationId
