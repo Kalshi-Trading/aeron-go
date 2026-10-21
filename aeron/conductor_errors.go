@@ -25,3 +25,10 @@ var ErrClientClosed = errors.New("aeron client is closed")
 
 // ErrUnknownRegistration is returned when polling a registration id this client never issued (or already consumed).
 var ErrUnknownRegistration = errors.New("unknown registration id")
+
+// ErrCloseFromCallback is returned by Aeron.Close when called from a callback running on the conductor goroutine. The
+// close still completes, on the conductor goroutine, once the callback returns.
+var ErrCloseFromCallback = errors.New("aeron client close requested from a conductor callback; completing asynchronously")
+
+// ErrWrongResourceType is returned when a registration id refers to a different kind of resource than requested.
+var ErrWrongResourceType = errors.New("registration id is not of the requested resource type")

@@ -158,7 +158,11 @@ func (i *ConductorAgentInvoker) Invoke() int {
 	if inv := i.aeron.context.driverAgentInvoker; inv != nil {
 		work += inv.Invoke()
 	}
-	n, _ := cc.doWork()
+	n, terminated := cc.doWork()
+	if terminated {
+		// Java AgentInvoker runs Agent.onClose on termination: close handlers, lingering cleanup and ClientClose.
+		cc.onClose()
+	}
 	return work + n
 }
 
