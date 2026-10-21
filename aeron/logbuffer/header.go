@@ -20,24 +20,16 @@ import (
 	"unsafe"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/util"
 )
 
-// Header is a flyweight over the data frame header of a fragment delivered to a handler. It matches Java's
-// io.aeron.logbuffer.Header.
 type Header struct {
-	buffer                atomic.Buffer
-	offset                int32
-	initialTermID         int32
-	positionBitsToShift   int32
+	buffer              atomic.Buffer
+	offset              int32
+	initialTermID       int32
+	positionBitsToShift int32
+	// fragmentedFrameLength is the term occupancy of a reassembled message, 0 when not reassembled.
 	fragmentedFrameLength int32
 	context               interface{}
-}
-
-// NewHeader creates a Header for the given initial term id and position bits, with an optional context object
-// (an Image when created by the client).
-func NewHeader(initialTermID int32, positionBitsToShift int32, context interface{}) *Header {
-	return &Header{initialTermID: initialTermID, positionBitsToShift: positionBitsToShift, context: context}
 }
 
 //go:norace
@@ -47,74 +39,9 @@ func (hdr *Header) Wrap(ptr unsafe.Pointer, length int32) *Header {
 }
 
 // Position calculates the current position to which the image has advanced on
-// reading this message.
+// reading this message. For a reassembled message this is the position after its last fragment.
 func (hdr *Header) Position() int64 {
-	return computePosition(hdr.TermId(), hdr.NextTermOffset(), hdr.positionBitsToShift, hdr.initialTermID)
-}
-
-// TermOffset returns the offset of the frame within its term, as stored in the frame header.
-func (hdr *Header) TermOffset() int32 {
-	return hdr.buffer.GetInt32(hdr.offset + DataFrameHeader.TermOffsetFieldOffset)
-}
-
-// NextTermOffset returns the term offset immediately after this frame (or after the whole reassembled message
-// when FragmentedFrameLength has been set by an assembler), aligned to FrameAlignment.
-func (hdr *Header) NextTermOffset() int32 {
-	return util.AlignInt32(hdr.TermOffset()+hdr.termOccupancyLength(), FrameAlignment)
-}
-
-// Type returns the frame type (HDR_TYPE_DATA, HDR_TYPE_PAD, ...).
-func (hdr *Header) Type() uint16 {
-	return hdr.buffer.GetUInt16(typeOffset(hdr.offset))
-}
-
-// ReservedValue returns the reserved value of the frame header.
-func (hdr *Header) ReservedValue() int64 {
-	return GetReservedValue(&hdr.buffer, hdr.offset)
-}
-
-// PositionBitsToShift returns the number of bits to shift a term count by to get a position.
-func (hdr *Header) PositionBitsToShift() int32 {
-	return hdr.positionBitsToShift
-}
-
-// Buffer returns the underlying buffer (typically a term buffer) the header is wrapping.
-func (hdr *Header) Buffer() *atomic.Buffer {
-	return &hdr.buffer
-}
-
-// Context returns the context associated with the header. When delivered by an Image poll this is the Image.
-func (hdr *Header) Context() interface{} {
-	return hdr.context
-}
-
-// SetContext sets the context associated with the header.
-func (hdr *Header) SetContext(context interface{}) *Header {
-	hdr.context = context
-	return hdr
-}
-
-// FragmentedFrameLength returns the total length of a reassembled fragmented message including the first frame
-// header, as set by a fragment assembler, or a value <= 0 (NullValue) when not set.
-func (hdr *Header) FragmentedFrameLength() int32 {
-	if hdr.fragmentedFrameLength <= 0 {
-		return -1
-	}
-	return hdr.fragmentedFrameLength
-}
-
-// SetFragmentedFrameLength is used by fragment assemblers so that Position() and NextTermOffset() account for the
-// whole reassembled message. Set to -1 to clear.
-func (hdr *Header) SetFragmentedFrameLength(fragmentedFrameLength int32) *Header {
-	hdr.fragmentedFrameLength = fragmentedFrameLength
-	return hdr
-}
-
-func (hdr *Header) termOccupancyLength() int32 {
-	if hdr.fragmentedFrameLength > 0 {
-		return hdr.fragmentedFrameLength
-	}
-	return hdr.FrameLength()
+	return computePosition(hdr.TermId(), hdr.NextTermOffset(), hdr.positionBitsToShift, hdr.InitialTermId())
 }
 
 func (hdr *Header) Offset() int32 {
@@ -141,9 +68,6 @@ func (hdr *Header) StreamId() int32 {
 	return GetStreamId(&hdr.buffer, hdr.offset)
 }
 
-// GetReservedValue returns the reserved value of the frame header.
-//
-// Deprecated: use ReservedValue.
 func (hdr *Header) GetReservedValue() int64 {
 	return GetReservedValue(&hdr.buffer, hdr.offset)
 }

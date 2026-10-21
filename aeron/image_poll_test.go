@@ -29,12 +29,12 @@ import (
 )
 
 const (
-	testSessionID     int32 = 77
-	testStreamID      int32 = 1001
-	testInitialTermID int32 = 5
-	testMtu           int32 = 1408
-	flagUnfragmented  uint8 = 0xC0
-	flagBegin         uint8 = 0x80
+	imgTestSessionID     int32 = 77
+	imgTestStreamID      int32 = 1001
+	imgTestInitialTermID int32 = 5
+	imgTestMtu           int32 = 1408
+	flagUnfragmented     uint8 = 0xC0
+	flagBegin            uint8 = 0x80
 )
 
 type testImage struct {
@@ -56,13 +56,13 @@ func newTestImage(t *testing.T) *testImage {
 	var meta logbuffer.LogBufferMetaData
 	meta.Wrap(metaBuf, 0)
 	meta.TermLen.Set(termLength)
-	meta.InitTermID.Set(testInitialTermID)
-	meta.MTULen.Set(testMtu)
+	meta.InitTermID.Set(imgTestInitialTermID)
+	meta.MTULen.Set(imgTestMtu)
 	meta.EndOfStreamPosOff.Set(math.MaxInt64)
 	require.NoError(t, mmap.Close())
 
 	counters := atomic.MakeBuffer(make([]byte, 4096))
-	img := DefaultImageFactory(testSessionID, 99, fileName, 11, "127.0.0.1:1234", counters, 3).(*image)
+	img := DefaultImageFactory(imgTestSessionID, 99, fileName, 11, "127.0.0.1:1234", counters, 3).(*image)
 	t.Cleanup(func() { _ = img.Close() })
 	return &testImage{image: img, term: img.termBuffers[0], counters: counters, fileName: fileName}
 }
@@ -75,9 +75,9 @@ func (ti *testImage) appendFrame(offset int32, payloadLength int32, flags uint8,
 	buf.PutUInt8(offset+logbuffer.DataFrameHeader.FlagsFieldOffset, flags)
 	buf.PutUInt16(offset+logbuffer.DataFrameHeader.TypeFieldOffset, logbuffer.DataFrameHeader.TypeData)
 	buf.PutInt32(offset+logbuffer.DataFrameHeader.TermOffsetFieldOffset, offset)
-	buf.PutInt32(offset+logbuffer.DataFrameHeader.SessionIDFieldOffset, testSessionID)
-	buf.PutInt32(offset+logbuffer.DataFrameHeader.StreamIDFieldOffset, testStreamID)
-	buf.PutInt32(offset+logbuffer.DataFrameHeader.TermIDFieldOffset, testInitialTermID)
+	buf.PutInt32(offset+logbuffer.DataFrameHeader.SessionIDFieldOffset, imgTestSessionID)
+	buf.PutInt32(offset+logbuffer.DataFrameHeader.StreamIDFieldOffset, imgTestStreamID)
+	buf.PutInt32(offset+logbuffer.DataFrameHeader.TermIDFieldOffset, imgTestInitialTermID)
 	buf.PutInt64(offset+logbuffer.DataFrameHeader.ReservedValueFieldOffset, reserved)
 	for i := int32(0); i < payloadLength; i++ {
 		buf.PutUInt8(offset+logbuffer.DataFrameHeader.Length+i, uint8(i))
@@ -90,7 +90,7 @@ func (ti *testImage) appendPadding(offset int32, length int32) int32 {
 	buf := ti.term
 	buf.PutUInt16(offset+logbuffer.DataFrameHeader.TypeFieldOffset, logbuffer.DataFrameHeader.TypePad)
 	buf.PutInt32(offset+logbuffer.DataFrameHeader.TermOffsetFieldOffset, offset)
-	buf.PutInt32(offset+logbuffer.DataFrameHeader.TermIDFieldOffset, testInitialTermID)
+	buf.PutInt32(offset+logbuffer.DataFrameHeader.TermIDFieldOffset, imgTestInitialTermID)
 	buf.PutInt32Ordered(offset, length)
 	return offset + length
 }
@@ -102,10 +102,10 @@ func TestImageAccessors(t *testing.T) {
 	require.Equal(t, "127.0.0.1:1234", ti.SourceIdentity())
 	require.Equal(t, int64(99), ti.CorrelationID())
 	require.Equal(t, int64(11), ti.SubscriptionRegistrationID())
-	require.Equal(t, testSessionID, ti.SessionID())
+	require.Equal(t, imgTestSessionID, ti.SessionID())
 	require.Equal(t, int32(logbuffer.TermMinLength), ti.TermBufferLength())
-	require.Equal(t, testMtu, ti.MtuLength())
-	require.Equal(t, testInitialTermID, ti.InitialTermID())
+	require.Equal(t, imgTestMtu, ti.MtuLength())
+	require.Equal(t, imgTestInitialTermID, ti.InitialTermID())
 	require.Equal(t, int32(16), ti.PositionBitsToShift())
 	require.Equal(t, int64(math.MaxInt64), ti.EndOfStreamPosition())
 	require.False(t, ti.IsEndOfStream())
@@ -128,10 +128,10 @@ func TestImagePollAndHeader(t *testing.T) {
 		context                                    interface{}
 	}
 	handler := func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
-		require.Equal(t, testSessionID, header.SessionId())
-		require.Equal(t, testStreamID, header.StreamId())
-		require.Equal(t, testInitialTermID, header.TermId())
-		require.Equal(t, testInitialTermID, header.InitialTermId())
+		require.Equal(t, imgTestSessionID, header.SessionId())
+		require.Equal(t, imgTestStreamID, header.StreamId())
+		require.Equal(t, imgTestInitialTermID, header.TermId())
+		require.Equal(t, imgTestInitialTermID, header.InitialTermId())
 		require.Equal(t, logbuffer.DataFrameHeader.TypeData, header.Type())
 		require.Equal(t, length+logbuffer.DataFrameHeader.Length, header.FrameLength())
 		headers = append(headers, struct {
@@ -276,7 +276,7 @@ func TestImageBlockAndRawPoll(t *testing.T) {
 		gotOffset, gotLength, gotSession, gotTerm = offset, length, sessionID, termID
 	}
 	require.Equal(t, int32(64), ti.BlockPoll(block, 100), "only whole frames within the block limit")
-	require.Equal(t, []int32{0, 64, testSessionID, testInitialTermID}, []int32{gotOffset, gotLength, gotSession, gotTerm})
+	require.Equal(t, []int32{0, 64, imgTestSessionID, imgTestInitialTermID}, []int32{gotOffset, gotLength, gotSession, gotTerm})
 	require.Equal(t, int64(64), ti.Position())
 
 	var gotFile string

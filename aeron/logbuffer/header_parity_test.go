@@ -34,7 +34,7 @@ func TestHeaderParityAccessors(t *testing.T) {
 	buf.PutInt64(frameOffset+DataFrameHeader.ReservedValueFieldOffset, -99)
 
 	ctx := "ctx"
-	h := NewHeader(10, 16, ctx)
+	h := NewHeader(10, 16).SetContext(ctx)
 	h.Wrap(buf.Ptr(), buf.Capacity())
 	h.SetOffset(frameOffset)
 
