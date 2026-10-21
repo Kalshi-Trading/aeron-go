@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package status provides read-only helpers for locating and decoding the counters an Aeron Archive
-// publishes into the media driver's CnC counters file. It ports io.aeron.archive.status.RecordingPos,
-// io.aeron.archive.ArchiveCounters and io.aeron.archive.ControlSessionCounter (lookups only; the
-// allocation side lives in the Java archive) from Aeron 1.53.3.
+// Package status provides helpers for locating and decoding the counters an Aeron Archive publishes into the
+// media driver's CnC counters file. It ports io.aeron.archive.status.RecordingPos,
+// io.aeron.archive.ArchiveCounters and io.aeron.archive.ControlSessionCounter from Aeron 1.53.3, including the
+// public RecordingPos.allocate and ArchiveCounters.allocate encoders (ControlSessionCounter.allocate is
+// package-private in Java and is not ported).
 package status
