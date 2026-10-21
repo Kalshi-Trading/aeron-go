@@ -144,7 +144,7 @@ func TestE2E_RecordingEventsAndSignals(t *testing.T) {
 		return false
 	}
 	buffer := atomic.MakeBuffer(make([]byte, 256))
-	publish := func(pub *aeron.Publication, recordingId int64, count int) {
+	publish := func(pub *aeron.ExclusivePublication, recordingId int64, count int) {
 		t.Helper()
 		waitFor("publication connected", pub.IsConnected)
 		for i := 0; i < count; i++ {
@@ -157,6 +157,11 @@ func TestE2E_RecordingEventsAndSignals(t *testing.T) {
 			return err == nil && pos == pub.Position()
 		})
 	}
+
+	// Events published before the dynamic MDC subscriptions connect are not delivered.
+	waitFor("recording events subscriptions connected", func() bool {
+		return arch.Events.Subscription.IsConnected() && eventsSub.IsConnected()
+	})
 
 	stream := int32(20000 + rand.Intn(10000))
 	const channel = "aeron:ipc?term-length=65536"
