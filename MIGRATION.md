@@ -131,8 +131,8 @@ behaviour is available under additive names.
 
 * `aeron.ChannelUri` has value semantics again: `ParseChannelUri(s) (ChannelUri, error)`, value receivers for the
   read methods and `Set`/`Remove`, `Clone() ChannelUri`, `Remove(key)`, `SetMedia(m)`, `SetPrefix(p)` (no returns).
-  Copies share their parameters (as with upstream's map) and keep insertion order, so `String()` round-trips the
-  parsed order rather than upstream's sorted keys. `Lookup` gives the previous value before a `Remove`; `Put` also
+  Copies share their parameters (as with upstream's map). `String()` writes parameters sorted by key, as upstream
+  did, so URIs with the same parameters render identically; `ForEachParameter` visits them in insertion order. `Lookup` gives the previous value before a `Remove`; `Put` also
   works on a zero `ChannelUri`, where `Set` panics as upstream did. `SetMedia` no longer validates the media.
 * `(*Aeron).AddPublicationDeprecated` / `AddSubscriptionDeprecated` (chan-returning, deprecated).
 * `aeron.NewIdAndAvailablePair` / `NewIdAndUnavailablePair`.

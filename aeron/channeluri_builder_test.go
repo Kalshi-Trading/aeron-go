@@ -97,7 +97,8 @@ func TestChannelUriStringBuilderGenerate(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tc.expected, got)
 			assert.Equal(t, tc.expected, tc.b.String())
-			assert.Equal(t, got, MustParseChannelUri(got).String())
+			parsed := MustParseChannelUri(got).String()
+			assert.Equal(t, parsed, MustParseChannelUri(parsed).String())
 		})
 	}
 }

@@ -95,9 +95,9 @@ func TestChannelUriShouldRoundTripToString(t *testing.T) {
 	for _, s := range []string{
 		"aeron:udp?endpoint=224.10.9.8:777",
 		"aeron-spy:aeron:udp?control=224.10.9.8:777",
-		"aeron:udp?ttl=16|endpoint=224.10.9.8|interface=199.168.0.3|port=4567",
+		"aeron:udp?endpoint=224.10.9.8|interface=199.168.0.3|port=4567|ttl=16",
 		"aeron:ipc",
-		"aeron:udp?endpoint=localhost:0|tags=1,2|session-id=tag:7",
+		"aeron:udp?endpoint=localhost:0|session-id=tag:7|tags=1,2",
 	} {
 		uri := MustParseChannelUri(s)
 		assert.Equal(t, s, uri.String())
@@ -121,6 +121,13 @@ func TestChannelUriCloneIsDeep(t *testing.T) {
 	assert.Equal(t, "aeron:udp?endpoint=b:2|ttl=3", c.String())
 }
 
+func TestChannelUriStringIgnoresParameterOrder(t *testing.T) {
+	a := MustParseChannelUri("aeron:udp?control=gw:1|control-mode=dynamic|fc=max")
+	b := MustParseChannelUri("aeron:udp?fc=max|control-mode=dynamic|control=gw:1")
+	assert.Equal(t, "aeron:udp?control=gw:1|control-mode=dynamic|fc=max", a.String())
+	assert.Equal(t, a.String(), b.String())
+}
+
 func TestChannelUriPutRemove(t *testing.T) {
 	uri := MustParseChannelUri("aeron:udp?endpoint=a:1|ttl=3|mtu=8k")
 	uri.Remove("ttl")
@@ -128,10 +135,10 @@ func TestChannelUriPutRemove(t *testing.T) {
 	uri.Remove("ttl")
 	assert.Equal(t, "a:1", uri.Put("endpoint", "b:2"))
 	assert.Equal(t, "", uri.Put("alias", "x"))
-	assert.Equal(t, "aeron:udp?endpoint=b:2|mtu=8k|alias=x", uri.String())
+	assert.Equal(t, "aeron:udp?alias=x|endpoint=b:2|mtu=8k", uri.String())
 	uri.SetMedia("ipc")
 	uri.SetPrefix(SpyQualifier)
-	assert.Equal(t, "aeron-spy:aeron:ipc?endpoint=b:2|mtu=8k|alias=x", uri.String())
+	assert.Equal(t, "aeron-spy:aeron:ipc?alias=x|endpoint=b:2|mtu=8k", uri.String())
 }
 
 func TestChannelUriValueCopiesShareParams(t *testing.T) {
@@ -300,7 +307,7 @@ func TestChannelUriAddSessionId(t *testing.T) {
 	assert.Equal(t, "aeron:udp?endpoint=localhost:1|session-id=-5", got)
 	got, err = AddSessionID("aeron:udp?session-id=1|endpoint=localhost:1", 7)
 	require.NoError(t, err)
-	assert.Equal(t, "aeron:udp?session-id=7|endpoint=localhost:1", got)
+	assert.Equal(t, "aeron:udp?endpoint=localhost:1|session-id=7", got)
 	_, err = AddSessionID("udp", 7)
 	assert.Error(t, err)
 }
@@ -324,7 +331,7 @@ func TestChannelUriReplacePortWithWildcard(t *testing.T) {
 func TestChannelUriInitialPosition(t *testing.T) {
 	uri := MustParseChannelUri("aeron:ipc")
 	require.NoError(t, uri.InitialPosition(17*1024*1024, -9, 4*1024*1024))
-	assert.Equal(t, "aeron:ipc?init-term-id=-9|term-id=-5|term-offset=1048576|term-length=4194304", uri.String())
+	assert.Equal(t, "aeron:ipc?init-term-id=-9|term-id=-5|term-length=4194304|term-offset=1048576", uri.String())
 	assert.Error(t, uri.InitialPosition(-32, 0, 64*1024))
 	assert.Error(t, uri.InitialPosition(33, 0, 64*1024))
 	assert.Error(t, uri.InitialPosition(0, 0, 1000))
