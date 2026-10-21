@@ -87,6 +87,18 @@ var ErrImageClosed = errors.New("ReplayMerge Image closed unexpectedly")
 // ErrArchiveNotConnected is returned when the archive control response stream is no longer connected.
 var ErrArchiveNotConnected = errors.New("archive is not connected")
 
+// archiveNotConnectedError is ErrArchiveNotConnected as Java's ArchiveException("archive is not connected"):
+// errors.Is matches ErrArchiveNotConnected and errors.As yields an *ArchiveError with ErrorCodeGeneric.
+type archiveNotConnectedError struct{ cause *ArchiveError }
+
+func newArchiveNotConnectedError() error {
+	return &archiveNotConnectedError{archive.NewArchiveException(ErrArchiveNotConnected.Error(),
+		archive.ErrorCodeGeneric, aeron.NullValue)}
+}
+
+func (e *archiveNotConnectedError) Error() string   { return e.cause.Error() }
+func (e *archiveNotConnectedError) Unwrap() []error { return []error{ErrArchiveNotConnected, e.cause} }
+
 // ArchiveError is the error returned for an ERROR control response received for this control session. It is the
 // archive client's ArchiveException, as Java's ReplayMerge throws ArchiveException(message, errorCode, correlationId).
 type ArchiveError = archive.ArchiveException
@@ -669,7 +681,7 @@ func (rm *ReplayMerge) pollForResponse(correlationID int64) (bool, error) {
 			return response.CorrelationId == correlationID, nil
 		}
 	} else if pollCount == 0 && !rm.archive.isResponseConnected() {
-		return false, ErrArchiveNotConnected
+		return false, newArchiveNotConnectedError()
 	}
 	return false, nil
 }
