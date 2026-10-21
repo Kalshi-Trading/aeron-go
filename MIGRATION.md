@@ -58,6 +58,8 @@ the cluster schema is v17 and the driver protocol includes commands added after 
 | `(*Archive).TruncateRecording(id, pos) error` | `(int64, error)` | Returns the number of deleted segments (Java `truncateRecording`). |
 | `(*Archive).AddExclusivePublication` returned `*aeron.Publication` | `*aeron.ExclusivePublication` | As for `aeron`. |
 | `Proxy.Publication *aeron.Publication` | `aeron.Publisher` | Field type is now the interface. |
+| `(*Archive).StopRecordingByPublication(aeron.Publication)` | takes `aeron.Publisher` | Pass the `*Publication` / `*ExclusivePublication` pointer (the old value parameter copied the publication). |
+| `(*Proxy).CatalogHeaderRequest` | removed | Not part of the Java 1.53.3 archive client protocol. |
 | `NULL_RECORDING_ID` untyped, `RECORDING_ID_OFFSET`, `SESSION_ID_OFFSET`, `SOURCE_IDENTITY_*`, `RECORDING_POSITION_COUNTER_TYPE_ID` untyped | typed `int64` / `int32`; `RecordingIdNullValue` is now untyped | Remove conversions that no longer compile. |
 | `RecordingLengthMax = 4294967295` | `math.MaxInt64` | Java `AeronArchive.NULL_LENGTH`/max length semantics; `StartReplay(..., length)` with `RecordingLengthMax` now replays everything. |
 

@@ -55,6 +55,14 @@ func setup(t *testing.T) string {
 	return dir
 }
 
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if binDir != "" {
+		_ = os.RemoveAll(binDir)
+	}
+	os.Exit(code)
+}
+
 type proc struct {
 	cmd *exec.Cmd
 	out *bytes.Buffer
