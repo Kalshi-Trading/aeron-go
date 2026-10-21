@@ -15,7 +15,6 @@
 package archive
 
 import (
-	"bytes"
 	"fmt"
 	"time"
 
@@ -34,7 +33,6 @@ const controlFragmentLimit = 10
 // goroutines. A single Control must not be polled concurrently.
 type Control struct {
 	Subscription *aeron.Subscription
-	State        controlState
 
 	// Polling results
 	Results ControlResults
@@ -79,24 +77,7 @@ type PollContext struct {
 	correlationID int64
 }
 
-// Archive Connection State used internally for connection establishment
-const (
-	ControlStateError              = -1
-	ControlStateNew                = iota
-	ControlStateConnectRequestSent = iota
-	ControlStateChallenged         = iota
-	ControlStateConnectRequestOk   = iota
-	ControlStateConnected          = iota
-	ControlStateTimedOut           = iota
-)
-
 var ErrNotConnected = fmt.Errorf("not connected")
-
-// Used internally to handle connection state
-type controlState struct {
-	state int
-	err   error
-}
 
 // CodecIds stops us allocating every object when we need only one
 // Arguably SBE should give us a static value
@@ -109,6 +90,7 @@ type CodecIds struct {
 	recordingStarted                uint16
 	recordingProgress               uint16
 	recordingStopped                uint16
+	ping                            uint16
 }
 
 // codecIds is written once by init() and only read afterwards.
@@ -123,6 +105,7 @@ func init() {
 	codecIds.recordingStarted = new(codecs.RecordingStarted).SbeTemplateId()
 	codecIds.recordingProgress = new(codecs.RecordingProgress).SbeTemplateId()
 	codecIds.recordingStopped = new(codecs.RecordingStopped).SbeTemplateId()
+	codecIds.ping = new(codecs.Ping).SbeTemplateId()
 }
 
 func (control *Control) rangeChecking() bool {
@@ -201,78 +184,6 @@ func (control *Control) poll(handler term.ControlledFragmentHandler, fragmentLim
 
 func (control *Control) dispatch(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) term.ControlledPollAction {
 	return control.activeHandler(buffer, offset, length, header)
-}
-
-// ConnectionControlFragmentHandler is the connection handling specific fragment handler. Results are
-// passed back via control.State and Archive.SessionID.
-func ConnectionControlFragmentHandler(context *PollContext, buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
-	control := context.control
-	logger.Debugf("ConnectionControlFragmentHandler: correlationID:%d offset:%d length: %d", context.correlationID, offset, length)
-	if !control.wrap(buffer, offset, length) {
-		return
-	}
-
-	switch control.decoder.templateId() {
-	case codecIds.controlResponse:
-		r := &control.controlResponse
-		if !control.decode(r) {
-			return
-		}
-		if r.CorrelationId != context.correlationID {
-			// Possible if several clients share the response channel/stream
-			logger.Debugf("ConnectionControlFragmentHandler: ignoring correlationID=%d", r.CorrelationId)
-			return
-		}
-		if r.Code != codecs.ControlResponseCode.OK {
-			control.State.state = ControlStateError
-			if r.Code == codecs.ControlResponseCode.ERROR {
-				control.State.err = newArchiveResponseException(string(r.ErrorMessage), r.RelevantId, r.CorrelationId)
-			} else {
-				control.State.err = NewArchiveException(
-					fmt.Sprintf("unexpected connect response code %d: %s", r.Code, r.ErrorMessage),
-					ErrorCodeGeneric, r.CorrelationId)
-			}
-			control.onError(control.State.err)
-			return
-		}
-		if control.State.state != ControlStateConnectRequestSent && control.State.state != ControlStateChallenged {
-			control.State.state = ControlStateError
-			control.State.err = fmt.Errorf("control response not expected in connection state %d", control.State.state)
-			control.onError(control.State.err)
-			return
-		}
-		control.State.state = ControlStateConnected
-		control.State.err = nil
-		control.archive.SessionID = r.ControlSessionId
-
-	case codecIds.challenge:
-		c := &control.challenge
-		if !control.decode(c) {
-			return
-		}
-		if c.CorrelationId != context.correlationID {
-			logger.Debugf("ConnectionControlFragmentHandler: ignoring challenge correlationID=%d", c.CorrelationId)
-			return
-		}
-		logger.Infof("ConnectionControlFragmentHandler: challenge:%s, session:%d, correlationID:%d", c.EncodedChallenge, c.ControlSessionId, c.CorrelationId)
-
-		// Check the challenge is expected iff our option for this is not nil
-		if control.archive.Options.AuthChallenge != nil && !bytes.Equal(control.archive.Options.AuthChallenge, c.EncodedChallenge) {
-			control.State.err = fmt.Errorf("ChallengeResponse Unexpected: expected:%v received:%v", control.archive.Options.AuthChallenge, c.EncodedChallenge)
-			return
-		}
-		control.State.state = ControlStateChallenged
-		control.State.err = nil
-		control.archive.SessionID = c.ControlSessionId
-		if err := control.archive.Proxy.ChallengeResponse(c.CorrelationId, control.archive.Options.AuthResponse); err != nil {
-			control.State.state = ControlStateError
-			control.State.err = err
-		}
-
-	default:
-		// Descriptors, signals and unknown templates belong to other sessions or are stale; ignore them.
-		logger.Debugf("ConnectionControlFragmentHandler: ignoring templateId %d", control.decoder.templateId())
-	}
 }
 
 // PollForErrorResponse polls the response stream for errors or async events.

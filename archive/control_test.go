@@ -197,6 +197,7 @@ func encode(t *testing.T, data encodable) *atomic.Buffer {
 
 func newTestControl(t *testing.T) (*Control, *aeron.MockImage) {
 	image := aeron.NewMockImage(t)
+	image.On("IsClosed").Return(false).Maybe()
 	c := &Control{
 		Subscription: newTestSub(image),
 	}

@@ -78,12 +78,12 @@ func (c ArchiveErrorCode) String() string {
 type ArchiveException struct {
 	Message       string
 	ErrorCode     ArchiveErrorCode
-	CorrelationId int64
+	CorrelationID int64
 }
 
 // NewArchiveException creates an ArchiveException. Use aeron.NullValue for an unknown correlationId.
 func NewArchiveException(message string, errorCode ArchiveErrorCode, correlationId int64) *ArchiveException {
-	return &ArchiveException{Message: message, ErrorCode: errorCode, CorrelationId: correlationId}
+	return &ArchiveException{Message: message, ErrorCode: errorCode, CorrelationID: correlationId}
 }
 
 // newArchiveResponseException builds the exception for a control response with code ERROR, matching the
@@ -96,6 +96,9 @@ func newArchiveResponseException(errorMessage string, relevantId int64, correlat
 		correlationId,
 	)
 }
+
+// ArchiveError is an alias of ArchiveException kept for callers of the recording/replay API.
+type ArchiveError = ArchiveException
 
 func (e *ArchiveException) Error() string {
 	return "ArchiveException: " + e.Message

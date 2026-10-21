@@ -19,13 +19,13 @@ package archive
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sync"
+	stdatomic "sync/atomic"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/logbuffer"
-	"github.com/lirm/aeron-go/aeron/logbuffer/term"
 	"github.com/lirm/aeron-go/aeron/logging"
 	"github.com/lirm/aeron-go/archive/codecs"
 )
@@ -40,14 +40,16 @@ type Archive struct {
 	Control      *Control                // For incoming protocol messages (subscribe/reponse)
 	Events       *RecordingEventsAdapter // For async recording events (must be enabled)
 	Listeners    *ArchiveListeners       // Per client event listeners for async callbacks
-	mtx          sync.Mutex              // To ensure no overlapped I/O on archive RPC calls
+	mtx          sync.Locker             // Options.Lock: ensures no overlapped I/O on archive RPC calls
+	archiveID    int64                   // From ArchiveIdRequest, aeron.NullValue if unsupported
+	state        stdatomic.Int32         // ArchiveState
 }
 
 // Constant values used to control behaviour of StartReplay
 const (
-	RecordingPositionNull = int64(-1)        // Replay a stream from the start.
-	RecordingLengthNull   = int64(-1)        // Replay will follow a live recording
-	RecordingLengthMax    = int64(2<<31 - 1) // Replay the whole stream
+	RecordingPositionNull = int64(-1)            // Replay a stream from the start.
+	RecordingLengthNull   = int64(-1)            // Replay will follow a live recording
+	RecordingLengthMax    = int64(math.MaxInt64) // Replay the whole stream and follow a live recording
 )
 
 // replication flag used for duplication instead of extension, see Replicate and variants
@@ -184,41 +186,22 @@ func AddSessionIdToChannel(channel string, sessionID int32) (string, error) {
 	return uri.String(), nil
 }
 
-// NewArchive factory method to create an Archive instance
-// You may provide your own archive Options or otherwise one will be created from defaults
-// You may provide your own aeron Context or otherwise one will be created from defaults
+// NewArchive connects to an archive, blocking until connected or Options.Timeout elapses.
+// You may provide your own archive Options or otherwise one will be created from defaults.
+// You may provide your own aeron Context or otherwise one will be created from defaults (ignored if Options.Aeron
+// is set). Equivalent to Connect; see NewAsyncConnect for a non-blocking connect.
 func NewArchive(options *Options, context *aeron.Context) (*Archive, error) {
-	var err error
+	return Connect(options, context)
+}
 
+// newArchive builds an unconnected Archive for the concluded options. Connection is established by AsyncConnect.
+func newArchive(options *Options, context *aeron.Context) *Archive {
 	archive := new(Archive)
-	archive.aeron = new(aeron.Aeron)
 	archive.aeronContext = context
-
-	defer func() {
-		if err != nil {
-			archive.Close()
-		}
-	}()
-
-	// Use the provided options or use our defaults
-	if options != nil {
-		archive.Options = options
-	} else {
-		if archive.Options == nil {
-			// Create a new set
-			archive.Options = DefaultOptions()
-		}
-	}
-
-	// Set the logging levels
-	logging.SetLevel(archive.Options.ArchiveLoglevel, "archive")
-	logging.SetLevel(archive.Options.AeronLoglevel, "aeron")
-	logging.SetLevel(archive.Options.AeronLoglevel, "memmap")
-	logging.SetLevel(archive.Options.AeronLoglevel, "driver")
-	logging.SetLevel(archive.Options.AeronLoglevel, "counters")
-	logging.SetLevel(archive.Options.AeronLoglevel, "logbuffers")
-	logging.SetLevel(archive.Options.AeronLoglevel, "buffer")
-	logging.SetLevel(archive.Options.AeronLoglevel, "rb")
+	archive.Options = options
+	archive.mtx = options.Lock
+	archive.archiveID = aeron.NullValue
+	archive.SessionID = aeron.NullValue
 
 	// Setup the Control (subscriber/response)
 	archive.Control = new(Control)
@@ -253,119 +236,14 @@ func NewArchive(options *Options, context *aeron.Context) (*Archive, error) {
 
 		archive.Listeners.NewSubscriptionListener = LoggingNewSubscriptionListener
 		archive.Listeners.NewPublicationListener = LoggingNewPublicationListener
-
-		archive.aeronContext.NewSubscriptionHandler(archive.Listeners.NewSubscriptionListener)
-		archive.aeronContext.NewPublicationHandler(archive.Listeners.NewPublicationListener)
 	}
-
-	// Connect the underlying aeron
-	archive.aeron, err = aeron.Connect(archive.aeronContext)
-	if err != nil {
-		return nil, err
+	if options.ErrorHandler != nil {
+		archive.Listeners.ErrorListener = options.ErrorHandler
 	}
-
-	// and then the subscription, it's poller and initiate a connection
-	sub, err := archive.aeron.AddSubscription(archive.Options.ResponseChannel, archive.Options.ResponseStream)
-	if err != nil {
-		return nil, err
+	if options.RecordingSignalConsumer != nil {
+		archive.Listeners.RecordingSignalListener = options.RecordingSignalConsumer
 	}
-	archive.Control.Subscription = sub
-	logger.Debugf("Control response subscription: %#v", archive.Control.Subscription)
-
-	start := time.Now()
-	responseChannel := archive.Control.Subscription.TryResolveChannelEndpointPort()
-	for responseChannel == "" {
-		archive.Options.IdleStrategy.Idle(0)
-		responseChannel = archive.Control.Subscription.TryResolveChannelEndpointPort()
-		if time.Since(start) > archive.Options.Timeout {
-			err = fmt.Errorf("Resolving channel endpoint for %s failed", archive.Control.Subscription.Channel())
-			logger.Errorf(err.Error())
-			return nil, err
-		}
-	}
-
-	// Create the publication half for the proxy that looks after sending requests on that
-	pub, err := archive.aeron.AddExclusivePublication(archive.Options.RequestChannel, archive.Options.RequestStream)
-	if err != nil {
-		return nil, err
-	}
-	archive.Proxy.Publication = pub
-	logger.Debugf("Proxy request publication: %#v", archive.Proxy.Publication)
-
-	// And intitiate the connection
-	archive.Control.State.state = ControlStateConnectRequestSent
-	correlationID := nextCorrelationID()
-	logger.Debugf("NewArchive correlationID is %d", correlationID)
-	correlations.Store(correlationID, archive.Control) // For subsequent lookup in the fragment assemblers
-	defer correlations.Delete(correlationID)           // Clear the lookup
-
-	// Use Auth if requested
-	if archive.Options.AuthEnabled {
-		if err = archive.Proxy.AuthConnectRequest(correlationID, archive.Options.ResponseStream, responseChannel, archive.Options.AuthCredentials); err != nil {
-			logger.Errorf("AuthConnectRequest failed: %s", err)
-			return nil, err
-		}
-	} else {
-		if err = archive.Proxy.ConnectRequest(correlationID, archive.Options.ResponseStream, responseChannel); err != nil {
-			logger.Errorf("ConnectRequest failed: %s", err)
-			return nil, err
-		}
-	}
-
-	start = time.Now()
-	pollContext := PollContext{archive.Control, correlationID}
-
-	for archive.Control.State.state != ControlStateConnected && archive.Control.State.err == nil {
-		fragments := archive.Control.poll(
-			func(buf *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) term.ControlledPollAction {
-				ConnectionControlFragmentHandler(&pollContext, buf, offset, length, header)
-				return term.ControlledPollActionContinue
-			}, 1)
-		if fragments > 0 {
-			logger.Debugf("Read %d fragment(s)", fragments)
-		}
-
-		// Check for timeout
-		if time.Since(start) > archive.Options.Timeout {
-			archive.Control.State.state = ControlStateTimedOut
-			archive.Control.State.err = fmt.Errorf("operation timed out")
-			break
-		} else {
-			archive.Options.IdleStrategy.Idle(0)
-		}
-	}
-
-	if err = archive.Control.State.err; err != nil {
-		logger.Errorf("Connect failed: %s", err)
-		return nil, err
-	} else if archive.Control.State.state != ControlStateConnected {
-		logger.Error("Connect failed")
-	} else {
-		logger.Infof("Archive connection established for sessionId:%d", archive.SessionID)
-	}
-
-	return archive, archive.Control.State.err
-}
-
-// Close will terminate client conductor and remove all publications and subscriptions from the media driver
-func (archive *Archive) Close() error {
-	archive.mtx.Lock()
-	defer archive.mtx.Unlock()
-
-	if archive.Proxy.Publication != nil {
-		archive.Proxy.CloseSessionRequest()
-		archive.Proxy.Publication.Close()
-	}
-
-	if archive.Control.Subscription != nil {
-		archive.Control.Subscription.Close()
-	}
-
-	if archive.aeron != nil {
-		return archive.aeron.Close()
-	}
-
-	return nil
+	return archive
 }
 
 // Aeron returns the archive's aeron client.
@@ -550,14 +428,11 @@ func (archive *Archive) StopRecordingByIdentity(recordingID int64) (bool, error)
 		return false, err
 	}
 	res, err := archive.Control.PollForResponse(correlationID, archive.SessionID)
-	if res < 0 {
-		logger.Debugf("StopRecordingByIdentity result was %d", res)
-	}
-
 	if err != nil {
 		return false, err
 	}
-	return res >= 0, err
+	// Java semantics: relevantId is non-zero iff an active recording was stopped
+	return res != 0, nil
 }
 
 // StopRecordingBySubscriptionId as returned by StartRecording
@@ -1119,6 +994,9 @@ func (archive *Archive) MigrateSegments(recordingID int64, position int64) (int6
 //
 // Returns error on failure, nil on success
 func (archive *Archive) KeepAlive() error {
+	archive.mtx.Lock()
+	defer archive.mtx.Unlock()
+
 	correlationID := nextCorrelationID()
 	logger.Debugf("KeepAlive(), correlationID:%d", correlationID)
 
