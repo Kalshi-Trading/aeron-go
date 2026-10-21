@@ -224,8 +224,9 @@ func (adapter *ListenerAdapter) ReceiveMessages() int {
 
 			adapter.listener.OnClientTimeout(msg.clientID.Get())
 		default:
-			// Note: Java silently ignores unhandled events
-			logger.Fatalf("received unhandled %d", msgTypeID)
+			// Java silently ignores unhandled events (e.g. ON_PUBLICATION_ERROR 0x0F0C broadcast after an image is
+			// rejected); exiting the process here would make any reject or newer driver event fatal.
+			logger.Debugf("received unhandled %d", msgTypeID)
 		}
 	}
 

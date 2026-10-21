@@ -51,3 +51,18 @@ func (pos *Position) get() int64 {
 func (pos *Position) set(value int64) {
 	pos.buffer.PutInt64(pos.offset, value)
 }
+
+// ID returns the counter id of this position.
+func (pos *Position) ID() int32 {
+	return pos.id
+}
+
+//go:norace
+func (pos *Position) getVolatile() int64 {
+	return pos.buffer.GetInt64Volatile(pos.offset)
+}
+
+//go:norace
+func (pos *Position) setRelease(value int64) {
+	pos.buffer.PutInt64Ordered(pos.offset, value)
+}
