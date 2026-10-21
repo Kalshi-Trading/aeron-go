@@ -17,10 +17,13 @@ import (
 	"hash/crc32"
 	"os"
 	"os/exec"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
@@ -274,7 +277,15 @@ func TestPublicationsE2E(t *testing.T) {
 
 		a, b := payload(300, 2), payload(17, 3)
 		block := buildBlock(pub, a, b)
-		pos := h.offer("offerBlock", func() int64 { return pub.OfferBlock(atomic.MakeBuffer(block), 0, int32(len(block))) })
+		// The source block is mapped read-only: Java appendBlock never writes to its source buffer.
+		ro, err := syscall.Mmap(-1, 0, syscall.Getpagesize(), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_ANON|syscall.MAP_PRIVATE)
+		require.NoError(t, err)
+		defer func() { _ = syscall.Munmap(ro) }()
+		copy(ro, block)
+		require.NoError(t, syscall.Mprotect(ro, syscall.PROT_READ))
+		defer debug.SetPanicOnFault(debug.SetPanicOnFault(true))
+		src := atomic.MakeBuffer(unsafe.Pointer(&ro[0]), len(block))
+		pos := h.offer("offerBlock", func() int64 { return pub.OfferBlock(src, 0, int32(len(block))) })
 		replies := h.await(3005, 2)
 		requireMessage(t, replies[0], a, pos-int64(len(block))+alignedFrame(300))
 		requireMessage(t, replies[1], b, pos)

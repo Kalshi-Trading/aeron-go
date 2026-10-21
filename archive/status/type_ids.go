@@ -14,22 +14,24 @@
 
 package status
 
+import "github.com/lirm/aeron-go/aeron/counters"
+
 // Archive counter type ids, see io.aeron.AeronCounters.ARCHIVE_*_TYPE_ID.
 const (
-	ArchiveRecordingPositionTypeId          int32 = 100
-	ArchiveErrorCountTypeId                 int32 = 101
-	ArchiveControlSessionsTypeId            int32 = 102
-	ArchiveMaxCycleTimeTypeId               int32 = 103
-	ArchiveCycleTimeThresholdExceededTypeId int32 = 104
-	ArchiveRecorderMaxWriteTimeTypeId       int32 = 105
-	ArchiveRecorderTotalWriteBytesTypeId    int32 = 106
-	ArchiveRecorderTotalWriteTimeTypeId     int32 = 107
-	ArchiveReplayerMaxReadTimeTypeId        int32 = 108
-	ArchiveReplayerTotalReadBytesTypeId     int32 = 109
-	ArchiveReplayerTotalReadTimeTypeId      int32 = 110
-	ArchiveRecordingSessionCountTypeId      int32 = 111
-	ArchiveReplaySessionCountTypeId         int32 = 112
-	ArchiveControlSessionTypeId             int32 = 113
+	ArchiveRecordingPositionTypeId          = counters.ArchiveRecordingPositionTypeId
+	ArchiveErrorCountTypeId                 = counters.ArchiveErrorCountTypeId
+	ArchiveControlSessionsTypeId            = counters.ArchiveControlSessionsTypeId
+	ArchiveMaxCycleTimeTypeId               = counters.ArchiveMaxCycleTimeTypeId
+	ArchiveCycleTimeThresholdExceededTypeId = counters.ArchiveCycleTimeThresholdExceededTypeId
+	ArchiveRecorderMaxWriteTimeTypeId       = counters.ArchiveRecorderMaxWriteTimeTypeId
+	ArchiveRecorderTotalWriteBytesTypeId    = counters.ArchiveRecorderTotalWriteBytesTypeId
+	ArchiveRecorderTotalWriteTimeTypeId     = counters.ArchiveRecorderTotalWriteTimeTypeId
+	ArchiveReplayerMaxReadTimeTypeId        = counters.ArchiveReplayerMaxReadTimeTypeId
+	ArchiveReplayerTotalReadBytesTypeId     = counters.ArchiveReplayerTotalReadBytesTypeId
+	ArchiveReplayerTotalReadTimeTypeId      = counters.ArchiveReplayerTotalReadTimeTypeId
+	ArchiveRecordingSessionCountTypeId      = counters.ArchiveRecordingSessionCountTypeId
+	ArchiveReplaySessionCountTypeId         = counters.ArchiveReplaySessionCountTypeId
+	ArchiveControlSessionTypeId             = counters.ArchiveControlSessionTypeId
 )
 
 // NullValue is the Aeron null sentinel (Aeron.NULL_VALUE). Passed as an archiveId it matches any archive.
