@@ -80,9 +80,18 @@ func awaitTrue(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-func offer(t *testing.T, pub *aeron.Publication, msg string) {
+func offer(t *testing.T, pub any, msg string) {
 	buf := ab.MakeBuffer([]byte(msg))
-	awaitTrue(t, "offer "+msg, func() bool { return pub.Offer(buf, 0, int32(len(msg)), nil) > 0 })
+	awaitTrue(t, "offer "+msg, func() bool {
+		switch p := pub.(type) {
+		case *aeron.Publication:
+			return p.Offer(buf, 0, int32(len(msg)), nil) > 0
+		case *aeron.ExclusivePublication:
+			return p.Offer(buf, 0, int32(len(msg)), nil) > 0
+		}
+		t.Fatalf("unsupported publication type %T", pub)
+		return false
+	})
 }
 
 // receive polls sub until want messages are received, returning them.
