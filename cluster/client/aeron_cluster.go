@@ -41,7 +41,7 @@ type AeronCluster struct {
 	aeronClient          *aeron.Aeron
 	egressSub            *aeron.Subscription
 	ingressChannel       *aeron.ChannelUri
-	ingressPub           *aeron.Publication
+	ingressPub           aeron.Publisher
 	clusterSessionId     int64
 	leadershipTermId     int64
 	leaderMemberId       int32
@@ -59,7 +59,7 @@ type AeronCluster struct {
 type memberIngress struct {
 	memberId    int32
 	endpoint    string
-	publication *aeron.Publication
+	publication aeron.Publisher
 }
 
 type clientState int8
@@ -301,7 +301,7 @@ func (ac *AeronCluster) createPublications() (int, error) {
 	return 1, nil
 }
 
-func (ac *AeronCluster) createIngressPublication(endpoint string) (*aeron.Publication, error) {
+func (ac *AeronCluster) createIngressPublication(endpoint string) (aeron.Publisher, error) {
 	if ac.ingressChannel.IsUdp() {
 		ac.ingressChannel.Set("endpoint", endpoint)
 	}
@@ -309,10 +309,17 @@ func (ac *AeronCluster) createIngressPublication(endpoint string) (*aeron.Public
 	logger.Debugf("createIngressPublication - endpoint=%s isUdp=%v isExclusive=%v",
 		endpoint, ac.ingressChannel.IsUdp(), ac.opts.IsIngressExclusive)
 	if ac.opts.IsIngressExclusive {
-		return ac.aeronClient.AddExclusivePublication(channel, ac.opts.IngressStreamId)
-	} else {
-		return ac.aeronClient.AddPublication(channel, ac.opts.IngressStreamId)
+		pub, err := ac.aeronClient.AddExclusivePublication(channel, ac.opts.IngressStreamId)
+		if pub == nil || err != nil {
+			return nil, err
+		}
+		return pub, nil
 	}
+	pub, err := ac.aeronClient.AddPublication(channel, ac.opts.IngressStreamId)
+	if pub == nil || err != nil {
+		return nil, err
+	}
+	return pub, nil
 }
 
 func (ac *AeronCluster) awaitPublicationConnected() (int, error) {

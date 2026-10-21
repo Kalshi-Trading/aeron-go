@@ -90,3 +90,37 @@ func (claim *Claim) Abort() {
 	claim.buffer.PutUInt16(DataFrameHeader.TypeFieldOffset, DataFrameHeader.TypePad)
 	claim.buffer.PutInt32Ordered(DataFrameHeader.FrameLengthFieldOffset, frameLength)
 }
+
+// Flags returns the flags field of the claimed frame header.
+func (claim *Claim) Flags() uint8 {
+	return claim.buffer.GetUInt8(DataFrameHeader.FlagsFieldOffset)
+}
+
+// SetFlags sets the flags field of the claimed frame header (default BEGIN|END).
+func (claim *Claim) SetFlags(flags uint8) *Claim {
+	claim.buffer.PutUInt8(DataFrameHeader.FlagsFieldOffset, flags)
+	return claim
+}
+
+// HeaderType returns the type field of the claimed frame header.
+func (claim *Claim) HeaderType() uint16 {
+	return claim.buffer.GetUInt16(DataFrameHeader.TypeFieldOffset)
+}
+
+// SetHeaderType sets the type field of the claimed frame header (default HDR_TYPE_DATA).
+func (claim *Claim) SetHeaderType(headerType uint16) *Claim {
+	claim.buffer.PutUInt16(DataFrameHeader.TypeFieldOffset, headerType)
+	return claim
+}
+
+// PutReservedValue is an alias of SetReservedValue matching Java BufferClaim.reservedValue(long).
+func (claim *Claim) PutReservedValue(value int64) *Claim {
+	return claim.SetReservedValue(value)
+}
+
+// PutBytes copies length bytes from srcBuffer at srcIndex into the claimed payload.
+func (claim *Claim) PutBytes(srcBuffer *atomic.Buffer, srcIndex int32, length int32) *Claim {
+	claim.buffer.PutBytes(DataFrameHeader.Length, srcBuffer, srcIndex, length)
+	return claim
+}
+
