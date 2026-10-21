@@ -19,8 +19,8 @@ func TestReplayMergeJavaVsGo(t *testing.T) {
 	arch := connectGoArchive(t)
 	stream := nextStream()
 	ctrl, recPort := nextPort(), nextPort()
-	pubCh := fmt.Sprintf("aeron:udp?control=localhost:%d|control-mode=dynamic|term-length=65536|fc=tagged,g:%d/1,t:5s",
-		ctrl, groupTag)
+	pubCh := fmt.Sprintf("aeron:udp?control=localhost:%d|control-mode=dynamic|term-length=65536|fc=min,t:5s",
+		ctrl)
 	pub, err := arch.AddPublication(pubCh, stream)
 	require.NoError(t, err)
 	defer pub.Close()
