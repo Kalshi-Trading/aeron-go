@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
+	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/idlestrategy"
 	"github.com/lirm/aeron-go/aeron/logging"
 	"github.com/lirm/aeron-go/archive/codecs"
@@ -512,8 +513,10 @@ func TestListRecordings(t *testing.T) {
 func TestStartStopReplay(t *testing.T) {
 	requireArchive(t)
 
-	// Add a recording to make sure there is one
-	subscriptionID, err := archive.StartRecording(testCases[0].sampleChannel, testCases[0].sampleStream, true, true)
+	// Use a channel no other test records or publishes on: earlier tests leave recordings and publications on
+	// the shared sample channel, and a UDP recording must be remote (isLocal=false) to see this publication.
+	channel := "aeron:udp?endpoint=localhost:21141"
+	subscriptionID, err := archive.StartRecording(channel, testCases[0].sampleStream, false, true)
 	if err != nil {
 		t.Log(err)
 		t.FailNow()
@@ -521,7 +524,7 @@ func TestStartStopReplay(t *testing.T) {
 	t.Logf("SubscriptionID is %d", subscriptionID)
 
 	// Add a publication on that
-	publication, err := archive.AddPublication(testCases[0].sampleChannel, testCases[0].sampleStream)
+	publication, err := archive.AddPublication(channel, testCases[0].sampleStream)
 	if err != nil {
 		t.Log(err)
 		t.FailNow()
@@ -529,18 +532,40 @@ func TestStartStopReplay(t *testing.T) {
 	defer publication.Close()
 	t.Logf("Publication found %v", publication)
 
-	recordings, err := archive.ListRecordingsForUri(0, 100, "aeron", testCases[0].sampleStream)
-	if err != nil {
-		t.Log(err)
-		t.FailNow()
+	// Find this publication's recording and record some data: Java 1.53.3 rejects a replay whose start
+	// position is not below the recording's limit, so an empty (or another run's stale) recording won't do.
+	recordingID := int64(-1)
+	msg := atomic.MakeBuffer([]byte("replay me"))
+	var lastOffer int64
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		// The shared archive can hold more recordings than one page, so page through all of them
+		for from := int64(0); recordingID < 0; {
+			recordings, err := archive.ListRecordingsForUri(from, 100, "aeron", testCases[0].sampleStream)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(recordings) == 0 {
+				break
+			}
+			for _, r := range recordings {
+				if r.SessionId == publication.SessionID() {
+					recordingID = r.RecordingId
+				}
+			}
+			from = recordings[len(recordings)-1].RecordingId + 1
+		}
+		if recordingID >= 0 {
+			if pos, err := archive.GetRecordingPosition(recordingID); err == nil && pos > 0 {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no recorded data for session %d (recordingID %d, last offer %d)", publication.SessionID(), recordingID, lastOffer)
+		}
+		lastOffer = publication.Offer(msg, 0, msg.Capacity(), nil)
+		time.Sleep(10 * time.Millisecond)
 	}
-	if len(recordings) == 0 {
-		t.Log("No recordings!")
-		t.FailNow()
-	}
-
-	// That should give us a recordingID
-	recordingID := recordings[len(recordings)-1].RecordingId
 
 	replayID, err := archive.StartReplay(recordingID, 0, RecordingLengthNull, testCases[0].replayChannel, testCases[0].replayStream)
 	if err != nil {
@@ -552,7 +577,7 @@ func TestStartStopReplay(t *testing.T) {
 	}
 
 	// So ListRecordingsForUri should find something
-	recordings, err = archive.ListRecordingsForUri(0, 100, testCases[0].sampleChannel, testCases[0].sampleStream)
+	recordings, err := archive.ListRecordingsForUri(0, 100, testCases[0].sampleChannel, testCases[0].sampleStream)
 	if err != nil {
 		t.Log(err)
 		t.FailNow()
@@ -610,13 +635,8 @@ func TestStartStopReplay(t *testing.T) {
 	t.Logf("ListRecordingSubscriptions() returned %d descriptor(s)", len(descriptors))
 
 	// Cleanup
-	res, err := archive.StopRecordingByIdentity(recordingID)
-	if err != nil {
-		t.Logf("StopRecordingByIdentity(%d) failed: %s", recordingID, err.Error())
-		t.FailNow()
-	}
-	if !res {
-		t.Logf("StopRecordingByIdentity(%d) failed", recordingID)
+	if err := archive.StopRecordingBySubscriptionId(subscriptionID); err != nil {
+		t.Fatalf("StopRecordingBySubscriptionId(%d) failed: %s", subscriptionID, err)
 	}
 }
 
