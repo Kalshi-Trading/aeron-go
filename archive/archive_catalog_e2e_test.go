@@ -213,12 +213,12 @@ func TestE2ECatalog(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, stopPos, pos)
 
-	deleted, err := a.TruncateRecording(r.recordingID, 4*e2eCatalogFrameLength)
+	deleted, err := a.TruncateRecordingWithCount(r.recordingID, 4*e2eCatalogFrameLength)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), deleted, "truncating within the first segment deletes no segment files")
 	assert.Equal(t, int64(4*e2eCatalogFrameLength), listOne(t, a, r.recordingID).StopPosition)
 
-	deleted, err = a.PurgeRecording(r.recordingID)
+	deleted, err = a.PurgeRecordingWithCount(r.recordingID)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), deleted)
 	d, err := a.ListRecording(r.recordingID)
@@ -271,7 +271,7 @@ func TestE2ESegments(t *testing.T) {
 	// MigrateSegments: src ends on a segment boundary, dst starts exactly there.
 	srcID, _ := recordMessages(t, a, channel, stream, 3*64+5)
 	srcDesc := listOne(t, a, srcID)
-	_, err = a.TruncateRecording(srcID, 2*segLen)
+	err = a.TruncateRecording(srcID, 2*segLen)
 	require.NoError(t, err)
 	termID := srcDesc.InitialTermId + int32(2*segLen/e2eTermLength)
 	dstChannel := fmt.Sprintf("%s|init-term-id=%d|term-id=%d|term-offset=0", channel, srcDesc.InitialTermId, termID)
@@ -416,6 +416,6 @@ func TestE2EUpdateChannel(t *testing.T) {
 
 	err := a.UpdateChannel(1<<40, newChannel)
 	require.Error(t, err, "unknown recording must fail")
-	_, err = a.PurgeRecording(r.recordingID)
+	err = a.PurgeRecording(r.recordingID)
 	require.NoError(t, err)
 }

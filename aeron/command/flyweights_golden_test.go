@@ -387,7 +387,7 @@ func TestGoldenDecodeResponses(t *testing.T) {
 	var er ErrorResponse
 	er.Wrap(wrapBytes(g["ErrorResponse"]), 0)
 	assert.Equal(t, goldenCorrelationID, er.OffendingCommandCorrelationID())
-	assert.Equal(t, ErrorCodeInvalidChannel, er.ErrorCode())
+	assert.Equal(t, int32(ErrorCodeInvalidChannel), er.ErrorCode())
 	assert.Equal(t, "invalid channel", er.ErrorMessage())
 
 	var pr PublicationBuffersReady
@@ -446,7 +446,7 @@ func TestGoldenDecodeResponses(t *testing.T) {
 	assert.EqualValues(t, 0x6162636465666768, v.ReceiverID)
 	assert.EqualValues(t, 99, v.GroupTag)
 	assert.Equal(t, "10.1.2.3:40123", v.SourceAddress.String())
-	assert.Equal(t, ErrorCodeImageRejected, v.ErrorCode)
+	assert.Equal(t, int32(ErrorCodeImageRejected), v.ErrorCode)
 	assert.Equal(t, "rejected", v.ErrorMessage)
 
 	pe.Wrap(wrapBytes(g["PublicationErrorFrameIPv6"]), 0)

@@ -432,6 +432,11 @@ func (ac *AsyncConnect) pollForResponse() error {
 	}
 	ac.controlSessionID = p.controlSessionID
 	if p.wasChallenged() {
+		if ac.options.AuthEnabled && ac.options.AuthChallenge != nil && !bytes.Equal(ac.options.AuthChallenge, p.encodedChallenge) {
+			ac.closeSession()
+			return &ConnectError{CorrelationID: ac.correlationID, Code: p.code,
+				Message: fmt.Sprintf("ChallengeResponse Unexpected: expected:%v received:%v", ac.options.AuthChallenge, p.encodedChallenge)}
+		}
 		ac.encodedCredentialsFromChallenge = ac.options.CredentialsSupplier.OnChallenge(p.encodedChallenge)
 		ac.correlationID = nextCorrelationID()
 		ac.state = AsyncConnectSendChallengeResponse

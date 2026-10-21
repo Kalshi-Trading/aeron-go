@@ -27,7 +27,7 @@ func TestAliases(t *testing.T) {
 
 func TestBackoffDefaults(t *testing.T) {
 	s := NewDefaultBackoffIdleStrategy()
-	if s.maxSpins != 10 || s.maxYields != 5 || s.minParkPeriodNs != 1000 || s.maxParkPeriodNs != int64(time.Millisecond) {
+	if s.maxSpins != 10 || s.maxYields != 20 || s.minParkPeriodNs != 1000 || s.maxParkPeriodNs != int64(time.Millisecond) {
 		t.Fatal(s)
 	}
 }
