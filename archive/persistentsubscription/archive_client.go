@@ -87,7 +87,6 @@ type asyncArchive struct {
 	nextConnectNs int64
 	nanoClock     func() int64
 
-	proxies       map[*aeron.ExclusivePublication]*archive.Proxy
 	assembler     *aeron.ControlledFragmentAssembler
 	marshaller    *codecs.SbeGoMarshaller
 	rangeChecking bool
@@ -104,7 +103,6 @@ func newAsyncArchive(options *archive.Options, aeronContext func() *aeron.Contex
 		listener:       listener,
 		state:          asyncArchiveConnecting,
 		nanoClock:      nanoClock,
-		proxies:        map[*aeron.ExclusivePublication]*archive.Proxy{},
 		marshaller:     codecs.NewSbeGoMarshaller(),
 		rangeChecking:  options.RangeChecking,
 		connectArchive: archive.NewArchive,
@@ -157,7 +155,6 @@ func (a *asyncArchive) pollConnecting() int {
 			return 1
 		}
 		a.archive = result.archive
-		a.proxies = map[*aeron.ExclusivePublication]*archive.Proxy{}
 		a.state = asyncArchiveConnected
 		a.listener.onConnected()
 		return 1
@@ -212,9 +209,9 @@ func (a *asyncArchive) sendWith(proxy *archive.Proxy, f func(proxy *archive.Prox
 	sent, err := f(proxy)
 	if err != nil {
 		if errors.Is(err, archive.ErrProxyNotConnected) {
-			if proxy == a.archive.Proxy {
-				a.state = asyncArchiveDisconnected
-			}
+			// Java AsyncAeronArchive: an ArchiveException from either the control or the response-channel
+			// request proxy moves the archive to DISCONNECTED.
+			a.state = asyncArchiveDisconnected
 		} else {
 			a.listener.onArchiveError(err)
 		}
@@ -247,16 +244,14 @@ func (a *asyncArchive) trySendReplayRequest(correlationID int64, recordingID int
 
 func (a *asyncArchive) trySendReplayRequestOn(publication requestPublication, correlationID int64, recordingID int64,
 	position int64, length int64, replayChannel string, replayStreamID int32, replayToken int64) bool {
-	pub := publicationOf(publication)
-	if a.state != asyncArchiveConnected || pub == nil {
+	if a.state != asyncArchiveConnected || publication == nil {
 		return false
 	}
-	proxy, ok := a.proxies[pub]
-	if !ok {
-		proxy = a.archive.NewProxyForPublication(pub)
-		a.proxies[pub] = proxy
+	pub := publication.publisher()
+	if pub == nil {
+		return false
 	}
-	return a.sendWith(proxy, func(p *archive.Proxy) (bool, error) {
+	return a.sendWith(a.archive.NewProxyForPublication(pub), func(p *archive.Proxy) (bool, error) {
 		return p.TryReplayRequestWithToken(correlationID, recordingID, position, length, replayStreamID,
 			replayChannel, aeron.NullValue, replayToken)
 	})
