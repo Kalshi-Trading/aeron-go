@@ -68,22 +68,30 @@ type Aeron struct {
 
 	toClientsBroadcastReceiver *broadcast.Receiver
 	toClientsCopyReceiver      *broadcast.CopyReceiver
+
+	invoker *ConductorAgentInvoker
 }
 
 var logger = logging.MustGetLogger("aeron")
 
 // Connect is the factory method used to create a new instance of Aeron based on Context settings
 func Connect(ctx *Context) (*Aeron, error) {
+	if !ctx.concluded {
+		if err := ctx.Conclude(); err != nil {
+			return nil, err
+		}
+	}
 	aeron := new(Aeron)
 	aeron.context = ctx
 	logger.Debugf("Connecting with context: %v", ctx)
 
-	ctr, cnc, err := counters.MapFile(ctx.CncFileName())
+	cnc, err := awaitCncFile(ctx.CncFileName(), ctx.mediaDriverTo)
 	if err != nil {
 		return nil, err
 	}
-	aeron.counters = ctr
-	aeron.cncFile = cnc
+	aeron.counters = cnc.meta
+	aeron.cncFile = cnc.file
+	ctx.filePageSize = cnc.filePageSize()
 
 	aeron.toDriverRingBuffer.Init(aeron.counters.ToDriverBuf.Get())
 
@@ -91,15 +99,24 @@ func Connect(ctx *Context) (*Aeron, error) {
 
 	aeron.toClientsBroadcastReceiver, err = broadcast.NewReceiver(aeron.counters.ToClientsBuf.Get())
 	if err != nil {
+		cnc.Close()
 		return nil, err
 	}
 
 	aeron.toClientsCopyReceiver = broadcast.NewCopyReceiver(aeron.toClientsBroadcastReceiver)
 
-	clientLivenessTo := time.Duration(aeron.counters.ClientLivenessTo.Get())
+	ctx.interServiceTo = time.Duration(aeron.counters.ClientLivenessTo.Get())
+	ctx.clientID = aeron.driverProxy.ClientID()
 
-	aeron.conductor.Init(&aeron.driverProxy, aeron.toClientsCopyReceiver, clientLivenessTo, ctx.mediaDriverTo,
+	aeron.conductor.Init(&aeron.driverProxy, aeron.toClientsCopyReceiver, ctx.interServiceTo, ctx.mediaDriverTo,
 		ctx.publicationConnectionTo, ctx.resourceLingerTo, aeron.counters)
+	aeron.conductor.keepaliveIntervalNs = ctx.keepAliveInterval.Nanoseconds()
+	aeron.conductor.closeLingerNs = ctx.closeLingerDuration.Nanoseconds()
+	aeron.conductor.clientName = ctx.clientName
+	aeron.conductor.preTouchMappedMemory = ctx.preTouchMappedMemory
+	aeron.conductor.subscriberErrorHandler = ctx.subscriberErrorHandler
+	aeron.conductor.closeHandler = ctx.closeHandler
+	aeron.conductor.publicationErrorFrameHandler = ctx.publicationErrorFrameHandler
 
 	aeron.conductor.onAvailableImageHandler = ctx.availableImageHandler
 	aeron.conductor.onUnavailableImageHandler = ctx.unavailableImageHandler
@@ -115,7 +132,12 @@ func Connect(ctx *Context) (*Aeron, error) {
 
 	aeron.conductor.errorHandler = ctx.errorHandler
 
-	aeron.conductor.Start(ctx.idleStrategy)
+	if ctx.useConductorAgentInvoker {
+		aeron.conductor.initDutyCycleTimes()
+		aeron.invoker = &ConductorAgentInvoker{aeron: aeron}
+	} else {
+		aeron.conductor.Start(ctx.idleStrategy)
+	}
 
 	return aeron, nil
 }
@@ -125,6 +147,12 @@ func (aeron *Aeron) Close() error {
 	err := aeron.conductor.Close()
 	if nil != err {
 		aeron.context.errorHandler(err)
+	}
+	if aeron.invoker != nil {
+		if aeron.context.closeLingerDuration > 0 {
+			time.Sleep(aeron.context.closeLingerDuration)
+		}
+		aeron.conductor.forceCloseResources()
 	}
 
 	err = aeron.cncFile.Close()
@@ -155,7 +183,7 @@ func (aeron *Aeron) AddSubscriptionWithHandlers(channel string, streamID int32,
 		if subscription != nil || err != nil {
 			return subscription, err
 		}
-		aeron.context.idleStrategy.Idle(0)
+		aeron.awaitIdle()
 	}
 }
 
@@ -249,7 +277,7 @@ func (aeron *Aeron) AddPublication(channel string, streamID int32) (*Publication
 		if publication != nil || err != nil {
 			return publication, err
 		}
-		aeron.context.idleStrategy.Idle(0)
+		aeron.awaitIdle()
 	}
 }
 
@@ -277,7 +305,7 @@ func (aeron *Aeron) AddExclusivePublication(channel string, streamID int32) (*Pu
 		if publication != nil || err != nil {
 			return publication, err
 		}
-		aeron.context.idleStrategy.Idle(0)
+		aeron.awaitIdle()
 	}
 }
 
