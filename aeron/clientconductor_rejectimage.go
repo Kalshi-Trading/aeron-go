@@ -27,17 +27,16 @@ type imageRejecter interface {
 func (cc *ClientConductor) rejectImage(imageCorrelationID int64, position int64, reason string) error {
 	logger.Debugf("RejectImage: imageCorrelationID=%d position=%d reason=%s", imageCorrelationID, position, reason)
 
-	if err := cc.getDriverStatus(); err != nil {
-		return err
-	}
-
 	rejecter, ok := cc.driverProxy.(imageRejecter)
 	if !ok {
 		return errors.New("driver proxy does not support reject image")
 	}
 
 	cc.adminLock.Lock()
-	defer cc.adminLock.Unlock()
+	defer cc.unlock()
+	if err := cc.ensureOpen(); err != nil {
+		return err
+	}
 
 	_, err := rejecter.RejectImage(imageCorrelationID, position, reason)
 	return err

@@ -16,6 +16,7 @@
 package aeron
 
 import (
+	"sync"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron/broadcast"
@@ -55,7 +56,8 @@ type UnavailableCounterHandler interface {
 	Handle(countersReader *counters.Reader, registrationId int64, counterId int32)
 }
 
-// Aeron is the primary interface to the media driver for managing subscriptions and publications
+// Aeron is the primary interface to the media driver for managing subscriptions, publications and counters
+// (io.aeron.Aeron). All methods are safe for concurrent use.
 type Aeron struct {
 	context            *Context
 	conductor          ClientConductor
@@ -69,11 +71,18 @@ type Aeron struct {
 	toClientsCopyReceiver      *broadcast.CopyReceiver
 
 	invoker *ConductorAgentInvoker
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 var logger = logging.MustGetLogger("aeron")
 
-// Connect is the factory method used to create a new instance of Aeron based on Context settings
+const awaitingDriverSleep = 16 * time.Millisecond
+
+// Connect is the factory method used to create a new instance of Aeron based on Context settings. Like Java's
+// Aeron.connect it waits up to the media driver timeout for the CnC file to appear and the driver to heartbeat,
+// returning a *DriverTimeoutError otherwise.
 func Connect(ctx *Context) (*Aeron, error) {
 	if !ctx.concluded {
 		if err := ctx.Conclude(); err != nil {
@@ -84,21 +93,16 @@ func Connect(ctx *Context) (*Aeron, error) {
 	aeron.context = ctx
 	logger.Debugf("Connecting with context: %v", ctx)
 
-	cnc, err := awaitCncFile(ctx.CncFileName(), ctx.mediaDriverTo)
-	if err != nil {
+	if err := aeron.connectToDriver(); err != nil {
 		return nil, err
 	}
-	aeron.counters = cnc.meta
-	aeron.cncFile = cnc.file
-	ctx.filePageSize = cnc.filePageSize()
-
-	aeron.toDriverRingBuffer.Init(aeron.counters.ToDriverBuf.Get())
 
 	aeron.driverProxy.Init(&aeron.toDriverRingBuffer)
 
+	var err error
 	aeron.toClientsBroadcastReceiver, err = broadcast.NewReceiver(aeron.counters.ToClientsBuf.Get())
 	if err != nil {
-		cnc.Close()
+		_ = aeron.cncFile.Close()
 		return nil, err
 	}
 
@@ -107,257 +111,268 @@ func Connect(ctx *Context) (*Aeron, error) {
 	ctx.interServiceTo = time.Duration(aeron.counters.ClientLivenessTo.Get())
 	ctx.clientID = aeron.driverProxy.ClientID()
 
-	aeron.conductor.Init(&aeron.driverProxy, aeron.toClientsCopyReceiver, ctx.interServiceTo, ctx.mediaDriverTo,
+	cc := &aeron.conductor
+	cc.Init(&aeron.driverProxy, aeron.toClientsCopyReceiver, ctx.interServiceTo, ctx.mediaDriverTo,
 		ctx.publicationConnectionTo, ctx.resourceLingerTo, aeron.counters)
-	aeron.conductor.keepaliveIntervalNs = ctx.keepAliveInterval.Nanoseconds()
-	aeron.conductor.closeLingerNs = ctx.closeLingerDuration.Nanoseconds()
-	aeron.conductor.clientName = ctx.clientName
-	aeron.conductor.preTouchMappedMemory = ctx.preTouchMappedMemory
-	aeron.conductor.subscriberErrorHandler = ctx.subscriberErrorHandler
-	aeron.conductor.closeHandler = ctx.closeHandler
-	aeron.conductor.publicationErrorFrameHandler = ctx.publicationErrorFrameHandler
 
-	aeron.conductor.onAvailableImageHandler = ctx.availableImageHandler
-	aeron.conductor.onUnavailableImageHandler = ctx.unavailableImageHandler
-	aeron.conductor.onNewPublicationHandler = ctx.newPublicationHandler
-	aeron.conductor.onNewSubscriptionHandler = ctx.newSubscriptionHandler
+	cc.onAvailableImageHandler = ctx.availableImageHandler
+	cc.onUnavailableImageHandler = ctx.unavailableImageHandler
+	cc.onNewPublicationHandler = ctx.newPublicationHandler
+	cc.onNewSubscriptionHandler = ctx.newSubscriptionHandler
+	cc.publicationErrorFrameHandler = ctx.publicationErrorFrameHandler
+	cc.keepAliveIntervalNs = ctx.keepAliveInterval.Nanoseconds()
+	cc.closeLingerNs = ctx.closeLingerDuration.Nanoseconds()
+	cc.clientName = ctx.clientName
+	cc.preTouchMappedMemory = ctx.preTouchMappedMemory
+	cc.subscriberErrorHandler = ctx.subscriberErrorHandler
 
 	if ctx.availableCounterHandler != nil {
-		aeron.conductor.AddAvailableCounterHandler(ctx.availableCounterHandler)
+		cc.AddAvailableCounterHandler(ctx.availableCounterHandler)
 	}
 	if ctx.unavailableCounterHandler != nil {
-		aeron.conductor.AddUnavailableCounterHandler(ctx.unavailableCounterHandler)
+		cc.AddUnavailableCounterHandler(ctx.unavailableCounterHandler)
+	}
+	if ctx.closeHandler != nil {
+		cc.AddCloseHandler(ctx.closeHandler)
 	}
 
-	aeron.conductor.errorHandler = ctx.errorHandler
+	cc.errorHandler = ctx.errorHandler
 
 	if ctx.useConductorAgentInvoker {
-		aeron.conductor.initDutyCycleTimes()
+		cc.initDutyCycleTimes()
 		aeron.invoker = &ConductorAgentInvoker{aeron: aeron}
 	} else {
-		aeron.conductor.Start(ctx.idleStrategy)
+		cc.Start(ctx.idleStrategy)
 	}
 
 	return aeron, nil
 }
 
-// Close will terminate client conductor and remove all publications and subscriptions from the media driver
+func (aeron *Aeron) connectToDriver() error {
+	ctx := aeron.context
+	cnc, err := awaitCncFile(ctx.CncFileName(), ctx.mediaDriverTo)
+	if err != nil {
+		return &DriverTimeoutError{TimeoutError{AeronError{Category: CategoryFatal, Cause: err}}}
+	}
+	aeron.counters = cnc.meta
+	aeron.cncFile = cnc.file
+	ctx.filePageSize = cnc.filePageSize()
+	aeron.toDriverRingBuffer.Init(aeron.counters.ToDriverBuf.Get())
+	return nil
+}
+
+// Close closes the client: all publications, subscriptions and counters are closed, close handlers are invoked, the
+// driver is informed and the CnC file is unmapped. Safe to call more than once and after a driver timeout.
 func (aeron *Aeron) Close() error {
-	err := aeron.conductor.Close()
-	if nil != err {
-		aeron.context.errorHandler(err)
-	}
-	if aeron.invoker != nil {
-		if aeron.context.closeLingerDuration > 0 {
-			time.Sleep(aeron.context.closeLingerDuration)
+	aeron.closeOnce.Do(func() {
+		if err := aeron.conductor.Close(); err != nil {
+			aeron.conductor.reportError(err)
+			aeron.closeErr = err
 		}
-		aeron.conductor.forceCloseResources()
-	}
-
-	err = aeron.cncFile.Close()
-	if nil != err {
-		aeron.context.errorHandler(err)
-	}
-
-	return err
+		if err := aeron.cncFile.Close(); err != nil && aeron.closeErr == nil {
+			aeron.closeErr = err
+		}
+	})
+	return aeron.closeErr
 }
 
-// AddSubscription will add a new subscription to the driver and wait until it is ready.
+// IsClosed reports whether the client has been closed or has terminated (e.g. on driver timeout).
+func (aeron *Aeron) IsClosed() bool {
+	return aeron.conductor.IsClosed()
+}
+
+// TerminalError returns the timeout error that terminated the client, or nil if closed normally / still open.
+func (aeron *Aeron) TerminalError() error {
+	return aeron.conductor.TerminalError()
+}
+
+// AddCloseHandler registers a handler invoked once when the client closes. Returns an id for RemoveCloseHandler.
+func (aeron *Aeron) AddCloseHandler(handler func()) int64 {
+	return aeron.conductor.AddCloseHandler(handler)
+}
+
+// RemoveCloseHandler removes a close handler registered with AddCloseHandler.
+func (aeron *Aeron) RemoveCloseHandler(id int64) bool {
+	return aeron.conductor.RemoveCloseHandler(id)
+}
+
+// AddSubscription adds a subscription, blocking until the driver confirms it or returns an error.
 func (aeron *Aeron) AddSubscription(channel string, streamID int32) (*Subscription, error) {
-	return aeron.AddSubscriptionWithHandlers(channel, streamID,
-		aeron.context.availableImageHandler, aeron.context.unavailableImageHandler)
+	return aeron.conductor.AddSubscriptionWithHandlers(channel, streamID, aeron.context.availableImageHandler,
+		aeron.context.unavailableImageHandler)
 }
 
-// AddSubscriptionWithHandlers will add a new subscription to the driver and wait until it is ready.  It will use the
-// specified Handlers for available/unavailable Images instead of the default handlers.
+// AddSubscriptionWithHandlers is AddSubscription with image handlers specific to this subscription.
 func (aeron *Aeron) AddSubscriptionWithHandlers(channel string, streamID int32,
 	onAvailableImage AvailableImageHandler, onUnavailableImage UnavailableImageHandler) (*Subscription, error) {
-	registrationID, err :=
-		aeron.conductor.AddSubscriptionWithHandlers(channel, streamID, onAvailableImage, onUnavailableImage)
-	if err != nil {
-		return nil, err
-	}
-	for {
-		subscription, err := aeron.conductor.FindSubscription(registrationID)
-		if subscription != nil || err != nil {
-			return subscription, err
-		}
-		aeron.awaitIdle()
-	}
-}
-
-// AddSubscriptionDeprecated will add a new subscription to the driver.
-// Returns a channel, which can be used for either blocking or non-blocking want for media driver confirmation
-func (aeron *Aeron) AddSubscriptionDeprecated(channel string, streamID int32) chan *Subscription {
-	ch := make(chan *Subscription, 1)
-	registrationID, err := aeron.conductor.AddSubscription(channel, streamID)
-	if err != nil {
-		// Preserve the legacy functionality.  The original AddSubscription would result in the ClientConductor calling
-		// onError on this, as well as subsequently from the FindSubscription call below.
-		aeron.conductor.onError(err)
-	}
-	go func() {
-		for {
-			subscription, err := aeron.conductor.FindSubscription(registrationID)
-			if subscription != nil || err != nil {
-				if err != nil {
-					aeron.conductor.onError(err)
-				}
-				ch <- subscription
-				close(ch)
-				return
-			}
-			aeron.awaitIdle()
-		}
-	}()
-	return ch
-}
-
-// AsyncAddSubscription will add a new subscription to the driver and return its registration ID.  That ID can be used
-// to get the Subscription with GetSubscription().
-func (aeron *Aeron) AsyncAddSubscription(channel string, streamID int32) (int64, error) {
-	return aeron.conductor.AddSubscriptionWithHandlers(channel, streamID,
-		aeron.context.availableImageHandler, aeron.context.unavailableImageHandler)
-}
-
-// AsyncAddSubscriptionWithHandlers will add a new subscription to the driver and return its registration ID.  That ID
-// can be used to get the Subscription with GetSubscription().  This call will use the specified Handlers for
-// available/unavailable Images instead of the default handlers.
-func (aeron *Aeron) AsyncAddSubscriptionWithHandlers(channel string, streamID int32,
-	onAvailableImage AvailableImageHandler, onUnavailableImage UnavailableImageHandler) (int64, error) {
 	return aeron.conductor.AddSubscriptionWithHandlers(channel, streamID, onAvailableImage, onUnavailableImage)
 }
 
-// GetSubscription will attempt to get a Subscription from a registrationID.  See AsyncAddSubscription.  A pending
-// Subscription will return nil,nil signifying that there is neither a Subscription nor an error.
-func (aeron *Aeron) GetSubscription(registrationID int64) (*Subscription, error) {
-	return aeron.conductor.FindSubscription(registrationID)
-}
-
-// AddPublicationDeprecated will add a new publication to the driver. If such publication already exists within ClientConductor
-// the same instance will be returned.
-// Returns a channel, which can be used for either blocking or non-blocking want for media driver confirmation
-func (aeron *Aeron) AddPublicationDeprecated(channel string, streamID int32) chan *Publication {
-	ch := make(chan *Publication, 1)
-
-	registrationID, err := aeron.conductor.AddPublication(channel, streamID)
-	if err != nil {
-		// Preserve the legacy functionality.  The original AddPublication would result in the ClientConductor calling
-		// onError on this, as well as subsequently from the FindPublication call below.
-		aeron.conductor.onError(err)
-	}
+// AddSubscriptionDeprecated adds a subscription and returns a channel delivering it (nil on error).
+//
+// Deprecated: use AddSubscription, which reports errors.
+func (aeron *Aeron) AddSubscriptionDeprecated(channel string, streamID int32) chan *Subscription {
+	ch := make(chan *Subscription, 1)
 	go func() {
-		for {
-			publication, err := aeron.conductor.FindPublication(registrationID)
-			if publication != nil || err != nil {
-				if err != nil {
-					aeron.conductor.onError(err)
-				}
-				ch <- publication
-				close(ch)
-				return
-			}
-			aeron.awaitIdle()
+		sub, err := aeron.AddSubscription(channel, streamID)
+		if err != nil {
+			aeron.conductor.reportError(err)
 		}
+		ch <- sub
+		close(ch)
 	}()
-
 	return ch
 }
 
-// AddPublication will add a new publication to the driver. If such publication already exists within ClientConductor
-// the same instance will be returned.
-func (aeron *Aeron) AddPublication(channel string, streamID int32) (*Publication, error) {
-	registrationID, err := aeron.conductor.AddPublication(channel, streamID)
-	if err != nil {
-		return nil, err
-	}
-	for {
-		publication, err := aeron.conductor.FindPublication(registrationID)
-		if publication != nil || err != nil {
-			return publication, err
-		}
-		aeron.awaitIdle()
-	}
+// AsyncAddSubscription sends ADD_SUBSCRIPTION without blocking; poll GetSubscription with the returned id.
+func (aeron *Aeron) AsyncAddSubscription(channel string, streamID int32) (int64, error) {
+	return aeron.conductor.AsyncAddSubscriptionWithHandlers(channel, streamID, aeron.context.availableImageHandler,
+		aeron.context.unavailableImageHandler)
 }
 
-// AsyncAddPublication will add a new publication to the driver and return its registration ID.  That ID can be used to
-// get the added Publication with GetPublication().
-func (aeron *Aeron) AsyncAddPublication(channel string, streamID int32) (int64, error) {
+// AsyncAddSubscriptionWithHandlers is AsyncAddSubscription with subscription-specific image handlers.
+func (aeron *Aeron) AsyncAddSubscriptionWithHandlers(channel string, streamID int32,
+	onAvailableImage AvailableImageHandler, onUnavailableImage UnavailableImageHandler) (int64, error) {
+	return aeron.conductor.AsyncAddSubscriptionWithHandlers(channel, streamID, onAvailableImage, onUnavailableImage)
+}
+
+// GetSubscription polls an async subscription add: (nil, nil) while pending, the subscription once ready, or the
+// registration/timeout error.
+func (aeron *Aeron) GetSubscription(registrationID int64) (*Subscription, error) {
+	return aeron.conductor.GetSubscription(registrationID)
+}
+
+// AsyncRemoveSubscription closes a subscription by registration id without waiting for the driver.
+func (aeron *Aeron) AsyncRemoveSubscription(registrationID int64) error {
+	return aeron.conductor.AsyncRemoveSubscription(registrationID)
+}
+
+// AddPublication adds a concurrent publication, blocking until the driver confirms it or returns an error.
+func (aeron *Aeron) AddPublication(channel string, streamID int32) (*Publication, error) {
 	return aeron.conductor.AddPublication(channel, streamID)
 }
 
-// GetPublication will attempt to get a Publication from a registrationID.  See AsyncAddPublication.  A pending
-// Publication will return nil,nil signifying that there is neither a Publication nor an error.
+// AddPublicationDeprecated adds a publication and returns a channel delivering it (nil on error).
+//
+// Deprecated: use AddPublication, which reports errors.
+func (aeron *Aeron) AddPublicationDeprecated(channel string, streamID int32) chan *Publication {
+	return deprecatedPublication(aeron, func() (*Publication, error) { return aeron.AddPublication(channel, streamID) })
+}
+
+// AsyncAddPublication sends ADD_PUBLICATION without blocking; poll GetPublication with the returned id.
+func (aeron *Aeron) AsyncAddPublication(channel string, streamID int32) (int64, error) {
+	return aeron.conductor.AsyncAddPublication(channel, streamID)
+}
+
+// GetPublication polls an async publication add: (nil, nil) while pending.
 func (aeron *Aeron) GetPublication(registrationID int64) (*Publication, error) {
-	return aeron.conductor.FindPublication(registrationID)
+	return aeron.conductor.GetPublication(registrationID)
 }
 
-// AddExclusivePublication will add a new exclusive publication to the driver. If such publication already
-// exists within ClientConductor the same instance will be returned.
+// AddExclusivePublication adds an exclusive publication, blocking until the driver confirms it.
 func (aeron *Aeron) AddExclusivePublication(channel string, streamID int32) (*ExclusivePublication, error) {
-	registrationID, err := aeron.conductor.AddExclusivePublication(channel, streamID)
-	if err != nil {
-		return nil, err
-	}
-	for {
-		publication, err := aeron.conductor.FindExclusivePublication(registrationID)
-		if publication != nil || err != nil {
-			return publication, err
-		}
-		aeron.awaitIdle()
-	}
-}
-
-// AddExclusivePublicationDeprecated will add a new exclusive publication to the driver. If such publication already
-// exists within ClientConductor the same instance will be returned.
-// Returns a channel, which can be used for either blocking or non-blocking want for media driver confirmation
-func (aeron *Aeron) AddExclusivePublicationDeprecated(channel string, streamID int32) chan *ExclusivePublication {
-	ch := make(chan *ExclusivePublication, 1)
-
-	registrationID, err := aeron.conductor.AddExclusivePublication(channel, streamID)
-	if err != nil {
-		// Preserve the legacy functionality.  The original AddExclusivePublication would result in the ClientConductor
-		// calling onError on this, as well as subsequently from the FindPublication call below.
-		aeron.conductor.onError(err)
-	}
-	go func() {
-		for {
-			publication, err := aeron.conductor.FindExclusivePublication(registrationID)
-			if publication != nil || err != nil {
-				if err != nil {
-					aeron.conductor.onError(err)
-				}
-				ch <- publication
-				close(ch)
-				return
-			}
-			aeron.awaitIdle()
-		}
-	}()
-
-	return ch
-}
-
-// AsyncAddExclusivePublication will add a new exclusive publication to the driver and return its registration ID.  That
-// ID can be used to get the added exclusive Publication with GetExclusivePublication().
-func (aeron *Aeron) AsyncAddExclusivePublication(channel string, streamID int32) (int64, error) {
 	return aeron.conductor.AddExclusivePublication(channel, streamID)
 }
 
-// GetExclusivePublication will attempt to get an exclusive Publication from a registrationID.  See
-// AsyncAddExclusivePublication.  A pending Publication will return nil,nil signifying that there is neither a
-// Publication nor an error.
-// Also note that while aeron-go currently handles GetPublication and GetExclusivePublication the same way, they may
-// diverge in the future.  Other Aeron languages already handle these calls differently.
+// AddExclusivePublicationDeprecated adds an exclusive publication and returns a channel delivering it (nil on error).
+//
+// Deprecated: use AddExclusivePublication, which reports errors.
+func (aeron *Aeron) AddExclusivePublicationDeprecated(channel string, streamID int32) chan *ExclusivePublication {
+	return deprecatedPublication(aeron, func() (*ExclusivePublication, error) {
+		return aeron.AddExclusivePublication(channel, streamID)
+	})
+}
+
+func deprecatedPublication[T any](aeron *Aeron, add func() (*T, error)) chan *T {
+	ch := make(chan *T, 1)
+	go func() {
+		pub, err := add()
+		if err != nil {
+			aeron.conductor.reportError(err)
+		}
+		ch <- pub
+		close(ch)
+	}()
+	return ch
+}
+
+// AsyncAddExclusivePublication sends ADD_EXCLUSIVE_PUBLICATION without blocking; poll GetExclusivePublication.
+func (aeron *Aeron) AsyncAddExclusivePublication(channel string, streamID int32) (int64, error) {
+	return aeron.conductor.AsyncAddExclusivePublication(channel, streamID)
+}
+
+// GetExclusivePublication polls an async exclusive publication add: (nil, nil) while pending.
 func (aeron *Aeron) GetExclusivePublication(registrationID int64) (*ExclusivePublication, error) {
-	return aeron.conductor.FindExclusivePublication(registrationID)
+	return aeron.conductor.GetExclusivePublication(registrationID)
+}
+
+// AsyncRemovePublication closes a publication by registration id without waiting for the driver.
+func (aeron *Aeron) AsyncRemovePublication(registrationID int64) error {
+	return aeron.conductor.AsyncRemovePublication(registrationID)
+}
+
+// AddDestination adds a destination to a multi-destination-cast publication, waiting for the driver. Returns the
+// destination registration id usable with RemoveDestinationByID.
+func (aeron *Aeron) AddDestination(publicationRegistrationID int64, endpointChannel string) (int64, error) {
+	return aeron.conductor.AddDestinationWithID(publicationRegistrationID, endpointChannel)
+}
+
+// RemoveDestination removes a destination, by channel, from a multi-destination-cast publication.
+func (aeron *Aeron) RemoveDestination(publicationRegistrationID int64, endpointChannel string) error {
+	return aeron.conductor.RemoveDestination(publicationRegistrationID, endpointChannel)
+}
+
+// RemoveDestinationByID removes a destination, by its registration id, from a multi-destination-cast publication.
+func (aeron *Aeron) RemoveDestinationByID(publicationRegistrationID int64, destinationRegistrationID int64) error {
+	return aeron.conductor.RemoveDestinationByID(publicationRegistrationID, destinationRegistrationID)
+}
+
+// AsyncAddDestination adds a publication destination without waiting; see IsCommandActive.
+func (aeron *Aeron) AsyncAddDestination(publicationRegistrationID int64, endpointChannel string) (int64, error) {
+	return aeron.conductor.AsyncAddDestination(publicationRegistrationID, endpointChannel)
+}
+
+// AsyncRemoveDestination removes a publication destination by channel without waiting.
+func (aeron *Aeron) AsyncRemoveDestination(publicationRegistrationID int64, endpointChannel string) (int64, error) {
+	return aeron.conductor.AsyncRemoveDestination(publicationRegistrationID, endpointChannel)
+}
+
+// AsyncRemoveDestinationByID removes a publication destination by registration id without waiting.
+func (aeron *Aeron) AsyncRemoveDestinationByID(publicationRegistrationID int64, destinationRegistrationID int64) (int64, error) {
+	return aeron.conductor.AsyncRemoveDestinationByID(publicationRegistrationID, destinationRegistrationID)
+}
+
+// AddRcvDestination adds a destination to a multi-destination subscription, waiting for the driver.
+func (aeron *Aeron) AddRcvDestination(subscriptionRegistrationID int64, endpointChannel string) error {
+	return aeron.conductor.AddRcvDestination(subscriptionRegistrationID, endpointChannel)
+}
+
+// RemoveRcvDestination removes a destination from a multi-destination subscription, waiting for the driver.
+func (aeron *Aeron) RemoveRcvDestination(subscriptionRegistrationID int64, endpointChannel string) error {
+	return aeron.conductor.RemoveRcvDestination(subscriptionRegistrationID, endpointChannel)
+}
+
+// AsyncAddRcvDestination adds a subscription destination without waiting.
+func (aeron *Aeron) AsyncAddRcvDestination(subscriptionRegistrationID int64, endpointChannel string) (int64, error) {
+	return aeron.conductor.AsyncAddRcvDestination(subscriptionRegistrationID, endpointChannel)
+}
+
+// AsyncRemoveRcvDestination removes a subscription destination without waiting.
+func (aeron *Aeron) AsyncRemoveRcvDestination(subscriptionRegistrationID int64, endpointChannel string) (int64, error) {
+	return aeron.conductor.AsyncRemoveRcvDestination(subscriptionRegistrationID, endpointChannel)
+}
+
+// IsCommandActive reports whether an async command is still awaiting a driver response.
+func (aeron *Aeron) IsCommandActive(correlationID int64) bool {
+	return aeron.conductor.IsCommandActive(correlationID)
+}
+
+// HasActiveCommands reports whether any async commands are awaiting a driver response.
+func (aeron *Aeron) HasActiveCommands() bool {
+	return aeron.conductor.HasActiveCommands()
 }
 
 // NextCorrelationID generates the next correlation id that is unique for the connected Media Driver.
-// This is useful generating correlation identifiers for pairing requests with responses in a clients own
-// application protocol.
-//
-// This method is thread safe and will work across processes that all use the same media driver.
 func (aeron *Aeron) NextCorrelationID() int64 {
 	return aeron.driverProxy.NextCorrelationID()
 }
@@ -367,48 +382,42 @@ func (aeron *Aeron) ClientID() int64 {
 	return aeron.driverProxy.ClientID()
 }
 
-// CounterReader returns Aeron's clientconductor's counterReader
+// NextSessionID asks the driver for the next available session id for a stream.
+func (aeron *Aeron) NextSessionID(streamID int32) (int32, error) {
+	return aeron.conductor.NextSessionID(streamID)
+}
+
+// CounterReader returns a reader for the media driver counters.
 func (aeron *Aeron) CounterReader() *counters.Reader {
 	return aeron.conductor.CounterReader()
 }
 
-// AddAvailableCounterHandler adds a handler to the list to be called when a counter becomes available.  Return the
-// registrationID to use to remove the handler.
+// AddAvailableCounterHandler adds a handler for counter availability; returns an id for removal.
 func (aeron *Aeron) AddAvailableCounterHandler(handler AvailableCounterHandler) int64 {
 	return aeron.conductor.AddAvailableCounterHandler(handler)
 }
 
-// RemoveAvailableCounterHandlerById removes a previously added handler from the list to be called when Counters become
-// available.  Returns true iff the handler was found and removed.
+// RemoveAvailableCounterHandlerById removes an available counter handler by id.
 func (aeron *Aeron) RemoveAvailableCounterHandlerById(registrationId int64) bool {
 	return aeron.conductor.RemoveAvailableCounterHandlerById(registrationId)
 }
 
-// RemoveAvailableCounterHandler removes a previously added handler from the list to be called when Counters become
-// available.  Returns true iff the handler was found and removed.
+// RemoveAvailableCounterHandler removes an available counter handler by value.
 func (aeron *Aeron) RemoveAvailableCounterHandler(handler AvailableCounterHandler) bool {
 	return aeron.conductor.RemoveAvailableCounterHandler(handler)
 }
 
-// AddUnavailableCounterHandler adds a handler to the list to be called when Counters become unavailable.  Return the
-// registrationID to use to remove the handler.
+// AddUnavailableCounterHandler adds a handler for counter removal; returns an id for removal.
 func (aeron *Aeron) AddUnavailableCounterHandler(handler UnavailableCounterHandler) int64 {
 	return aeron.conductor.AddUnavailableCounterHandler(handler)
 }
 
-// RemoveUnavailableCounterHandlerById removes a previously added handler from the list to be called when Counters
-// become unavailable.  Returns true iff the handler was found and removed.
+// RemoveUnavailableCounterHandlerById removes an unavailable counter handler by id.
 func (aeron *Aeron) RemoveUnavailableCounterHandlerById(registrationId int64) bool {
 	return aeron.conductor.RemoveUnavailableCounterHandlerById(registrationId)
 }
 
-// RemoveUnavailableCounterHandler removes a previously added handler from the list to be called when Counters become
-// unavailable.  Returns true iff the handler was found and removed.
+// RemoveUnavailableCounterHandler removes an unavailable counter handler by value.
 func (aeron *Aeron) RemoveUnavailableCounterHandler(handler UnavailableCounterHandler) bool {
 	return aeron.conductor.RemoveUnavailableCounterHandler(handler)
-}
-
-// IsClosed returns true if this connection is closed.
-func (aeron *Aeron) IsClosed() bool {
-	return !aeron.conductor.running.Get()
 }
