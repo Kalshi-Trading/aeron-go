@@ -14,6 +14,13 @@ same aeron-all jar for the in-process systests (`systests/driver`).
 If Docker Hub rate limits (429), `make docker-mirror` pulls every base image used under docker/ from
 mirror.gcr.io and tags it with its Docker Hub name (or set JAVA_IMAGE / GO_IMAGE / RUNTIME_IMAGE).
 
+## Running the examples
+
+Every sample in `examples/` and `archive/examples/` runs against this driver: pass `-p /dev/shm/aeron-compose`
+(client samples) or `-prefix /dev/shm/aeron-compose` (archive samples), or export `AERON_DIR`. `AERON_E2E=1 go test
+-p 1 ./examples/e2e ./archive/examples` builds and runs all of them (ReplayMerge and PersistentSubscription
+included); add `AERON_E2E_CLUSTER=1` with `docker/cluster.compose.yml` up for the cluster echo client.
+
 ## End-to-end tests
 
     make e2e          # start every docker/*.compose.yml stack the AERON_E2E=1 tests need, run them all, tear down
