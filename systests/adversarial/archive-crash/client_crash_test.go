@@ -69,12 +69,13 @@ func TestGoClientSIGKILLHoldingReplay(t *testing.T) {
 			return arch.StopReplay(kv["replaySession"])
 		}))
 	}
-	// The recording was unaffected and replays everything published so far.
+	// The recording was unaffected and replays everything published so far. The publisher is halted first:
+	// ExclusivePublication.Position is single-threaded, like Java's.
+	positions := r.halt()
 	before := pub.Position()
 	require.NoError(t, e2e.WaitRecordingPosition(arch, desc.RecordingId, before, 10*time.Second))
-	v := &verifier{format: goFormat, size: 200, endPos: r.positions()}
+	v := &verifier{format: goFormat, size: 200, endPos: positions}
 	replayVerify(t, arch, desc.RecordingId, desc.StartPosition, before, stream, v)
-	r.halt()
 }
 
 // TestPublisherProcessSIGKILLDuringRecording SIGKILLs the publishing process (a Go child process or a Java
