@@ -22,6 +22,9 @@ import (
 	"github.com/lirm/aeron-go/aeron/atomic"
 )
 
+// Header is a flyweight over a data frame header in a term buffer, as passed to fragment handlers.
+// It also carries the stream context (initial term id, position bits to shift, an optional user context) and the
+// fragmented frame length set by fragment assemblers.
 type Header struct {
 	buffer              atomic.Buffer
 	offset              int32
@@ -32,18 +35,28 @@ type Header struct {
 	context               interface{}
 }
 
+// NullValue is the value returned by FragmentedFrameLength when it has not been set.
+const NullValue int32 = -1
+
 //go:norace
 func (hdr *Header) Wrap(ptr unsafe.Pointer, length int32) *Header {
 	hdr.buffer.Wrap(ptr, length)
 	return hdr
 }
 
-// Position calculates the current position to which the image has advanced on
-// reading this message. For a reassembled message this is the position after its last fragment.
-func (hdr *Header) Position() int64 {
-	return computePosition(hdr.TermId(), hdr.NextTermOffset(), hdr.positionBitsToShift, hdr.InitialTermId())
+// SetBuffer points the header at buffer (the term buffer containing the frame).
+func (hdr *Header) SetBuffer(buffer *atomic.Buffer) *Header {
+	hdr.buffer.Wrap(buffer.Ptr(), buffer.Capacity())
+	return hdr
 }
 
+// Position calculates the position the image will have advanced to on consuming this message, taking into account
+// the fragmented frame length when the message was reassembled.
+func (hdr *Header) Position() int64 {
+	return ComputePosition(hdr.TermId(), hdr.NextTermOffset(), hdr.positionBitsToShift, hdr.initialTermID)
+}
+
+// Offset is the offset of the frame header within the buffer.
 func (hdr *Header) Offset() int32 {
 	return hdr.offset
 }
@@ -99,10 +112,4 @@ func (hdr *Header) SetReservedValue(reservedValue int64) *Header {
 func (hdr *Header) SetSessionId(value int32) *Header {
 	hdr.buffer.PutInt32(sessionIdOffset(hdr.offset), value)
 	return hdr
-}
-
-// computePosition computes the current position in absolute number of bytes.
-func computePosition(activeTermId int32, termOffset int32, positionBitsToShift int32, initialTermId int32) int64 {
-	termCount := activeTermId - initialTermId // copes with negative activeTermId on rollover
-	return (int64(termCount) << uint32(positionBitsToShift)) + int64(termOffset)
 }
