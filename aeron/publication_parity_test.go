@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	testSessionID = int32(0x1234)
-	testStreamID  = int32(1001)
+	pubTestSessionID = int32(0x1234)
+	pubTestStreamID  = int32(1001)
 )
 
 type testLog struct {
@@ -49,8 +49,8 @@ func newTestLog(t testing.TB, termLength, initialTermID, mtu int32) *testLog {
 	hdr.PutUInt8(logbuffer.DataFrameHeader.VersionFieldOffset, 0)
 	hdr.PutUInt8(logbuffer.DataFrameHeader.FlagsFieldOffset, 0xC0)
 	hdr.PutUInt16(logbuffer.DataFrameHeader.TypeFieldOffset, logbuffer.DataFrameHeader.TypeData)
-	hdr.PutInt32(logbuffer.DataFrameHeader.SessionIDFieldOffset, testSessionID)
-	hdr.PutInt32(logbuffer.DataFrameHeader.StreamIDFieldOffset, testStreamID)
+	hdr.PutInt32(logbuffer.DataFrameHeader.SessionIDFieldOffset, pubTestSessionID)
+	hdr.PutInt32(logbuffer.DataFrameHeader.StreamIDFieldOffset, pubTestStreamID)
 	require.NoError(t, mmap.Close())
 
 	lb := logbuffer.Wrap(name)
@@ -65,8 +65,8 @@ func (l *testLog) setPositionInTerm(termCount, termID, termOffset int32) {
 }
 
 func wire(base *publicationBase, l *testLog, limit int64) {
-	base.sessionID = testSessionID
-	base.streamID = testStreamID
+	base.sessionID = pubTestSessionID
+	base.streamID = pubTestStreamID
 	base.channelStatusIndicatorID = ChannelStatusNoIdAllocated
 	base.pubLimit = NewPosition(l.counters, 0)
 	base.pubLimit.set(limit)
@@ -177,7 +177,7 @@ func TestMetaDataLayoutMatchesJava(t *testing.T) {
 	l := newTestLog(t, logbuffer.TermMinLength, 0, 1408)
 	meta := l.lb.Buffer(logbuffer.LogMetaDataSectionIndex)
 	// LogBufferDescriptor: LOG_DEFAULT_FRAME_HEADER_OFFSET = 320, LOG_IS_CONNECTED_OFFSET = 136.
-	assert.Equal(t, testSessionID, meta.GetInt32(320+logbuffer.DataFrameHeader.SessionIDFieldOffset))
+	assert.Equal(t, pubTestSessionID, meta.GetInt32(320+logbuffer.DataFrameHeader.SessionIDFieldOffset))
 	assert.Equal(t, int32(1), meta.GetInt32(logIsConnectedOffset))
 	assert.Equal(t, int32(1408), meta.GetInt32(272))
 }
@@ -246,8 +246,8 @@ func TestOfferUnfragmentedWritesJavaCompatibleFrame(t *testing.T) {
 	assert.Equal(t, uint8(0xC0), f.flags)
 	assert.Equal(t, logbuffer.DataFrameHeader.TypeData, f.typ)
 	assert.Equal(t, int32(3), f.termID)
-	assert.Equal(t, testSessionID, f.sessionID)
-	assert.Equal(t, testStreamID, f.streamID)
+	assert.Equal(t, pubTestSessionID, f.sessionID)
+	assert.Equal(t, pubTestStreamID, f.streamID)
 	assert.Equal(t, int64(132), f.reserved)
 	assert.Equal(t, msg, f.payload)
 	assert.Equal(t, int32(aligned(100)), frames[1].termOffset)
