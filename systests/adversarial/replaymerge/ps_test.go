@@ -101,12 +101,16 @@ type psFaultCase struct {
 	total   int64
 	backlog int64
 	fault   func(t *testing.T, e *env)
+	// racy: the fault can land before or after the stream outruns the recording, so each side must either complete
+	// exactly or fail with INVALID_START_POSITION, independently of the other.
+	racy bool
 }
 
 type psOutcome struct {
 	failed       bool
 	next         int64
 	joined, left int64
+	reason       string
 }
 
 func (fc psFaultCase) env(t *testing.T) *env {
@@ -132,7 +136,13 @@ func (fc psFaultCase) compare(t *testing.T) (javaOut, goOut psOutcome) {
 		require.Equal(t, false, res["timedOut"], "java %v", res)
 		require.Zero(t, num(res, "gaps"), "java %v", res)
 		require.Zero(t, num(res, "duplicates"), "java %v", res)
-		javaOut = psOutcome{res["failed"] == true, num(res, "next"), num(res, "joined"), num(res, "left")}
+		javaOut = psOutcome{failed: res["failed"] == true, next: num(res, "next"), joined: num(res, "joined"),
+			left: num(res, "left")}
+		for _, ev := range o.all() {
+			if ev["event"] == "error" {
+				javaOut.reason = fmt.Sprint(ev["message"])
+			}
+		}
 	})
 	t.Run("go", func(t *testing.T) {
 		e := fc.env(t)
@@ -155,9 +165,22 @@ func (fc psFaultCase) compare(t *testing.T) (javaOut, goOut psOutcome) {
 		require.Zero(t, r.Gaps, "%s", r.Checker)
 		require.Zero(t, r.Duplicates, "%s", r.Checker)
 		require.Less(t, r.CloseDur, 5*time.Second)
-		goOut = psOutcome{r.Failed, r.Next, int64(r.Joined), int64(r.Left)}
+		goOut = psOutcome{failed: r.Failed, next: r.Next, joined: int64(r.Joined), left: int64(r.Left)}
+		if r.FailureErr != nil {
+			goOut.reason = r.FailureErr.Error()
+		}
 	})
 	t.Logf("java %+v go %+v", javaOut, goOut)
+	if fc.racy {
+		for side, out := range map[string]psOutcome{"java": javaOut, "go": goOut} {
+			if out.failed {
+				require.Contains(t, out.reason, "INVALID_START_POSITION", "%s %+v", side, out)
+			} else {
+				require.Equal(t, fc.total, out.next, "%s %+v", side, out)
+			}
+		}
+		return javaOut, goOut
+	}
 	require.Equal(t, javaOut.failed, goOut.failed, "failed: java %+v go %+v", javaOut, goOut)
 	require.Equal(t, javaOut.next == fc.total, goOut.next == fc.total, "completion: java %+v go %+v", javaOut, goOut)
 	return javaOut, goOut
@@ -165,7 +188,9 @@ func (fc psFaultCase) compare(t *testing.T) (javaOut, goOut psOutcome) {
 
 // TestPSArchiveKill SIGKILLs and restarts the archive while the PersistentSubscription is replaying and while it is
 // live. Live: the archive is not needed and delivery continues. Replaying: the replay is lost and the recording
-// stops; Java reconnects and keeps retrying, Go must do the same and never deliver a gap or duplicate.
+// stops; Java reconnects and resumes the replay, then either joins live exactly or, if the publisher got ahead of
+// the stopped recording (the dead archive's image still let a receiver window through), fails with
+// INVALID_START_POSITION. Which one happens depends on timing, for Java and Go alike; neither may gap or duplicate.
 func TestPSArchiveKill(t *testing.T) {
 	requireAdversarial(t)
 	for i, state := range []ps.State{ps.StateReplay, ps.StateLive} {
@@ -180,7 +205,7 @@ func TestPSArchiveKill(t *testing.T) {
 			fault: func(t *testing.T, e *env) {
 				killContainer(t, archiveName)
 				go func() { _ = restartArchive() }()
-			}}
+			}, racy: state == ps.StateReplay}
 		t.Run(state.String(), func(t *testing.T) { fc.compare(t) })
 	}
 }

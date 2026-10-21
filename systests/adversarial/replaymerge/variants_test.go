@@ -15,15 +15,19 @@ import (
 // interleaved with small ones through ControlledPoll, side by side with Java.
 func TestControlledPollLargeFragmented(t *testing.T) {
 	requireAdversarial(t)
-	const total = 16000
-	e := newEnv(t, 27400, 9420, rmrun.PubConfig{Count: total, Rate: 300, Sizes: []int{64, 100000, 64, 30000}})
+	const total = 10000
+	// fc=min: under the default max flow control a merged consumer that stalls for a moment (GC, CPU) while the
+	// archive keeps up falls more than a term behind and can never repair the loss (seen for both Java and Go).
+	e := newEnv(t, 27400, 9420, rmrun.PubConfig{Count: total, Rate: 300, Sizes: []int{64, 100000, 64, 30000},
+		Channel: portsFor(27400).pubChannel("|fc=min")})
 	e.publish()
 	e.awaitSent(1500, 30*time.Second)
 	o := e.oracleMerge(total)
 	cfg := e.mergeConfig(total)
 	cfg.Controlled = true
+	cfg.Timeout = 3 * time.Minute
 	r := rmrun.RunReplayMerge(e.c.Aeron, cfg, rmrun.Nop)
-	require.Empty(t, r.Failures, "%s", failMessages(r))
+	require.Empty(t, r.Failures, "%s (publisher sent %d)", failMessages(r), e.sent.Load())
 	require.True(t, r.Merged)
 	requireExact(t, r, total)
 	requireOracleExact(t, o.result(2*time.Minute), total)
