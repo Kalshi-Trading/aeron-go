@@ -252,7 +252,7 @@ func TestDecodePublicationErrorFrame(t *testing.T) {
 	buf.PutUInt16(pubErrAddressPortOffset, 4040)
 	ip := []byte{127, 0, 0, 1}
 	buf.PutBytesArray(pubErrAddressOffset, &ip, 0, 4)
-	buf.PutInt32(pubErrErrorCodeOffset, 17)
+	buf.PutInt32(pubErrErrorCodeOffset, 13)
 	buf.PutInt32(pubErrErrorMessageOffset, int32(len(msg)))
 	buf.PutBytesArray(pubErrErrorMessageOffset+4, &msg, 0, int32(len(msg)))
 
@@ -260,7 +260,7 @@ func TestDecodePublicationErrorFrame(t *testing.T) {
 	require.NoError(t, decodePublicationErrorFrame(buf, 0, int32(length), &f))
 	assert.Equal(t, PublicationErrorFrame{
 		RegistrationID: 11, DestinationRegistrationID: 12, SessionID: 13, StreamID: 14, ReceiverID: 15,
-		GroupTag: 16, ErrorCode: 17, ErrorMessage: "rejected",
+		GroupTag: 16, ErrorCode: 13, ErrorMessage: "rejected",
 		SourceAddress: &net.UDPAddr{IP: net.IP{127, 0, 0, 1}, Port: 4040},
 	}, *f.Clone())
 	assert.Error(t, decodePublicationErrorFrame(buf, 0, 10, &f))

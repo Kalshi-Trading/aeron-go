@@ -16,6 +16,7 @@
 package aeron
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -152,7 +153,10 @@ func (aeron *Aeron) connectToDriver() error {
 	ctx := aeron.context
 	cnc, err := awaitCncFile(ctx.CncFileName(), ctx.mediaDriverTo)
 	if err != nil {
-		return &DriverTimeoutError{TimeoutError{AeronError{Category: CategoryFatal, Cause: err}}}
+		if errors.Is(err, ErrDriverTimeout) {
+			return &DriverTimeoutError{TimeoutError{AeronError{Category: CategoryFatal, Cause: err}}}
+		}
+		return err
 	}
 	aeron.counters = cnc.meta
 	aeron.cncFile = cnc.file

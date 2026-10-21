@@ -1445,7 +1445,9 @@ func (cc *ClientConductor) OnChannelEndpointError(corrID int64, errorMessage str
 			cc.queueError(NewChannelEndpointError(statusIndicatorID, errorMessage))
 		}
 	}
-	cc.failCommand(corrID, NewRegistrationError(corrID, 4, errorMessage))
+	if _, ok := cc.asyncCommandIDs[corrID]; ok && corrID != cc.activeCorrelationID {
+		cc.failCommand(corrID, NewRegistrationError(corrID, ErrorCodeChannelEndpointError.Value(), errorMessage))
+	}
 }
 
 func (cc *ClientConductor) OnAvailableCounter(corrID int64, counterID int32) {
@@ -1512,7 +1514,6 @@ func (cc *ClientConductor) OnPublicationError(buffer *atomic.Buffer, offset int3
 		if (res.kind == kindPublication || res.kind == kindExclusivePublication) &&
 			res.pubBase.originalRegID == frame.RegistrationID {
 			cc.queueCallback(func() { h(&frame) })
-			return
 		}
 	}
 }

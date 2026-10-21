@@ -84,7 +84,7 @@ func decodePublicationErrorFrame(buffer *atomic.Buffer, offset int32, length int
 	frame.StreamID = buffer.GetInt32(offset + pubErrStreamIDOffset)
 	frame.ReceiverID = buffer.GetInt64(offset + pubErrReceiverIDOffset)
 	frame.GroupTag = buffer.GetInt64(offset + pubErrGroupTagOffset)
-	frame.ErrorCode = buffer.GetInt32(offset + pubErrErrorCodeOffset)
+	frame.ErrorCode = ErrorCodeFromValue(buffer.GetInt32(offset + pubErrErrorCodeOffset)).Value()
 
 	frame.SourceAddress = nil
 	port := int(buffer.GetUInt16(offset + pubErrAddressPortOffset))
