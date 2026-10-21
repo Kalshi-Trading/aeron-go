@@ -43,9 +43,7 @@ func setup(t *testing.T) string {
 			return
 		}
 		cmd := exec.Command("go", "build", "-o", binDir+"/", "github.com/lirm/aeron-go/examples/...",
-			"github.com/lirm/aeron-go/archive/examples/basic_recording_publisher",
-			"github.com/lirm/aeron-go/archive/examples/basic_replayed_subscriber",
-			"github.com/lirm/aeron-go/archive/examples/replay_throughput")
+			"github.com/lirm/aeron-go/archive/examples/...")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			buildErr = fmt.Errorf("go build: %v\n%s", err, out)
@@ -84,6 +82,10 @@ func start(t *testing.T, ctx context.Context, name string, args ...string) *proc
 	t.Helper()
 	p := &proc{out: &bytes.Buffer{}, mu: &sync.Mutex{}}
 	p.cmd = exec.CommandContext(ctx, filepath.Join(binDir, name), args...)
+	// Interrupt rather than kill on timeout so examples run their deferred cleanup (e.g. StopRecording) and
+	// don't leave state in the shared archive that fails the next run.
+	p.cmd.Cancel = func() error { return p.cmd.Process.Signal(os.Interrupt) }
+	p.cmd.WaitDelay = 5 * time.Second
 	p.cmd.Stdout = lockedWriter{p.mu, p.out}
 	p.cmd.Stderr = lockedWriter{p.mu, p.out}
 	if err := p.cmd.Start(); err != nil {
@@ -254,6 +256,42 @@ func TestArchiveRecordAndReplay(t *testing.T) {
 	rep := run(t, time.Minute, "basic_replayed_subscriber", "-prefix", dir, "-samplechannel", chan_,
 		"-samplestream", "5005", "-exit", "3")
 	mustContain(t, rep, "<<Hello World! 0>>", "<<Hello World! 2>>", "Replayed 3 messages")
+}
+
+// recordLive runs basic_recording_publisher in the background until it has recorded a few messages.
+func recordLive(t *testing.T, ctx context.Context, dir, channel, stream string, messages int) *proc {
+	t.Helper()
+	rec := start(t, ctx, "basic_recording_publisher", "-prefix", dir, "-samplechannel", channel,
+		"-samplestream", stream, "-messages", fmt.Sprint(messages), "-interval", "100ms")
+	waitFor(t, rec, "Offering 5/")
+	return rec
+}
+
+func TestArchiveReplayMerge(t *testing.T) {
+	dir := setup(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	chan_ := "aeron:udp?endpoint=localhost:20136"
+	rec := recordLive(t, ctx, dir, chan_, "5007", 60)
+	out := run(t, time.Minute, "basic_replay_merge", "-prefix", dir, "-samplechannel", chan_,
+		"-samplestream", "5007", "-exit", "60")
+	mustContain(t, out, "Message to replay stream 5007", "<<Hello World! 0>>", "ReplayMerge has joined live stream",
+		"Message to live stream 5007", "<<Hello World! 59>>", "Received 60 messages")
+	mustContain(t, rec.wait(t), "Done sending.")
+}
+
+func TestArchivePersistentSubscriber(t *testing.T) {
+	dir := setup(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	chan_ := "aeron:udp?endpoint=localhost:20137"
+	rec := recordLive(t, ctx, dir, chan_, "5008", 60)
+	out := run(t, time.Minute, "persistent_subscriber", "-prefix", dir, "-samplechannel", chan_,
+		"-samplestream", "5008", "-exit", "60")
+	mustContain(t, out, "Message to replay stream 5000", "<<Hello World! 0>>",
+		"PersistentSubscription has joined live stream", "Message to live stream 5008", "<<Hello World! 59>>",
+		"Received 60 messages")
+	mustContain(t, rec.wait(t), "Done sending.")
 }
 
 func TestArchiveReplayThroughput(t *testing.T) {

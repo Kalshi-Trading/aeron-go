@@ -3,7 +3,7 @@ targets := basic_publisher basic_subscriber exclusive_publisher simple_publisher
 	multiple_publishers_with_fragmentation multiple_subscribers_with_fragment_assembly \
 	streaming_publisher rate_subscriber exclusive_throughput ping pong \
 	aeronstat errorstat lossstat backlogstat cluster_echo_client basic_publisher_claim
-archive_targets := basic_recording_publisher basic_replayed_subscriber replay_throughput
+archive_targets := basic_recording_publisher basic_replayed_subscriber basic_replay_merge persistent_subscriber replay_throughput
 
 .PHONY: all e2e $(targets) $(archive_targets)
 all: $(targets) $(archive_targets)
