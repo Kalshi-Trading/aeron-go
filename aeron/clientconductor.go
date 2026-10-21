@@ -19,11 +19,14 @@ limitations under the License.
 package aeron
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"runtime"
+	"strconv"
 	"sync"
+	syncatomic "sync/atomic"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
@@ -221,9 +224,12 @@ type ClientConductor struct {
 	// inRunCallbacks is set while user callbacks run on the conductor goroutine, so Close called from one of them
 	// does not wait for the goroutine it is running on.
 	inRunCallbacks atomic.Bool
-	exitMu         sync.Mutex
-	exited         bool
-	afterExit      func()
+	// conductorGoroutine is the id of the goroutine running the duty cycle, so only Close called from a callback on it
+	// (and not from another goroutine while a callback happens to run) is treated as a close from a callback.
+	conductorGoroutine syncatomic.Int64
+	exitMu             sync.Mutex
+	exited             bool
+	afterExit          func()
 
 	timeOfLastKeepaliveNs   int64
 	timeOfLastServiceNs     int64
@@ -298,6 +304,7 @@ func (cc *ClientConductor) Start(idleStrategy idlestrategy.Idler) {
 func (cc *ClientConductor) run(idleStrategy idlestrategy.Idler) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	cc.conductorGoroutine.Store(goroutineID())
 	defer close(cc.doneCh)
 	defer cc.runExited()
 	defer cc.onClose()
@@ -378,7 +385,7 @@ func (cc *ClientConductor) Close() error {
 		cc.onClose()
 		return nil
 	}
-	if cc.inRunCallbacks.Get() {
+	if cc.inRunCallbacks.Get() && goroutineID() == cc.conductorGoroutine.Load() {
 		return ErrCloseFromCallback
 	}
 	select {
@@ -1781,4 +1788,16 @@ func (cc *ClientConductor) OnUnavailableImage(corrID int64, subscriptionRegistra
 // CounterReader returns the counters reader for the driver's CnC counters.
 func (cc *ClientConductor) CounterReader() *ctr.Reader {
 	return cc.counterReader
+}
+
+// goroutineID returns the runtime id of the calling goroutine, parsed from its stack header "goroutine N [...".
+func goroutineID() int64 {
+	var buf [32]byte
+	b := buf[:runtime.Stack(buf[:], false)]
+	b = bytes.TrimPrefix(b, []byte("goroutine "))
+	if i := bytes.IndexByte(b, ' '); i > 0 {
+		b = b[:i]
+	}
+	id, _ := strconv.ParseInt(string(b), 10, 64)
+	return id
 }
