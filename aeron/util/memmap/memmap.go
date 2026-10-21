@@ -131,15 +131,14 @@ func (mmap *File) GetMemorySize() int {
 	return mmap.size
 }
 
-// Close unmaps the mapped memory region. It is idempotent: closing an already closed File is a no-op,
-// so a second Close can never unmap a region that has since been reused by another mapping.
-func (mmap *File) Close() error {
-	if mmap == nil || mmap.mm == nil {
+// Close unmaps the mapped memory region. Closing an already closed File is a no-op, so it can never unmap a newer
+// mapping that the kernel placed at the same address.
+func (mmap *File) Close() (err error) {
+	mm := mmap.mm
+	if mm == nil {
 		return nil
 	}
-	mm := mmap.mm
 	mmap.mm = nil
-	mmap.mmap = nil
 	return mm.Unmap()
 }
 
@@ -151,5 +150,11 @@ func doMap(f *os.File, offset int64, length int) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &File{mmap: unsafe.Pointer(&mm[0]), size: length, mm: mm}, nil
+
+	mmap := new(File)
+	mmap.mmap = unsafe.Pointer(&mm[0])
+	mmap.size = length
+	mmap.mm = mm
+
+	return mmap, err
 }

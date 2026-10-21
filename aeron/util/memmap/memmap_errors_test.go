@@ -37,7 +37,7 @@ func TestNewFileWithOffsetSizesFile(t *testing.T) {
 	}
 }
 
-func TestCloseIsIdempotent(t *testing.T) {
+func TestCloseAfterAddressReuseDoesNotUnmapNewMapping(t *testing.T) {
 	dir := t.TempDir()
 	a, err := NewFile(filepath.Join(dir, "a.bin"), 0, 4096)
 	if err != nil {

@@ -298,7 +298,7 @@ func (archive *Archive) EnableRecordingEvents() error {
 // IsRecordingEventsConnected returns true if the recording events subscription
 // is connected.
 func (archive *Archive) IsRecordingEventsConnected() (bool, error) {
-	if !archive.Events.Enabled {
+	if !archive.Events.Enabled || archive.Events.Subscription == nil {
 		return false, errors.New("recording events not enabled")
 	}
 	return archive.Events.Subscription.IsConnected(), nil
@@ -306,7 +306,9 @@ func (archive *Archive) IsRecordingEventsConnected() (bool, error) {
 
 // DisableRecordingEvents stops recording events flowing
 func (archive *Archive) DisableRecordingEvents() {
-	archive.Events.Subscription.Close()
+	if archive.Events.Subscription != nil {
+		archive.Events.Subscription.Close()
+	}
 	archive.Events.Enabled = false
 	logger.Debugf("RecordingEvents subscription closed")
 }
@@ -315,6 +317,9 @@ func (archive *Archive) DisableRecordingEvents() {
 func (archive *Archive) RecordingEventsPoll() int {
 	archive.mtx.Lock()
 	defer archive.mtx.Unlock()
+	if !archive.Events.Enabled || archive.Events.Subscription == nil {
+		return 0
+	}
 	return archive.Events.PollWithContext(nil, 1)
 }
 

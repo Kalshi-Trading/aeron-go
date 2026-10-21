@@ -199,12 +199,18 @@ func (aeron *Aeron) connectToDriver() error {
 func (aeron *Aeron) Close() error {
 	aeron.closeOnce.Do(func() {
 		if err := aeron.conductor.Close(); err != nil {
-			aeron.conductor.reportError(err)
+			if !errors.Is(err, ErrCloseFromCallback) {
+				aeron.conductor.reportError(err)
+			}
 			aeron.closeErr = err
 		}
-		if err := aeron.cncFile.Close(); err != nil && aeron.closeErr == nil {
-			aeron.closeErr = err
-		}
+		// The conductor goroutine may still be running (close from one of its callbacks, or a stop timeout): only
+		// unmap the CnC file once it has exited.
+		aeron.conductor.runAfterExit(func() {
+			if err := aeron.cncFile.Close(); err != nil && aeron.closeErr == nil {
+				aeron.closeErr = err
+			}
+		})
 		aeron.context.inUse.Store(false)
 	})
 	return aeron.closeErr
