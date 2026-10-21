@@ -2,6 +2,8 @@ package client
 
 import (
 	"errors"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -149,4 +151,97 @@ func TestE2EOnNewLeaderReconnectsAndKeepsAssemblers(t *testing.T) {
 	require.True(t, cl.IsConnected())
 	pollUntil(t, cl, 10*time.Second, func() bool { return len(listener.messages) == 1 })
 	require.Equal(t, "after-new-leader", string(listener.messages[0]))
+}
+
+// Java AsyncConnect.updateMembers: a follower answers REDIRECT with the full ingress endpoint list and the client
+// reconnects to the leader even though the leader was not in Context.IngressEndpoints.
+func TestE2ERedirectFromFollowerOnlyEndpoint(t *testing.T) {
+	nodes := e2eNodes(t)
+	if nodes != 3 {
+		t.Skip("requires CLUSTER_E2E_NODES=3")
+	}
+	first, err := Connect(e2eContext(nodes, &recordingListener{}))
+	require.NoError(t, err)
+	leader := first.LeaderMemberId()
+	require.NoError(t, first.Close())
+
+	follower := (leader + 1) % 3
+	listener := &recordingListener{}
+	ctx := e2eContext(nodes, listener)
+	ctx.IngressEndpoints = strconv.Itoa(int(follower)) + "=localhost:" + strconv.Itoa(9002+100*int(follower))
+	cl, err := Connect(ctx)
+	require.NoError(t, err)
+	defer cl.Close()
+	require.Equal(t, leader, cl.LeaderMemberId())
+	require.Contains(t, cl.IngressPublication().Channel(), "localhost:"+strconv.Itoa(9002+100*int(leader)))
+
+	offerAll(t, cl, []byte("redirected"))
+	pollUntil(t, cl, 10*time.Second, func() bool { return len(listener.messages) == 1 })
+	require.Equal(t, "redirected", string(listener.messages[0]))
+}
+
+// Java pollEgress: once the leader's egress image closes the client waits newLeaderTimeoutNs (2x the leader
+// heartbeat timeout reported on connect) for a NewLeaderEvent, then closes itself.
+func TestE2ENoQuorumNewLeaderTimeoutCloses(t *testing.T) {
+	nodes := e2eNodes(t)
+	if nodes != 3 {
+		t.Skip("requires CLUSTER_E2E_NODES=3")
+	}
+	listener := &recordingListener{}
+	cl, err := Connect(e2eContext(nodes, listener))
+	require.NoError(t, err)
+	defer cl.Close()
+	require.Equal(t, 4*time.Second, cl.Context().NewLeaderTimeout, "2x leader.heartbeat.timeout=2s")
+
+	leader := cl.LeaderMemberId()
+	follower := (leader + 1) % 3
+	victims := []string{"node" + strconv.Itoa(int(leader)), "node" + strconv.Itoa(int(follower))}
+	composeFile := os.Getenv("CLUSTER_COMPOSE_FILE")
+	if composeFile == "" {
+		composeFile = "../../docker/cluster.compose.yml"
+	}
+	out, err := exec.Command("docker", append([]string{"compose", "-f", composeFile, "--profile", "three", "kill"},
+		victims...)...).CombinedOutput()
+	require.NoError(t, err, string(out))
+	defer func() {
+		out, err := exec.Command("docker", append([]string{"compose", "-f", composeFile, "--profile", "three", "up",
+			"-d"}, victims...)...).CombinedOutput()
+		if err != nil {
+			t.Logf("restart failed: %v %s", err, out)
+		}
+		awaitClusterUsable(t, nodes)
+	}()
+
+	start := time.Now()
+	sawAwait := false
+	deadline := time.Now().Add(40 * time.Second)
+	for !cl.IsClosed() {
+		require.True(t, time.Now().Before(deadline), "client did not close; state=%v", cl.state)
+		cl.PollEgress()
+		if cl.state == stateAwaitNewLeader {
+			sawAwait = true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Logf("closed after %v", time.Since(start))
+	require.True(t, sawAwait)
+	require.Empty(t, listener.newLeaders)
+	require.True(t, cl.IngressPublication().IsClosed())
+	require.Zero(t, cl.PollEgress())
+}
+
+func awaitClusterUsable(t *testing.T, nodes int) {
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		listener := &recordingListener{}
+		ctx := e2eContext(nodes, listener)
+		ctx.MessageTimeout = 3 * time.Second
+		cl, err := Connect(ctx)
+		if err == nil {
+			_ = cl.Close()
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Logf("cluster did not become usable again")
 }
