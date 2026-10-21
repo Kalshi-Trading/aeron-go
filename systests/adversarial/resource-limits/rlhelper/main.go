@@ -40,7 +40,7 @@ func main() {
 	case "pub":
 		publish(a, *channel, int32(*stream), *exclusive, *size)
 	case "claim":
-		claim(a, *channel, int32(*stream), *size)
+		claim(a, *channel, int32(*stream), *exclusive, *size)
 	case "sub":
 		subscribe(a, *channel, int32(*stream), *stallAfter)
 	case "pubs":
@@ -106,8 +106,17 @@ func publish(a *aeron.Aeron, channel string, stream int32, exclusive bool, size 
 }
 
 // claim publishes one message, then claims a second one and never commits it, so the driver has to unblock the log.
-func claim(a *aeron.Aeron, channel string, stream int32, size int) {
-	pub, err := a.AddPublication(channel, stream)
+func claim(a *aeron.Aeron, channel string, stream int32, exclusive bool, size int) {
+	var pub interface {
+		aeron.Publisher
+		TryClaim(length int32, bufferClaim *logbuffer.Claim) int64
+	}
+	var err error
+	if exclusive {
+		pub, err = a.AddExclusivePublication(channel, stream)
+	} else {
+		pub, err = a.AddPublication(channel, stream)
+	}
 	if err != nil {
 		fail(err)
 	}
