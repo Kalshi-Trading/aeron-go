@@ -1,0 +1,86 @@
+# Java Aeron 1.53.3 stack for the adversarial network fault suite in systests/adversarial/network-faults
+# (AERON_E2E=1 AERON_ADVERSARIAL=1). Every resource is private to the suite so it can run back to back with the
+# other adversarial suites: compose project adv-network-faults, UDP ports 27500-27599, stream ids 9500-9599.
+#
+#   nf-driver-a  ArchivingMediaDriver, AERON_DIR=/dev/shm/aeron-adv-network-faults (the "sender" host):
+#                archive control localhost:27590 stream 10, recording events localhost:27591, archive id 95.
+#   nf-driver-b  MediaDriver, AERON_DIR=/dev/shm/aeron-adv-network-faults-b (the "receiver" host). Traffic between
+#                the two drivers crosses the host loopback, where the netem sidecar injects faults.
+#   nf-netem     NET_ADMIN sidecar on the host network: the tests `docker exec` tc/iptables in it.
+#
+# Short liveness timeouts keep partition tests fast: image liveness 3s, publication connection 3s, client liveness
+# 5s, flow control receiver timeout 2s.
+#
+#   docker compose -f docker/adversarial-network-faults.compose.yml up -d --build --wait
+#   AERON_E2E=1 AERON_ADVERSARIAL=1 go test -count=1 -p 1 -v ./systests/adversarial/network-faults/
+name: adv-network-faults
+x-driver-props: &driver-props >-
+  -Daeron.dir.delete.on.start=true
+  -Daeron.client.liveness.timeout=5000000000
+  -Daeron.image.liveness.timeout=3000000000
+  -Daeron.publication.connection.timeout=3000000000
+  -Daeron.publication.unblock.timeout=8000000000
+  -Daeron.flow.control.receiver.timeout=2000000000
+  -Daeron.timer.interval=100000000
+  -Daeron.publication.linger.timeout=1000000000
+  -Daeron.threading.mode=SHARED
+services:
+  nf-driver-a:
+    build: .
+    image: docker-archiving-driver
+    container_name: adv-nf-driver-a
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    shm_size: 1g
+    volumes:
+      - /dev/shm:/dev/shm
+    tmpfs:
+      - /data/archive:uid=1000,gid=1000
+    environment:
+      DRIVER_PROPS: *driver-props
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-adv-network-faults
+        -Daeron.archive.dir=/data/archive/rec
+        -Daeron.archive.dir.delete.on.start=true
+        -Daeron.archive.control.channel=aeron:udp?endpoint=localhost:27590
+        -Daeron.archive.control.stream.id=10
+        -Daeron.archive.replication.channel=aeron:udp?endpoint=localhost:0
+        -Daeron.archive.recording.events.enabled=true
+        -Daeron.archive.recording.events.channel=aeron:udp?control-mode=dynamic|control=localhost:27591
+        -Daeron.archive.id=95
+        -Daeron.archive.threading.mode=SHARED
+    entrypoint: ["sh", "-c", "exec java $$JAVA_OPTS $$DRIVER_PROPS $$AERON_PROPS -cp /opt/aeron/aeron-all.jar io.aeron.archive.ArchivingMediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-adv-network-faults/cnc.dat"]
+      interval: 1s
+      retries: 30
+
+  nf-driver-b:
+    image: docker-archiving-driver
+    container_name: adv-nf-driver-b
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    shm_size: 1g
+    volumes:
+      - /dev/shm:/dev/shm
+    environment:
+      DRIVER_PROPS: *driver-props
+      AERON_PROPS: -Daeron.dir=/dev/shm/aeron-adv-network-faults-b
+    entrypoint: ["sh", "-c", "exec java $$JAVA_OPTS $$DRIVER_PROPS $$AERON_PROPS -cp /opt/aeron/aeron-all.jar io.aeron.driver.MediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-adv-network-faults-b/cnc.dat"]
+      interval: 1s
+      retries: 30
+
+  nf-netem:
+    build:
+      context: adversarial-network-faults
+      dockerfile: netem.Dockerfile
+    image: aeron-go-adv-netem
+    container_name: adv-nf-netem
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    init: true

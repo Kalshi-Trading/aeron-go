@@ -49,6 +49,7 @@ func main() {
 		log.Fatalf("Failed to add exclusive publication: %v", err)
 	}
 	defer publication.Close()
+	examples.AwaitConnected(ctx, publication, 5*time.Second)
 
 	buffer := atomic.MakeBuffer(make([]byte, 256))
 	messages := *examples.ExamplesConfig.Messages

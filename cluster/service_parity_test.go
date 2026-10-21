@@ -174,6 +174,25 @@ func TestBoundedLogAdapterDropsMessageWithFragmentGap(t *testing.T) {
 	assert.Empty(t, h.sessionMsgs)
 }
 
+// A follower's live log image can close mid-message (e.g. the leader dies after the commit position stopped inside a
+// fragmented message); the service then joins a replay image that starts at the same position. Like Java's
+// BoundedLogAdapter.close(), closing the image must keep the partial message so the replay completes it.
+func TestBoundedLogAdapterReassemblesAcrossLogRejoin(t *testing.T) {
+	h := &recordingHandler{}
+	adapter := newBoundedLogAdapter(NewOptions(), h)
+	w := newTermWriter()
+	payload := bytes.Repeat([]byte("abcdefgh"), 40)
+	msg := sessionMessage(t, 42, payload)
+
+	adapter.onFragment(w.frame(msg[:100], 0x80))
+	adapter.onFragment(w.frame(msg[100:200], 0x00))
+	require.NoError(t, adapter.Close())
+	adapter.onFragment(w.frame(msg[200:], 0x40))
+	require.Len(t, h.sessionMsgs, 1)
+	assert.Equal(t, int64(42), h.sessionIds[0])
+	assert.Equal(t, payload, h.sessionMsgs[0])
+}
+
 func TestBoundedLogAdapterActionFlagsAndLeadershipTerm(t *testing.T) {
 	h := &recordingHandler{}
 	adapter := newBoundedLogAdapter(NewOptions(), h)
