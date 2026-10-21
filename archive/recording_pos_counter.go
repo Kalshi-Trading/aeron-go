@@ -8,18 +8,20 @@ import (
 	"github.com/lirm/aeron-go/archive/status"
 )
 
+// These are untyped, as in upstream lirm/aeron-go; the typed equivalents live in package archive/status.
+
 // Deprecated: use status.RecordingPositionTypeId.
-const RECORDING_POSITION_COUNTER_TYPE_ID = status.RecordingPositionTypeId
+const RECORDING_POSITION_COUNTER_TYPE_ID = 100
 
 // Deprecated: use status.NullRecordingId.
-const NULL_RECORDING_ID = status.NullRecordingId
+const NULL_RECORDING_ID = -1
 
 // Deprecated: use the status.*Offset constants.
 const (
-	RECORDING_ID_OFFSET           = status.RecordingIdOffset
-	SESSION_ID_OFFSET             = status.SessionIdOffset
-	SOURCE_IDENTITY_LENGTH_OFFSET = status.SourceIdentityLengthOffset
-	SOURCE_IDENTITY_OFFSET        = status.SourceIdentityOffset
+	RECORDING_ID_OFFSET           = 0
+	SESSION_ID_OFFSET             = RECORDING_ID_OFFSET + 8
+	SOURCE_IDENTITY_LENGTH_OFFSET = SESSION_ID_OFFSET + 4
+	SOURCE_IDENTITY_OFFSET        = SOURCE_IDENTITY_LENGTH_OFFSET + 4
 )
 
 // FindCounterIdByRecording finds the active counter id for a recording in any archive.

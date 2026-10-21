@@ -1,0 +1,129 @@
+# Java Aeron 1.53.3 stack for the adversarial archive-crash suite (systests/adversarial/archive-crash,
+# AERON_E2E=1 AERON_ADVERSARIAL=1). The tests SIGKILL/SIGSTOP and recreate these containers, so the stack is
+# separate from every other compose file. All resources live in the suite's own ranges: AERON_DIR
+# /dev/shm/aeron-adv-archive-crash, UDP ports 27300-27399, stream ids 9300-9399.
+#
+#   adv-driver         standalone MediaDriver, AERON_DIR=/dev/shm/aeron-adv-archive-crash
+#   adv-archive-a      standalone Archive on adv-driver: control localhost:27300, events 27301, archive id 9300
+#   adv-archive-b      standalone Archive on adv-driver (replication destination): control 27310, events 27311, id 9301
+#   adv-archive-small  standalone Archive whose archive dir is an 8MiB tmpfs (storage-full tests): control 27320,
+#                      events 27321, archive id 9302, low storage threshold 2MiB
+#
+# Catalogs of a/b live in /dev/shm/adv-archive-crash-data/{a,b} so they survive a kill/restart; each mark file is
+# on a per-start tmpfs so a restart after SIGKILL is not refused with "active mark file detected".
+#
+#   docker compose -f docker/adversarial-archive-crash.compose.yml up -d --build --wait
+#   AERON_E2E=1 AERON_ADVERSARIAL=1 go test -count=1 -p 1 -v ./systests/adversarial/archive-crash/
+name: adv-archive-crash
+x-archive: &archive
+  image: docker-archiving-driver
+  network_mode: host
+  user: "${UID:-1000}:${GID:-1000}"
+  ipc: host
+  volumes:
+    - /dev/shm:/dev/shm
+  depends_on:
+    adv-driver:
+      condition: service_healthy
+  command: ["io.aeron.archive.Archive"]
+  healthcheck:
+    test: ["CMD", "test", "-f", "/tmp/mark/archive-mark.dat"]
+    interval: 1s
+    retries: 30
+
+services:
+  adv-driver:
+    build: .
+    image: docker-archiving-driver
+    container_name: adv-archive-crash-driver
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    shm_size: 1g
+    volumes:
+      - /dev/shm:/dev/shm
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-adv-archive-crash
+        -Daeron.dir.delete.on.start=true
+        -Daeron.client.liveness.timeout=3000000000
+        -Daeron.image.liveness.timeout=3000000000
+        -Daeron.publication.unblock.timeout=5000000000
+        -Daeron.publication.connection.timeout=2000000000
+        -Daeron.publication.linger.timeout=1000000000
+        -Daeron.timer.interval=100000000
+        -Daeron.untethered.window.limit.timeout=1000000000
+        -Daeron.untethered.resting.timeout=1000000000
+        -Daeron.threading.mode=SHARED
+    command: ["io.aeron.driver.MediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-adv-archive-crash/cnc.dat"]
+      interval: 1s
+      retries: 30
+
+  adv-archive-a:
+    <<: *archive
+    container_name: adv-archive-crash-archive-a
+    tmpfs:
+      - /tmp/mark:uid=1000,gid=1000
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-adv-archive-crash
+        -Daeron.driver.timeout=3000
+        -Daeron.archive.dir=/dev/shm/adv-archive-crash-data/a
+        -Daeron.archive.mark.file.dir=/tmp/mark
+        -Daeron.archive.control.channel=aeron:udp?endpoint=localhost:27300
+        -Daeron.archive.control.stream.id=10
+        -Daeron.archive.local.control.channel=aeron:ipc?alias=adv-archive-a-local
+        -Daeron.archive.replication.channel=aeron:udp?endpoint=localhost:27302
+        -Daeron.archive.recording.events.enabled=true
+        -Daeron.archive.recording.events.channel=aeron:udp?control-mode=dynamic|control=localhost:27301
+        -Daeron.archive.segment.file.length=1048576
+        -Daeron.archive.connect.timeout=3000000000
+        -Daeron.archive.id=9300
+        -Daeron.archive.threading.mode=SHARED
+
+  adv-archive-b:
+    <<: *archive
+    container_name: adv-archive-crash-archive-b
+    tmpfs:
+      - /tmp/mark:uid=1000,gid=1000
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-adv-archive-crash
+        -Daeron.driver.timeout=3000
+        -Daeron.archive.dir=/dev/shm/adv-archive-crash-data/b
+        -Daeron.archive.mark.file.dir=/tmp/mark
+        -Daeron.archive.control.channel=aeron:udp?endpoint=localhost:27310
+        -Daeron.archive.control.stream.id=10
+        -Daeron.archive.local.control.channel=aeron:ipc?alias=adv-archive-b-local
+        -Daeron.archive.replication.channel=aeron:udp?endpoint=localhost:27312
+        -Daeron.archive.recording.events.enabled=true
+        -Daeron.archive.recording.events.channel=aeron:udp?control-mode=dynamic|control=localhost:27311
+        -Daeron.archive.segment.file.length=1048576
+        -Daeron.archive.connect.timeout=3000000000
+        -Daeron.archive.id=9301
+        -Daeron.archive.threading.mode=SHARED
+
+  adv-archive-small:
+    <<: *archive
+    container_name: adv-archive-crash-archive-small
+    tmpfs:
+      - /tmp/mark:uid=1000,gid=1000
+      - /data/archive:size=8m,uid=1000,gid=1000
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-adv-archive-crash
+        -Daeron.driver.timeout=3000
+        -Daeron.archive.dir=/data/archive/rec
+        -Daeron.archive.mark.file.dir=/tmp/mark
+        -Daeron.archive.control.channel=aeron:udp?endpoint=localhost:27320
+        -Daeron.archive.control.stream.id=10
+        -Daeron.archive.local.control.channel=aeron:ipc?alias=adv-archive-small-local
+        -Daeron.archive.replication.channel=aeron:udp?endpoint=localhost:27322
+        -Daeron.archive.recording.events.enabled=true
+        -Daeron.archive.recording.events.channel=aeron:udp?control-mode=dynamic|control=localhost:27321
+        -Daeron.archive.segment.file.length=1048576
+        -Daeron.archive.low.storage.space.threshold=2097152
+        -Daeron.archive.id=9302
+        -Daeron.archive.threading.mode=SHARED

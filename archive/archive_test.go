@@ -270,7 +270,7 @@ func TestAsyncEvents(t *testing.T) {
 	// START signal on the control session and RecordingStarted on the events channel
 	waitForCounters(t, 1, 1, 0, 0)
 
-	if err := archive.StopRecordingByPublication(publication); err != nil {
+	if err := archive.StopRecordingByPublisher(publication); err != nil {
 		t.Log(err)
 		t.FailNow()
 	}
@@ -318,7 +318,7 @@ func TestPollForErrorEvents(t *testing.T) {
 	// PollForErrorResponse should simply return successfully with the START recording signal arriving
 	waitForCounters(t, 1, 0, 0, 0)
 
-	if err := archive.StopRecordingByPublication(publication); err != nil {
+	if err := archive.StopRecordingByPublisher(publication); err != nil {
 		t.Log(err)
 		t.FailNow()
 	}
@@ -382,7 +382,7 @@ func TestStartStopRecordingByPublication(t *testing.T) {
 	idler := idlestrategy.Sleeping{SleepFor: time.Millisecond * 100}
 	idler.Idle(0)
 
-	if err := archive.StopRecordingByPublication(publication); err != nil {
+	if err := archive.StopRecordingByPublisher(publication); err != nil {
 		t.Log(err)
 		t.FailNow()
 	}
@@ -490,7 +490,7 @@ func TestListRecordings(t *testing.T) {
 	} else if !res {
 		t.Logf("StopRecordingByIdentity(%d) failed", recordingID)
 	}
-	if _, err := archive.PurgeRecording(recordingID); err != nil {
+	if err := archive.PurgeRecording(recordingID); err != nil {
 		t.Logf("PurgeRecording(%d) failed: %s", recordingID, err.Error())
 	}
 	publication.Close()

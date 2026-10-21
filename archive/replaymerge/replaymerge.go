@@ -130,7 +130,7 @@ type ReplayMerge struct {
 	epochClock        EpochClock
 	replayDestination string
 	liveDestination   string
-	replayChannelURI  *aeron.ChannelUri
+	replayChannelURI  aeron.ChannelUri
 }
 
 // NewReplayMerge creates a ReplayMerge to manage the merging of a replayed stream and switching over to the live
@@ -679,7 +679,7 @@ func (rm *ReplayMerge) polledRelevantID() int64 {
 }
 
 // replaceEndpointWildcardPort mirrors Java's ChannelUri.replaceEndpointWildcardPort.
-func replaceEndpointWildcardPort(uri *aeron.ChannelUri, resolvedEndpoint string) error {
+func replaceEndpointWildcardPort(uri aeron.ChannelUri, resolvedEndpoint string) error {
 	portSeparatorIndex := strings.LastIndex(resolvedEndpoint, ":")
 	if portSeparatorIndex == -1 {
 		return fmt.Errorf("no port specified on resolvedEndpoint=%s", resolvedEndpoint)
