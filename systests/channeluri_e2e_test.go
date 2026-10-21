@@ -15,6 +15,7 @@ package systests
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -127,7 +128,7 @@ func TestChannelUriE2EMdcDynamic(t *testing.T) {
 	const streamID = 24001
 	control := "localhost:24325"
 	pubChannel := build(t, udp().ControlEndpoint(control).ControlMode(aeron.MdcControlModeDynamic).
-		TermLength(128*1024).Mtu(1408).Linger(0).ChannelAndEntityTags(24325, 1))
+		TermLength(128*1024).Mtu(1408).Linger(0).ChannelAndEntityTags(freshTag(), freshTag()))
 	pub := addPub(t, a, pubChannel, streamID, false)
 
 	var subs []*aeron.Subscription
@@ -146,21 +147,30 @@ func TestChannelUriE2EMdcDynamic(t *testing.T) {
 	}
 }
 
+// freshTag returns a tag unlikely to collide with tags still registered in the shared driver by earlier runs.
+func freshTag() int64 {
+	return 1_000_000 + (time.Now().UnixNano()/1000%1_000_000_000)*4 + tagSeq.Add(4)
+}
+
+var tagSeq atomic.Int64
+
 func TestChannelUriE2ETaggedChannels(t *testing.T) {
 	a := connectChannelUriE2E(t)
 	const streamA, streamB = 24011, 24012
 	endpoint := "localhost:24330"
+	pubTag := freshTag()
+	entityTag, subTag := pubTag+1, pubTag+2
 
-	pubA := addPub(t, a, build(t, udp().Endpoint(endpoint).ChannelAndEntityTags(24330, 24331)), streamA, false)
-	subA := addSub(t, a, build(t, udp().Endpoint(endpoint).ChannelTag(24332)), streamA, nil)
+	pubA := addPub(t, a, build(t, udp().Endpoint(endpoint).ChannelAndEntityTags(pubTag, entityTag)), streamA, false)
+	subA := addSub(t, a, build(t, udp().Endpoint(endpoint).ChannelTag(subTag)), streamA, nil)
 
 	// Refer to the existing send/receive channel endpoints purely by channel tag.
-	pubB := addPub(t, a, build(t, udp().ChannelTag(24330)), streamB, false)
-	subB := addSub(t, a, build(t, udp().ChannelTag(24332)), streamB, nil)
+	pubB := addPub(t, a, build(t, udp().ChannelTag(pubTag)), streamB, false)
+	subB := addSub(t, a, build(t, udp().ChannelTag(subTag)), streamB, nil)
 
 	uri, err := aeron.ParseChannelUri(pubB.Channel())
 	require.NoError(t, err)
-	assert.Equal(t, "24330", uri.ChannelTag())
+	assert.Equal(t, strconv.FormatInt(pubTag, 10), uri.ChannelTag())
 
 	awaitTrue(t, "tagged pubA connected", pubA.IsConnected)
 	awaitTrue(t, "tagged pubB connected", pubB.IsConnected)
