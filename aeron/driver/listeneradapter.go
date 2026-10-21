@@ -49,8 +49,10 @@ var Events = struct {
 	OnUnavailableCounter int32
 	/** inform clients of client timeout */
 	OnClientTimeout int32
-	/** static counter added or found (Aeron 1.45+) */
+	/** static counter notification */
 	OnStaticCounter int32
+	/** error frame received by a publication */
+	OnPublicationError int32
 }{
 	0x0F01,
 	0x0F02,
@@ -63,6 +65,7 @@ var Events = struct {
 	0x0F09,
 	0x0F0A,
 	0x0F0B,
+	0x0F0C,
 }
 
 type SubscriberPosition struct {
@@ -94,6 +97,7 @@ type Listener interface {
 	OnUnavailableCounter(correlationID int64, counterID int32)
 	OnClientTimeout(clientID int64)
 	OnStaticCounter(correlationID int64, counterID int32)
+	OnPublicationError(buffer *atomic.Buffer, offset int32, length int32)
 }
 
 type ListenerAdapter struct {
@@ -234,9 +238,12 @@ func (adapter *ListenerAdapter) ReceiveMessages() int {
 			msg.Wrap(buffer, int(offset))
 
 			adapter.listener.OnClientTimeout(msg.clientID.Get())
+		case Events.OnPublicationError:
+			logger.Debugf("received ON_PUBLICATION_ERROR")
+			adapter.listener.OnPublicationError(buffer, offset, length)
 		default:
-			// Note: Java silently ignores unhandled events
-			logger.Fatalf("received unhandled %d", msgTypeID)
+			// Java silently ignores unhandled events (e.g. ON_STATIC_COUNTER for other clients).
+			logger.Debugf("received unhandled %d", msgTypeID)
 		}
 	}
 
