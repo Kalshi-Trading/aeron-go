@@ -132,7 +132,10 @@ func TestE2ERecordingPosAndBoundedReplay(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, strings.HasPrefix(src, "127.0.0.1:"), "source identity %q", src)
 	require.True(t, status.IsActive(reader, counterId, recordingId))
-	require.Equal(t, recSessionsBefore+1, reader.GetCounterValue(recSessions))
+	// The archive conductor bumps the recording-sessions counter separately from allocating RecordingPos.
+	await(t, "recording-sessions counter", 5*time.Second, func() bool {
+		return reader.GetCounterValue(recSessions) == recSessionsBefore+1
+	})
 	label := labelOf(reader, counterId)
 	require.True(t, strings.HasPrefix(label, fmt.Sprintf("%s: %d %d %d ", status.RecordingPosName, recordingId, pub.SessionID(), stream)), label)
 	require.True(t, strings.HasSuffix(label, status.ArchiveIdLabel(e2eArchiveId)), label)
