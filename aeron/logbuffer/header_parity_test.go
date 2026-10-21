@@ -25,7 +25,7 @@ import (
 // Ported from HeaderTest.
 func TestHeaderConstructor(t *testing.T) {
 	ctx := "ctx"
-	h := NewHeader(-1000, 20, ctx)
+	h := NewHeader(-1000, 20).SetContext(ctx)
 	assert.Equal(t, int32(-1000), h.InitialTermId())
 	assert.Equal(t, int32(20), h.PositionBitsToShift())
 	assert.Equal(t, ctx, h.Context())
@@ -53,7 +53,7 @@ func TestHeaderPositionIsEndOfMessageInLog(t *testing.T) {
 		d.SetTermID(c.termID)
 		d.SetTermOffset(c.termOffset)
 
-		h := NewHeader(c.initialTermID, c.shift, nil)
+		h := NewHeader(c.initialTermID, c.shift)
 		h.SetBuffer(buf).SetOffset(16)
 		assert.Equal(t, c.expected, h.Position())
 		assert.Equal(t, NullValue, h.FragmentedFrameLength())
@@ -67,7 +67,7 @@ func TestHeaderPositionUsesFragmentedFrameLength(t *testing.T) {
 	d.SetFrameLength(1408)
 	d.SetTermOffset(1024)
 	d.SetTermID(3)
-	h := NewHeader(1, 16, nil)
+	h := NewHeader(1, 16)
 	h.SetBuffer(buf)
 	h.SetFragmentedFrameLength(ComputeFragmentedFrameLength(5000, 1376))
 	assert.Equal(t, int32(5152), h.FragmentedFrameLength())

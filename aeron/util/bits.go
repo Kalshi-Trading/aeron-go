@@ -18,6 +18,7 @@ package util
 
 import (
 	"fmt"
+	"strings"
 	"unsafe"
 )
 
@@ -76,47 +77,24 @@ func IsPowerOfTwo(value int64) bool {
 	return value > 0 && ((value & (^value + 1)) == value)
 }
 
-// Memcpy will copy length bytes from pointer src to dest
-//go:nocheckptr
-func Memcpy(dest uintptr, src uintptr, length int32) {
-	var i int32
-
-	// batches of 8
-	i8 := length >> 3
-	for ; i < i8; i += 8 {
-		destPtr := unsafe.Pointer(dest + uintptr(i))
-		srcPtr := unsafe.Pointer(src + uintptr(i))
-
-		*(*uint64)(destPtr) = *(*uint64)(srcPtr)
+// Memcpy will copy length bytes from pointer src to dest. The regions may overlap.
+func Memcpy(dest unsafe.Pointer, src unsafe.Pointer, length int32) {
+	if length <= 0 {
+		return
 	}
-
-	// batches of 4
-	i4 := (length - i) >> 2
-	for ; i < i4; i += 4 {
-		destPtr := unsafe.Pointer(dest + uintptr(i))
-		srcPtr := unsafe.Pointer(src + uintptr(i))
-
-		*(*uint32)(destPtr) = *(*uint32)(srcPtr)
-	}
-
-	// remainder
-	for ; i < length; i++ {
-		destPtr := unsafe.Pointer(dest + uintptr(i))
-		srcPtr := unsafe.Pointer(src + uintptr(i))
-
-		*(*int8)(destPtr) = *(*int8)(srcPtr)
-	}
+	copy(unsafe.Slice((*byte)(dest), length), unsafe.Slice((*byte)(src), length))
 }
 
-func MemPrint(ptr uintptr, len int) string {
-	var output string
-
-	for i := 0; i < len; i += 1 {
-		ptr := unsafe.Pointer(ptr + uintptr(i))
-		output += fmt.Sprintf("%02x ", *(*int8)(ptr))
+// MemPrint returns a hex dump of len bytes starting at ptr.
+func MemPrint(ptr unsafe.Pointer, len int) string {
+	if len <= 0 {
+		return ""
 	}
-
-	return output
+	var sb strings.Builder
+	for _, b := range unsafe.Slice((*byte)(ptr), len) {
+		fmt.Fprintf(&sb, "%02x ", b)
+	}
+	return sb.String()
 }
 
 func Print(bytes []byte) {

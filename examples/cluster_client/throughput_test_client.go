@@ -11,28 +11,15 @@ import (
 	"github.com/lirm/aeron-go/aeron/idlestrategy"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/lirm/aeron-go/cluster/client"
+	"github.com/lirm/aeron-go/cluster/codecs"
 )
 
 type TestContext struct {
-	ac                    *client.AeronCluster
-	messageCount          int
-	latencies             []int64
-	nextSendKeepAliveTime int64
+	messageCount int
+	latencies    []int64
 }
 
-func (ctx *TestContext) OnConnect(ac *client.AeronCluster) {
-	fmt.Printf("OnConnect - sessionId=%d leaderMemberId=%d leadershipTermId=%d\n",
-		ac.ClusterSessionId(), ac.LeaderMemberId(), ac.LeadershipTermId())
-	ctx.ac = ac
-	ctx.nextSendKeepAliveTime = time.Now().UnixMilli() + time.Second.Milliseconds()
-}
-
-func (ctx *TestContext) OnDisconnect(cluster *client.AeronCluster, details string) {
-	fmt.Printf("OnDisconnect - sessionId=%d (%s)\n", cluster.ClusterSessionId(), details)
-	ctx.ac = nil
-}
-
-func (ctx *TestContext) OnMessage(cluster *client.AeronCluster, timestamp int64,
+func (ctx *TestContext) OnMessage(clusterSessionId int64, timestamp int64,
 	buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
 	recvTime := time.Now().UnixNano()
 	msgNo := buffer.GetInt32(offset)
@@ -40,61 +27,71 @@ func (ctx *TestContext) OnMessage(cluster *client.AeronCluster, timestamp int64,
 	latency := recvTime - sendTime
 	if msgNo < 1 || int(msgNo) > len(ctx.latencies) {
 		fmt.Printf("OnMessage - sessionId=%d timestamp=%d pos=%d length=%d latency=%d\n",
-			cluster.ClusterSessionId(), timestamp, header.Position(), length, latency)
+			clusterSessionId, timestamp, header.Position(), length, latency)
 	} else {
 		ctx.latencies[msgNo-1] = latency
 		ctx.messageCount++
 	}
 }
 
-func (ctx *TestContext) OnNewLeader(cluster *client.AeronCluster, leadershipTermId int64, leaderMemberId int32) {
+func (ctx *TestContext) OnSessionEvent(correlationId, clusterSessionId, leadershipTermId int64,
+	leaderMemberId int32, code codecs.EventCodeEnum, detail string) {
+	fmt.Printf("OnSessionEvent - sessionId=%d code=%d detail=%s\n", clusterSessionId, code, detail)
+}
+
+func (ctx *TestContext) OnNewLeader(clusterSessionId, leadershipTermId int64, leaderMemberId int32,
+	ingressEndpoints string) {
 	fmt.Printf("OnNewLeader - sessionId=%d leaderMemberId=%d leadershipTermId=%d\n",
-		cluster.ClusterSessionId(), leaderMemberId, leadershipTermId)
+		clusterSessionId, leaderMemberId, leadershipTermId)
 }
 
-func (ctx *TestContext) OnError(cluster *client.AeronCluster, details string) {
-	fmt.Printf("OnError - sessionId=%d: %s\n", cluster.ClusterSessionId(), details)
-}
-
-func (ctx *TestContext) sendKeepAliveIfNecessary() {
-	if now := time.Now().UnixMilli(); now > ctx.nextSendKeepAliveTime && ctx.ac != nil && ctx.ac.SendKeepAlive() {
-		ctx.nextSendKeepAliveTime += time.Second.Milliseconds()
-	}
+func (ctx *TestContext) OnAdminResponse(clusterSessionId, correlationId int64,
+	requestType codecs.AdminRequestTypeEnum, responseCode codecs.AdminResponseCodeEnum, message string,
+	payload *atomic.Buffer, payloadOffset, payloadLength int32) {
+	fmt.Printf("OnAdminResponse - correlationId=%d code=%d message=%s\n", correlationId, responseCode, message)
 }
 
 func main() {
-	ctx := aeron.NewContext()
+	clusterCtx := client.NewContext()
 	if aeronDir := os.Getenv("AERON_DIR"); aeronDir != "" {
-		ctx.AeronDir(aeronDir)
+		clusterCtx.AeronDirectoryName = aeronDir
 		fmt.Println("aeron dir: ", aeronDir)
 	} else if _, err := os.Stat("/dev/shm"); err == nil {
 		path := fmt.Sprintf("/dev/shm/aeron-%s", aeron.UserName)
-		ctx.AeronDir(path)
+		clusterCtx.AeronDirectoryName = path
 		fmt.Println("aeron dir: ", path)
 	}
-
-	opts := client.NewOptions()
 	if idleStr := os.Getenv("NO_OP_IDLE"); idleStr != "" {
-		opts.IdleStrategy = &idlestrategy.Busy{}
+		clusterCtx.IdleStrategy = &idlestrategy.Busy{}
 	}
-	opts.IngressChannel = "aeron:udp?alias=cluster-client-ingress|endpoint=localhost:20000"
-	opts.IngressEndpoints = "0=localhost:20000,1=localhost:21000,2=localhost:22000"
-	//opts.EgressChannel = "aeron:udp?alias=cluster-egress|endpoint=localhost:11111"
+	clusterCtx.IngressChannel = "aeron:udp?alias=cluster-client-ingress"
+	clusterCtx.IngressEndpoints = "0=localhost:20000,1=localhost:21000,2=localhost:22000"
+	if endpoints := os.Getenv("INGRESS_ENDPOINTS"); endpoints != "" {
+		clusterCtx.IngressEndpoints = endpoints
+	}
 
-	listener := &TestContext{
-		latencies: make([]int64, 1000),
-	}
-	clusterClient, err := client.NewAeronCluster(ctx, opts, listener)
+	listener := &TestContext{latencies: make([]int64, 1000)}
+	clusterCtx.EgressListener = listener
+
+	clusterClient, err := client.Connect(clusterCtx)
 	if err != nil {
 		panic(err)
 	}
+	fmt.Printf("connected - sessionId=%d leaderMemberId=%d leadershipTermId=%d\n",
+		clusterClient.ClusterSessionId(), clusterClient.LeaderMemberId(), clusterClient.LeadershipTermId())
 
-	for !clusterClient.IsConnected() {
-		opts.IdleStrategy.Idle(clusterClient.Poll())
+	idle := clusterCtx.IdleStrategy
+	nextKeepAlive := time.Now().Add(time.Second)
+	sendKeepAliveIfNecessary := func() {
+		if time.Now().After(nextKeepAlive) {
+			if ok, _ := clusterClient.SendKeepAlive(); ok {
+				nextKeepAlive = nextKeepAlive.Add(time.Second)
+			}
+		}
 	}
 
 	sendBuf := atomic.MakeBuffer(make([]byte, 100))
-	for round := 1; round <= 10; round++ {
+	for round := 1; round <= 10 && !clusterClient.IsClosed(); round++ {
 		fmt.Printf("starting round #%d\n", round)
 		listener.messageCount = 0
 		sentCt := 0
@@ -112,16 +109,16 @@ func main() {
 					sentCt++
 					break
 				}
-				clusterClient.Poll()
-				listener.sendKeepAliveIfNecessary()
+				clusterClient.PollEgress()
+				sendKeepAliveIfNecessary()
 			}
 		}
 		for listener.messageCount < sentCt {
-			pollCt := clusterClient.Poll()
+			pollCt := clusterClient.PollEgress()
 			if pollCt == 0 {
-				listener.sendKeepAliveIfNecessary()
+				sendKeepAliveIfNecessary()
 			}
-			opts.IdleStrategy.Idle(pollCt)
+			idle.Idle(pollCt)
 		}
 		now := time.Now()
 		totalNs := now.UnixNano() - beginTime
@@ -131,11 +128,10 @@ func main() {
 			latencies[ct-1]/1000, (float64(sentCt) * 1000000000.0 / float64(totalNs)))
 
 		for time.Since(now) < 10*time.Second {
-			listener.sendKeepAliveIfNecessary()
-			opts.IdleStrategy.Idle(clusterClient.Poll())
+			sendKeepAliveIfNecessary()
+			idle.Idle(clusterClient.PollEgress())
 		}
 	}
-	clusterClient.Close()
+	_ = clusterClient.Close()
 	fmt.Println("done")
-	time.Sleep(time.Second)
 }

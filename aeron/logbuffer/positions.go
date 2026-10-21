@@ -97,18 +97,6 @@ func PositionBitsToShift(termBufferLength int32) int32 {
 	return int32(util.NumberOfTrailingZeroes(uint32(termBufferLength)))
 }
 
-// ComputeFragmentedFrameLength computes the term occupancy of a message of length bytes once fragmented into
-// frames of at most maxPayloadSize payload bytes.
-func ComputeFragmentedFrameLength(length int32, maxPayloadSize int32) int32 {
-	numMaxPayloads := length / maxPayloadSize
-	remainingPayload := length % maxPayloadSize
-	var lastFrameLength int32
-	if remainingPayload > 0 {
-		lastFrameLength = util.AlignInt32(remainingPayload+DataFrameHeader.Length, FrameAlignment)
-	}
-	return numMaxPayloads*(maxPayloadSize+DataFrameHeader.Length) + lastFrameLength
-}
-
 // ComputeAssembledFrameLength computes the length of a reassembled message including a single frame header.
 func ComputeAssembledFrameLength(length int32, maxPayloadSize int32) int32 {
 	numMaxPayloads := length / maxPayloadSize

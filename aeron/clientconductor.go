@@ -122,6 +122,7 @@ type counterStateDefn struct {
 	errorMessage       string
 	status             int
 	counter            *Counter
+	isStatic           bool
 }
 
 func (c *counterStateDefn) Init(time int64) {
@@ -176,6 +177,9 @@ type DriverProxy interface {
 		labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (int64, error)
 	AddCounterByLabel(typeId int32, label string) (int64, error)
 	RemoveCounter(registrationId int64) (int64, error)
+	AddStaticCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
+		labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32, registrationId int64) (int64, error)
+	AddStaticCounterByLabel(typeId int32, label string, registrationId int64) (int64, error)
 }
 
 // ImageFactory allows tests to use fake Images
@@ -224,6 +228,17 @@ type ClientConductor struct {
 	resourceLingerTimeoutNs         int64
 
 	heartbeatTimestamp *ctr.AtomicCounter
+
+	counterMetaDataBuffer        *atomic.Buffer
+	keepaliveIntervalNs          int64
+	closeLingerNs                int64
+	clientName                   string
+	preTouchMappedMemory         bool
+	subscriberErrorHandler       func(error)
+	closeHandler                 CloseHandler
+	closeOnce                    sync.Once
+	publicationErrorFrameHandler PublicationErrorFrameHandler
+	publicationErrorFrame        PublicationErrorFrame
 }
 
 // Init is the primary initialization method for ClientConductor
@@ -243,6 +258,8 @@ func (cc *ClientConductor) Init(driverProxy DriverProxy, bcast *broadcast.CopyRe
 	cc.resourceLingerTimeoutNs = lingerTo.Nanoseconds()
 
 	cc.counterValuesBuffer = counters.ValuesBuf.Get()
+	cc.counterMetaDataBuffer = counters.MetaDataBuf.Get()
+	cc.keepaliveIntervalNs = keepaliveTimeoutNS
 	cc.counterReader = ctr.NewReader(counters.ValuesBuf.Get(), counters.MetaDataBuf.Get())
 
 	cc.pendingCloses = make(map[int64]chan bool)
@@ -276,6 +293,7 @@ func (cc *ClientConductor) Close() (err error) {
 	for cc.conductorRunning.Get() && time.Now().Before(timeout) {
 		time.Sleep(10 * time.Millisecond)
 	}
+	cc.notifyClose()
 	if cc.conductorRunning.Get() {
 		msg := fmt.Sprintf("failed to stop conductor after %v", timeoutDuration)
 		logger.Warning(msg)
@@ -294,10 +312,7 @@ func (cc *ClientConductor) Start(idleStrategy idlestrategy.Idler) {
 
 // run is the main execution loop of ClientConductor.
 func (cc *ClientConductor) run(idleStrategy idlestrategy.Idler) {
-	now := time.Now().UnixNano()
-	cc.timeOfLastKeepalive = now
-	cc.timeOfLastCheckManagedResources = now
-	cc.timeOfLastDoWork = now
+	cc.initDutyCycleTimes()
 
 	// Stay on the same thread for performance
 	runtime.LockOSThread()
@@ -310,8 +325,12 @@ func (cc *ClientConductor) run(idleStrategy idlestrategy.Idler) {
 			cc.onError(errors.New(errStr))
 			cc.running.Set(false)
 		}
+		if cc.closeLingerNs > 0 {
+			time.Sleep(time.Duration(cc.closeLingerNs))
+		}
 		cc.forceCloseResources()
 		cc.conductorRunning.Set(false)
+		cc.notifyClose()
 
 		logger.Infof("ClientConductor done")
 	}()
@@ -441,7 +460,7 @@ func (cc *ClientConductor) FindPublication(registrationID int64) (*Publication, 
 			pub.publication = publication
 			return publication, nil
 		case RegistrationStatus.ErroredMediaDriver:
-			return nil, fmt.Errorf("error on %d: %d: %s", registrationID, pub.errorCode, pub.errorMessage)
+			return nil, NewRegistrationError(registrationID, pub.errorCode, pub.errorMessage)
 		default:
 			return nil, errors.New("unknown registration status")
 		}
@@ -531,7 +550,7 @@ func (cc *ClientConductor) FindSubscription(registrationID int64) (*Subscription
 		case RegistrationStatus.RegisteredMediaDriver:
 			return sub.subscription, nil
 		case RegistrationStatus.ErroredMediaDriver:
-			return nil, fmt.Errorf("error on %d: %d: %s", registrationID, sub.errorCode, sub.errorMessage)
+			return nil, NewRegistrationError(registrationID, sub.errorCode, sub.errorMessage)
 		default:
 			return nil, errors.New("unknown registration status")
 		}
@@ -542,10 +561,10 @@ func (cc *ClientConductor) FindSubscription(registrationID int64) (*Subscription
 
 func timeoutExceeded(timeOfRegistration int64, driverTimeoutNs int64) error {
 	if now := time.Now().UnixNano(); now > (timeOfRegistration + driverTimeoutNs) {
-		return fmt.Errorf("no response from driver. started: %d, now: %d, to: %d",
+		return NewDriverTimeoutError(fmt.Sprintf("no response from driver. started: %d, now: %d, to: %d",
 			timeOfRegistration/time.Millisecond.Nanoseconds(),
 			now/time.Millisecond.Nanoseconds(),
-			driverTimeoutNs/time.Millisecond.Nanoseconds())
+			driverTimeoutNs/time.Millisecond.Nanoseconds()))
 	}
 	return nil
 }
@@ -742,15 +761,14 @@ func (cc *ClientConductor) FindCounter(registrationID int64) (*Counter, error) {
 	case RegistrationStatus.AwaitingMediaDriver:
 		return nil, timeoutExceeded(counterDef.timeOfRegistration, cc.driverTimeoutNs)
 	case RegistrationStatus.RegisteredMediaDriver:
-		counter, err := NewCounter(registrationID, cc, counterDef.counterId)
+		counter, err := cc.newCounterFromState(registrationID, counterDef)
 		if err != nil {
 			return nil, err
 		}
 		counterDef.counter = counter
 		return counter, nil
 	case RegistrationStatus.ErroredMediaDriver:
-		return nil, fmt.Errorf("error on %d: %d: %s",
-			registrationID, counterDef.errorCode, counterDef.errorMessage)
+		return nil, NewRegistrationError(registrationID, counterDef.errorCode, counterDef.errorMessage)
 	default:
 		return nil, errors.New("unknown registration status")
 	}
@@ -840,7 +858,7 @@ func (cc *ClientConductor) OnNewPublication(streamID int32, sessionID int32, pos
 			pubDef.sessionID = sessionID
 			pubDef.posLimitCounterID = posLimitCounterID
 			pubDef.channelStatusIndicatorID = channelStatusIndicatorID
-			pubDef.buffers = logbuffer.Wrap(logFileName)
+			pubDef.buffers = cc.wrapLogBuffers(logFileName)
 			pubDef.buffers.IncRef()
 			pubDef.origRegID = origRegID
 
@@ -869,7 +887,7 @@ func (cc *ClientConductor) OnNewExclusivePublication(streamID int32, sessionID i
 			pubDef.sessionID = sessionID
 			pubDef.posLimitCounterID = posLimitCounterID
 			pubDef.channelStatusIndicatorID = channelStatusIndicatorID
-			pubDef.buffers = logbuffer.Wrap(logFileName)
+			pubDef.buffers = cc.wrapLogBuffers(logFileName)
 			pubDef.buffers.IncRef()
 			pubDef.origRegID = origRegID
 
@@ -906,6 +924,7 @@ func (cc *ClientConductor) OnUnavailableCounter(registrationId int64, counterId 
 	cc.adminLock.Lock()
 	defer cc.adminLock.Unlock()
 
+	cc.onCounterUnavailable(registrationId)
 	for _, handler := range cc.unavailableCounterHandlers {
 		handler.handler.Handle(cc.counterReader, registrationId, counterId)
 	}
@@ -918,8 +937,7 @@ func (cc *ClientConductor) OnClientTimeout(clientID int64) {
 	defer cc.adminLock.Unlock()
 
 	if clientID == cc.driverProxy.ClientID() {
-		errStr := fmt.Sprintf("OnClientTimeout for ClientID:%d", clientID)
-		cc.onError(errors.New(errStr))
+		cc.onError(NewClientTimeoutError(fmt.Sprintf("client timeout from driver: clientID=%d", clientID)))
 		cc.running.Set(false)
 	}
 }
@@ -978,9 +996,7 @@ func (cc *ClientConductor) OnAvailableImage(streamID int32, sessionID int32, log
 
 				sub.subscription.addImage(image)
 
-				if handler := sub.subscription.AvailableImageHandler(); handler != nil {
-					handler(image)
-				}
+				cc.callSubscriberHandler(sub.subscription.AvailableImageHandler(), image)
 			}
 		}
 	}
@@ -996,9 +1012,7 @@ func (cc *ClientConductor) OnUnavailableImage(corrID int64, subscriptionRegistra
 		if sub.regID == subscriptionRegistrationID {
 			if sub.subscription != nil {
 				image := sub.subscription.removeImage(corrID)
-				if handler := sub.subscription.UnavailableImageHandler(); handler != nil {
-					handler(image)
-				}
+				cc.callSubscriberHandler(sub.subscription.UnavailableImageHandler(), image)
 				cc.lingeringResources <- lingerResourse{time.Now().UnixNano(), image}
 				runtime.KeepAlive(image)
 			}
@@ -1024,13 +1038,13 @@ func (cc *ClientConductor) OnChannelEndpointError(corrID int64, errorMessage str
 
 	for _, pubDef := range cc.pubs {
 		if pubDef.publication != nil && pubDef.publication.ChannelStatusID() == statusIndicatorId {
-			cc.onError(fmt.Errorf(errorMessage))
+			cc.onError(NewChannelEndpointError(statusIndicatorId, errorMessage))
 		}
 	}
 
 	for _, subDef := range cc.subs {
 		if subDef.subscription != nil && subDef.subscription.ChannelStatusId() == statusIndicatorId {
-			cc.onError(fmt.Errorf(errorMessage))
+			cc.onError(NewChannelEndpointError(statusIndicatorId, errorMessage))
 		}
 	}
 }
@@ -1074,24 +1088,24 @@ func (cc *ClientConductor) onHeartbeatCheckTimeouts() (int, error) {
 	if now > (cc.timeOfLastDoWork + cc.interServiceTimeoutNs) {
 		cc.closeAllResources(now)
 
-		return 0, fmt.Errorf("timeout between service calls over %d ms (%d > %d + %d) (%d)",
+		return 0, NewConductorServiceTimeoutError(fmt.Sprintf("timeout between service calls over %d ms (%d > %d + %d) (%d)",
 			cc.interServiceTimeoutNs/time.Millisecond.Nanoseconds(),
 			now/time.Millisecond.Nanoseconds(),
 			cc.timeOfLastDoWork,
 			cc.interServiceTimeoutNs/time.Millisecond.Nanoseconds(),
-			(now-cc.timeOfLastDoWork)/time.Millisecond.Nanoseconds())
+			(now-cc.timeOfLastDoWork)/time.Millisecond.Nanoseconds()))
 	}
 
 	cc.timeOfLastDoWork = now
 
-	if now > (cc.timeOfLastKeepalive + keepaliveTimeoutNS) {
+	if now > (cc.timeOfLastKeepalive + cc.keepaliveIntervalNs) {
 		age := cc.driverProxy.TimeOfLastDriverKeepalive()*time.Millisecond.Nanoseconds() + cc.driverTimeoutNs
 		if now > age {
 			cc.driverActive.Set(false)
-			return 0, fmt.Errorf("MediaDriver keepalive (ms): age=%d > timeout=%d",
+			return 0, NewDriverTimeoutError(fmt.Sprintf("MediaDriver keepalive (ms): age=%d > timeout=%d",
 				age,
 				cc.driverTimeoutNs/time.Millisecond.Nanoseconds(),
-			)
+			))
 		}
 
 		if cc.heartbeatTimestamp != nil {
@@ -1100,7 +1114,7 @@ func (cc *ClientConductor) onHeartbeatCheckTimeouts() (int, error) {
 				cc.heartbeatTimestamp.Set(now / time.Millisecond.Nanoseconds())
 			} else {
 				cc.closeAllResources(now)
-				return 0, fmt.Errorf("client heartbeat timestamp not active")
+				return 0, NewAeronError(CategoryFatal, "client heartbeat timestamp not active")
 			}
 		} else {
 			counterId := cc.counterReader.FindCounter(heartbeatTypeId, func(keyBuffer *atomic.Buffer) bool {
@@ -1112,6 +1126,7 @@ func (cc *ClientConductor) onHeartbeatCheckTimeouts() (int, error) {
 					logger.Warning("unable to allocate heartbeat counter %d", counterId)
 				} else {
 					cc.heartbeatTimestamp.Set(now / time.Millisecond.Nanoseconds())
+					cc.onHeartbeatCounterFound(counterId)
 				}
 			}
 		}
