@@ -213,6 +213,10 @@ func (aeron *Aeron) Close() error {
 		})
 		aeron.context.inUse.Store(false)
 	})
+	if errors.Is(aeron.closeErr, ErrCloseFromCallback) {
+		// The first Close came from a conductor callback: wait for it to complete unless this one does too.
+		return aeron.conductor.Close()
+	}
 	return aeron.closeErr
 }
 
