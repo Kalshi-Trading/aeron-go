@@ -62,7 +62,7 @@ e2e-up: jar
 	$(COMPOSE) --profile clients up -d --build --wait archiving-driver java-subscriber
 	$(REPL_COMPOSE) up -d --build --wait
 	$(AUTH_COMPOSE) up -d --build --wait auth-archiving-driver
-	$(COMPOSE) -f docker/publications.compose.yml up -d --build --wait pub-verifier
+	$(COMPOSE) -f docker/publications.compose.yml up -d --build --wait --no-deps pub-verifier
 	$(TERM_COMPOSE) up -d --build --wait terminable-driver
 	$(CLUSTER_COMPOSE) up -d --build --wait client-driver cluster-node-0
 	$(INTEROP_COMPOSE) --profile tools build
