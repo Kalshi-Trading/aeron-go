@@ -28,7 +28,11 @@ func TestStoppedPublisherIsTimedOut(t *testing.T) {
 			a := connect(t)
 			ch := channelsFor(udp, port)
 			c := newConsumer(t, a, pollFA, ch.sub, stream)
-			p := startPeer(t, l, "pub", pubArgs(ch, stream, "size=3000", "intervalUs=200")...)
+			// Unfragmented messages with idle time between offers. A publisher stopped part way through a fragmented
+			// message leaves a zeroed frame inside the reserved tail with nothing after it, which Java 1.53.3's
+			// LogBufferUnblocker never pads, so the draining image would legitimately never go unavailable (see
+			// TestDeadExclusivePublisherResumes/holdfrag).
+			p := startPeer(t, l, "pub", pubArgs(ch, stream, "size=1000", "intervalUs=1000")...)
 			ready := p.await("ready", 30*time.Second, nil)
 			session := int32(ready.int("sessionId"))
 			c.pollUntil("messages", 30*time.Second, func() bool { return c.session(session).received >= 200 })
