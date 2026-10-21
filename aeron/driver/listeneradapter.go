@@ -173,10 +173,8 @@ func (adapter *ListenerAdapter) ReceiveMessages() int {
 		case Events.OnOperationSuccess:
 			logger.Debugf("received ON_OPERATION_SUCCESS")
 
-			var msg command.CorrelatedMessage
-			msg.Wrap(buffer, int(offset))
-
-			correlationID := msg.CorrelationID.Get()
+			// OperationSucceededFlyweight is just the correlation id at offset 0 (no client id).
+			correlationID := buffer.GetInt64(offset)
 
 			adapter.listener.OnOperationSuccess(correlationID)
 		case Events.OnUnavailableImage:
@@ -224,8 +222,10 @@ func (adapter *ListenerAdapter) ReceiveMessages() int {
 
 			adapter.listener.OnClientTimeout(msg.clientID.Get())
 		default:
-			// Note: Java silently ignores unhandled events
-			logger.Fatalf("received unhandled %d", msgTypeID)
+			// Java silently ignores unhandled events.
+			if !dispatchExtendedEvent(adapter.listener, msgTypeID, buffer, offset, length) {
+				logger.Debugf("ignoring unhandled driver event %d", msgTypeID)
+			}
 		}
 	}
 

@@ -295,7 +295,7 @@ func (driver *Proxy) AddRcvDestination(registrationID int64, channel string) (in
 	if err := driver.writeCommandToDriver(filler); err == nil {
 		return correlationID, nil
 	} else {
-		return 0, nil
+		return 0, err
 	}
 }
 

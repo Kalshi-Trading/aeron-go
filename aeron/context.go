@@ -43,6 +43,8 @@ type Context struct {
 	interServiceTo          time.Duration
 
 	idleStrategy idlestrategy.Idler
+
+	conductorOpts conductorOptions
 }
 
 // NewContext creates and initializes new Context for Aeron
