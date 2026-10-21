@@ -183,9 +183,10 @@ func TestReplayMidPositionGoVsJava(t *testing.T) {
 					require.NoError(t, err)
 					defer sub.Close()
 					require.NoError(t, awaitSubConnected(sub, 10*time.Second))
-					goResult := goReceive(sub.Poll, slice)
+					joinPosition := int64(-1)
+					goResult := goReceive(recordJoinPosition(sub, &joinPosition), slice)
 					requireResult(t, "go replay", goResult, slice, start+length)
-					require.Equal(t, start, sub.ImageBySessionID(goResult.SessionID).JoinPosition())
+					require.Equal(t, start, joinPosition)
 
 					j := startJava(t, "replay", append([]string{fmt.Sprintf("recordingId=%d", rec.recordingID),
 						"channel=" + replayCh, fmt.Sprintf("stream=%d", nextStream()),
