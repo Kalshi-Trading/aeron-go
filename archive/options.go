@@ -193,10 +193,10 @@ func (o *Options) conclude() error {
 	return nil
 }
 
-func (o *Options) applyDefaultParams(channel string) (aeron.ChannelUri, error) {
+func (o *Options) applyDefaultParams(channel string) (*aeron.ChannelUri, error) {
 	uri, err := aeron.ParseChannelUri(channel)
 	if err != nil {
-		return uri, err
+		return nil, err
 	}
 	if uri.Get(aeron.TermLengthParamName) == "" {
 		uri.Set(aeron.TermLengthParamName, strconv.Itoa(o.ControlTermBufferLength))
@@ -210,7 +210,7 @@ func (o *Options) applyDefaultParams(channel string) (aeron.ChannelUri, error) {
 	return uri, nil
 }
 
-func isControlModeResponse(uri aeron.ChannelUri) bool {
+func isControlModeResponse(uri *aeron.ChannelUri) bool {
 	return uri.Get(aeron.MdcControlModeParamName) == controlModeResponse
 }
 

@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/e2e"
 )
 
@@ -46,11 +47,12 @@ func main() {
 		log.Printf("recording %s stream %d", *record, *stream)
 	}
 
-	addPublication := a.AddPublication
+	var pub aeron.Publisher
 	if *exclusive {
-		addPublication = a.AddExclusivePublication
+		pub, err = a.AddExclusivePublication(*channel, int32(*stream))
+	} else {
+		pub, err = a.AddPublication(*channel, int32(*stream))
 	}
-	pub, err := addPublication(*channel, int32(*stream))
 	if err != nil {
 		log.Fatalf("add publication: %v", err)
 	}

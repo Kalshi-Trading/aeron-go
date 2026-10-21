@@ -34,12 +34,28 @@ const (
 	ControlledPollActionAbort ControlledPollAction = 1
 	// ControlledPollActionBreak breaks from the current polling operation and
 	// commit the position as of the end of the current fragment being handled.
-	ControlledPollActionBreak = 2
+	ControlledPollActionBreak ControlledPollAction = 2
 	// ControlledPollActionCommit continues processing but commit the position as of
 	// the end of the current fragment so that flow control is applied to this
 	// point.
-	ControlledPollActionCommit = 3
+	ControlledPollActionCommit ControlledPollAction = 3
 	// ControlledPollActionContinue continues processing until fragment limit or no
 	// fragments with position commit at end of poll as in onFragment
-	ControlledPollActionContinue = 4
+	ControlledPollActionContinue ControlledPollAction = 4
 )
+
+// String returns the Java-style name of the action.
+func (a ControlledPollAction) String() string {
+	switch a {
+	case ControlledPollActionAbort:
+		return "ABORT"
+	case ControlledPollActionBreak:
+		return "BREAK"
+	case ControlledPollActionCommit:
+		return "COMMIT"
+	case ControlledPollActionContinue:
+		return "CONTINUE"
+	default:
+		return "UNKNOWN"
+	}
+}

@@ -33,7 +33,7 @@ const tryOfferRetryAttempts = 3
 // NewProxyForPublication creates a Proxy sharing this archive's control session that sends requests on the given
 // publication. Used for response-channel replays, where the replay request must be sent on a dedicated request
 // publication whose response-correlation-id links it to the replay subscription.
-func (archive *Archive) NewProxyForPublication(publication *aeron.Publication) *Proxy {
+func (archive *Archive) NewProxyForPublication(publication aeron.Publisher) *Proxy {
 	return &Proxy{Publication: publication, archive: archive, marshaller: codecs.NewSbeGoMarshaller()}
 }
 

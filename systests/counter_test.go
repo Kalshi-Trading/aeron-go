@@ -87,7 +87,7 @@ func (s *CounterTestSuite) TestShouldBeAbleToAddCounter() {
 		chanB <- args.Get(2).(int32)
 	})
 
-	regId, err := s.clientA.AddCounter(
+	counter, err := s.clientA.AddCounter(
 		counterTypeId,
 		s.keyBuffer,
 		0,
@@ -95,11 +95,6 @@ func (s *CounterTestSuite) TestShouldBeAbleToAddCounter() {
 		s.labelBuffer,
 		0,
 		int32(len(counterLabel)))
-	s.Require().NoError(err)
-	var counter *aeron.Counter
-	for counter == nil && err == nil {
-		counter, err = s.clientA.FindCounter(regId)
-	}
 	s.Require().NoError(err)
 
 	s.Assert().False(counter.IsClosed())
@@ -131,7 +126,7 @@ func (s *CounterTestSuite) TestShouldBeAbleToAddReadableCounterWithinHandler() {
 	ch, handler := s.createReadableCounterHandler()
 	s.clientB.AddAvailableCounterHandler(handler)
 
-	regId, err := s.clientA.AddCounter(
+	counter, err := s.clientA.AddCounter(
 		counterTypeId,
 		s.keyBuffer,
 		0,
@@ -139,11 +134,6 @@ func (s *CounterTestSuite) TestShouldBeAbleToAddReadableCounterWithinHandler() {
 		s.labelBuffer,
 		0,
 		int32(len(counterLabel)))
-	s.Require().NoError(err)
-	var counter *aeron.Counter
-	for counter == nil && err == nil {
-		counter, err = s.clientA.FindCounter(regId)
-	}
 	s.Require().NoError(err)
 
 	var readableCounter *counters.ReadableCounter
@@ -162,12 +152,7 @@ func (s *CounterTestSuite) TestShouldBeAbleToAddReadableCounterWithinHandlerWith
 	ch, handler := s.createReadableCounterHandler()
 	s.clientB.AddAvailableCounterHandler(handler)
 
-	regId, err := s.clientA.AddCounterByLabel(counterTypeId, counterLabel)
-	s.Require().NoError(err)
-	var counter *aeron.Counter
-	for counter == nil && err == nil {
-		counter, err = s.clientA.FindCounter(regId)
-	}
+	counter, err := s.clientA.AddCounterByLabel(counterTypeId, counterLabel)
 	s.Require().NoError(err)
 
 	var readableCounter *counters.ReadableCounter
@@ -186,7 +171,7 @@ func (s *CounterTestSuite) TestShouldBeAbleToAddReadableCounterAndGetCounterRead
 	ch, handler := s.createReadableCounterHandler()
 	s.clientB.AddAvailableCounterHandler(handler)
 
-	regId, err := s.clientA.AddCounter(
+	counter, err := s.clientA.AddCounter(
 		counterTypeId,
 		s.keyBuffer,
 		0,
@@ -194,11 +179,6 @@ func (s *CounterTestSuite) TestShouldBeAbleToAddReadableCounterAndGetCounterRead
 		s.labelBuffer,
 		0,
 		int32(len(counterLabel)))
-	s.Require().NoError(err)
-	var counter *aeron.Counter
-	for counter == nil && err == nil {
-		counter, err = s.clientA.FindCounter(regId)
-	}
 	s.Require().NoError(err)
 
 	var readableCounter *counters.ReadableCounter
@@ -221,7 +201,7 @@ func (s *CounterTestSuite) TestShouldCloseReadableCounterOnUnavailableCounter() 
 	ch, readableHandler := s.createReadableCounterHandler()
 	s.clientB.AddAvailableCounterHandler(readableHandler)
 
-	regId, err := s.clientA.AddCounter(
+	counter, err := s.clientA.AddCounter(
 		counterTypeId,
 		s.keyBuffer,
 		0,
@@ -229,11 +209,6 @@ func (s *CounterTestSuite) TestShouldCloseReadableCounterOnUnavailableCounter() 
 		s.labelBuffer,
 		0,
 		int32(len(counterLabel)))
-	s.Require().NoError(err)
-	var counter *aeron.Counter
-	for counter == nil && err == nil {
-		counter, err = s.clientA.FindCounter(regId)
-	}
 	s.Require().NoError(err)
 
 	var readableCounter *counters.ReadableCounter
@@ -263,7 +238,7 @@ func (s *CounterTestSuite) TestShouldGetUnavailableCounterWhenOwningClientIsClos
 	ch, readableHandler := s.createReadableCounterHandler()
 	s.clientB.AddAvailableCounterHandler(readableHandler)
 
-	regId, err := s.clientA.AddCounter(
+	_, err := s.clientA.AddCounter(
 		counterTypeId,
 		s.keyBuffer,
 		0,
@@ -271,11 +246,6 @@ func (s *CounterTestSuite) TestShouldGetUnavailableCounterWhenOwningClientIsClos
 		s.labelBuffer,
 		0,
 		int32(len(counterLabel)))
-	s.Require().NoError(err)
-	var counter *aeron.Counter
-	for counter == nil && err == nil {
-		counter, err = s.clientA.FindCounter(regId)
-	}
 	s.Require().NoError(err)
 
 	var readableCounter *counters.ReadableCounter

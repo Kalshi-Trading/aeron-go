@@ -1,0 +1,12 @@
+# Builds the Java interop tool image used by the Go tests in interop/ (AERON_E2E=1).
+# The archiving driver comes from docker/docker-compose.yml; see docker/interop/README.md.
+services:
+  interop-java:
+    build: .
+    image: aeron-go-interop-java:1.53.3
+    profiles: ["tools"]
+    network_mode: host
+    ipc: host
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - /dev/shm:/dev/shm

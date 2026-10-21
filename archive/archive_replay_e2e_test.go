@@ -58,7 +58,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-func publishN(t *testing.T, pub *aeron.Publication, from, n int) {
+func publishN(t *testing.T, pub aeron.Publisher, from, n int) {
 	t.Helper()
 	buf := atomic.MakeBuffer(make([]byte, e2ePayloadLength))
 	for i := from; i < from+n; i++ {
@@ -181,7 +181,7 @@ func TestE2ERecordingAndReplay(t *testing.T) {
 	}
 
 	t.Run("BoundedReplayWithCounter", func(t *testing.T) {
-		counterRegistrationID, err := a.aeron.AddCounterByLabel(1001, "e2e replay bound")
+		counterRegistrationID, err := a.aeron.AsyncAddCounterByLabel(1001, "e2e replay bound")
 		if err != nil {
 			t.Fatal(err)
 		}

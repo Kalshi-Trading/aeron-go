@@ -179,10 +179,9 @@ func controlFragmentHandler(context interface{}, buffer *atomic.Buffer, offset i
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
 				pollContext.control.archive.Listeners.ErrorListener(err2)
 			}
+			return
 		}
-		if pollContext.control.archive.Listeners.RecordingSignalListener != nil {
-			pollContext.control.archive.Listeners.RecordingSignalListener(recordingSignalEvent)
-		}
+		dispatchRecordingSignal(pollContext.control.archive, recordingSignalEvent)
 
 	// These can happen when testing/reconnecting or if multiple clients are on the same channel/stream
 	case codecIds.recordingDescriptor:
@@ -355,16 +354,12 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
 				pollContext.control.archive.Listeners.ErrorListener(err2)
 			}
+			return
 		}
-		if rse.ControlSessionId == pollContext.control.archive.SessionID {
-			// We can call the async callback if it exists
-			if pollContext.control.archive.Listeners.RecordingSignalListener != nil {
-				pollContext.control.archive.Listeners.RecordingSignalListener(rse)
-			}
-		}
+		dispatchRecordingSignal(pollContext.control.archive, rse)
 
-	// The archive pings control sessions to check liveness; nothing to do on receipt
 	case codecIds.ping:
+		// Liveness message from the archive's control session, nothing to do.
 
 	default:
 		fmt.Printf("errorResponseFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
@@ -451,6 +446,10 @@ func (control *Control) onFragment(
 			}
 			return term.ControlledPollActionContinue
 		}
+		dispatchRecordingSignal(control.archive, recordingSignalEvent)
+
+	case codecIds.ping:
+		// Liveness message from the archive's control session, nothing to do.
 
 	default:
 		logger.Debug("descriptorFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
@@ -639,11 +638,11 @@ func DescriptorFragmentHandler(context interface{}, buffer *atomic.Buffer, offse
 				pollContext.control.archive.Listeners.ErrorListener(err2)
 			}
 			return
+		}
+		dispatchRecordingSignal(pollContext.control.archive, recordingSignalEvent)
 
-		}
-		if pollContext.control.archive.Listeners.RecordingSignalListener != nil {
-			pollContext.control.archive.Listeners.RecordingSignalListener(recordingSignalEvent)
-		}
+	case codecIds.ping:
+		// Liveness message from the archive's control session, nothing to do.
 
 	default:
 		logger.Debug("descriptorFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)

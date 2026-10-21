@@ -66,7 +66,7 @@ func (o PublishOptions) withDefaults() PublishOptions {
 }
 
 // WaitConnected waits for pub to have at least one connected subscriber.
-func WaitConnected(pub *aeron.Publication, timeout time.Duration) error {
+func WaitConnected(pub aeron.Publisher, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for !pub.IsConnected() {
 		if time.Now().After(deadline) {
@@ -79,7 +79,7 @@ func WaitConnected(pub *aeron.Publication, timeout time.Duration) error {
 
 // Publish offers opts.Count sequenced messages on pub, retrying on back pressure, admin action and
 // not connected until opts.Timeout.
-func Publish(pub *aeron.Publication, opts PublishOptions) error {
+func Publish(pub aeron.Publisher, opts PublishOptions) error {
 	opts = opts.withDefaults()
 	deadline := time.Now().Add(opts.Timeout)
 	msg := make([]byte, opts.Size)

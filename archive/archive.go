@@ -54,7 +54,7 @@ const (
 
 // replication flag used for duplication instead of extension, see Replicate and variants
 const (
-	RecordingIdNullValue = int32(-1)
+	RecordingIdNullValue = -1 // untyped so it can be used for int32 and int64 ids
 )
 
 // Listeners may be set to get callbacks on various operations.  This
@@ -360,7 +360,7 @@ func (archive *Archive) AddPublication(channel string, streamID int32) (*aeron.P
 //
 // Returns a channel, which can be used for either blocking or
 // non-blocking want for media driver confirmation
-func (archive *Archive) AddExclusivePublication(channel string, streamID int32) (*aeron.Publication, error) {
+func (archive *Archive) AddExclusivePublication(channel string, streamID int32) (*aeron.ExclusivePublication, error) {
 	return archive.aeron.AddExclusivePublication(channel, streamID)
 }
 
@@ -518,35 +518,14 @@ func (archive *Archive) AddRecordedPublication(channel string, stream int32) (*a
 
 // ListRecordings up to recordCount recording descriptors
 func (archive *Archive) ListRecordings(fromRecordingID int64, recordCount int32) ([]*codecs.RecordingDescriptor, error) {
-	correlationID := nextCorrelationID()
-	logger.Debugf("ListRecordings(%d, %d), correlationID:%d", fromRecordingID, recordCount, correlationID)
-
-	correlations.Store(correlationID, archive.Control) // For subsequent lookup in the fragment assemblers
-	defer correlations.Delete(correlationID)           // Clear the lookup
-
-	archive.mtx.Lock()
-	defer archive.mtx.Unlock()
-	if err := archive.Proxy.ListRecordingsRequest(correlationID, fromRecordingID, recordCount); err != nil {
+	var descriptors []*codecs.RecordingDescriptor
+	_, err := archive.ListRecordingsWithConsumer(fromRecordingID, recordCount, func(d *codecs.RecordingDescriptor) {
+		descriptors = append(descriptors, d)
+	})
+	if err != nil {
 		return nil, err
 	}
-	if err := archive.Control.PollForDescriptors(correlationID, archive.SessionID, recordCount); err != nil {
-		return nil, err
-	}
-
-	// If there's a ControlResponse let's see what transpired
-	response := archive.Control.Results.ControlResponse
-	if response != nil {
-		switch response.Code {
-		case codecs.ControlResponseCode.ERROR:
-			return nil, fmt.Errorf("response for correlationID %d (relevantId %d) failed %s", response.CorrelationId, response.RelevantId, response.ErrorMessage)
-
-		case codecs.ControlResponseCode.RECORDING_UNKNOWN:
-			return archive.Control.Results.RecordingDescriptors, nil
-		}
-	}
-
-	// Otherwise we can return our results
-	return archive.Control.Results.RecordingDescriptors, nil
+	return descriptors, nil
 }
 
 // ListRecordingsForUri will list up to recordCount recording descriptors from fromRecordingID
@@ -555,69 +534,28 @@ func (archive *Archive) ListRecordings(fromRecordingID int64, recordCount int32)
 // Returns the number of descriptors consumed. If fromRecordingID is
 // greater than the largest known we return 0.
 func (archive *Archive) ListRecordingsForUri(fromRecordingID int64, recordCount int32, channelFragment string, stream int32) ([]*codecs.RecordingDescriptor, error) {
-	correlationID := nextCorrelationID()
-	logger.Debugf("ListRecordingsForUri(%d, %d, %s, %d), correlationID:%d", fromRecordingID, recordCount, channelFragment, stream, correlationID)
-	correlations.Store(correlationID, archive.Control) // For subsequent lookup in the fragment assemblers
-	defer correlations.Delete(correlationID)           // Clear the lookup
-
-	archive.mtx.Lock()
-	defer archive.mtx.Unlock()
-	if err := archive.Proxy.ListRecordingsForUriRequest(correlationID, fromRecordingID, recordCount, stream, channelFragment); err != nil {
+	var descriptors []*codecs.RecordingDescriptor
+	_, err := archive.ListRecordingsForUriWithConsumer(fromRecordingID, recordCount, channelFragment, stream, func(d *codecs.RecordingDescriptor) {
+		descriptors = append(descriptors, d)
+	})
+	if err != nil {
 		return nil, err
 	}
-
-	if err := archive.Control.PollForDescriptors(correlationID, archive.SessionID, recordCount); err != nil {
-		return nil, err
-	}
-
-	// If there's a ControlResponse let's see what transpired
-	response := archive.Control.Results.ControlResponse
-	if response != nil {
-		switch response.Code {
-		case codecs.ControlResponseCode.ERROR:
-			return nil, fmt.Errorf("response for correlationID %d (relevantId %d) failed %s", response.CorrelationId, response.RelevantId, response.ErrorMessage)
-
-		case codecs.ControlResponseCode.RECORDING_UNKNOWN:
-			return archive.Control.Results.RecordingDescriptors, nil
-		}
-	}
-
-	// Otherwise we can return our results
-	return archive.Control.Results.RecordingDescriptors, nil
+	return descriptors, nil
 }
 
 // ListRecording will fetch the recording descriptor for a recordingID
 //
 // Returns a single recording descriptor or nil if there was no match
 func (archive *Archive) ListRecording(recordingID int64) (*codecs.RecordingDescriptor, error) {
-	correlationID := nextCorrelationID()
-	logger.Debugf("ListRecording(%d), correlationID:%d", recordingID, correlationID)
-	correlations.Store(correlationID, archive.Control) // For subsequent lookup in the fragment assemblers
-	defer correlations.Delete(correlationID)           // Clear the lookup
-
-	archive.mtx.Lock()
-	defer archive.mtx.Unlock()
-	if err := archive.Proxy.ListRecordingRequest(correlationID, recordingID); err != nil {
+	var descriptor *codecs.RecordingDescriptor
+	_, err := archive.ListRecordingWithConsumer(recordingID, func(d *codecs.RecordingDescriptor) {
+		descriptor = d
+	})
+	if err != nil {
 		return nil, err
 	}
-	if err := archive.Control.PollForDescriptors(correlationID, archive.SessionID, 1); err != nil {
-		return nil, err
-	}
-
-	// If there's a ControlResponse let's see what transpired
-	response := archive.Control.Results.ControlResponse
-	if response != nil {
-		switch response.Code {
-		case codecs.ControlResponseCode.ERROR:
-			return nil, fmt.Errorf("response for correlationID %d (relevantId %d) failed %s", response.CorrelationId, response.RelevantId, response.ErrorMessage)
-
-		case codecs.ControlResponseCode.RECORDING_UNKNOWN:
-			return nil, nil
-		}
-	}
-
-	// Otherwise we can return our results
-	return archive.Control.Results.RecordingDescriptors[0], nil
+	return descriptor, nil
 }
 
 // StartReplay for a length in bytes of a recording from a position.
@@ -772,21 +710,11 @@ func (archive *Archive) GetRecordingPosition(recordingID int64) (int64, error) {
 // segments being asynchronously being deleted then you should await
 // completion via the RecordingSignal Delete
 //
-// Returns nil on success, error on failre
-func (archive *Archive) TruncateRecording(recordingID int64, position int64) error {
-	correlationID := nextCorrelationID()
-	logger.Debugf("TruncateRecording(%d %d), correlationID:%d", recordingID, position, correlationID)
-	correlations.Store(correlationID, archive.Control) // For subsequent lookup in the fragment assemblers
-	defer correlations.Delete(correlationID)           // Clear the lookup
-
-	archive.mtx.Lock()
-	defer archive.mtx.Unlock()
-	if err := archive.Proxy.TruncateRecordingRequest(correlationID, recordingID, position); err != nil {
-		return err
-	}
-
-	_, err := archive.Control.PollForResponse(correlationID, archive.SessionID)
-	return err
+// Returns the count of deleted segment files (as Java truncateRecording does).
+func (archive *Archive) TruncateRecording(recordingID int64, position int64) (int64, error) {
+	return archive.request(func(correlationID int64) error {
+		return archive.Proxy.TruncateRecordingRequest(correlationID, recordingID, position)
+	})
 }
 
 // GetStartPosition for a recording.
@@ -849,36 +777,14 @@ func (archive *Archive) FindLastMatchingRecording(minRecordingID int64, sessionI
 //
 // Returns a (possibly empty) list of RecordingSubscriptionDescriptors
 func (archive *Archive) ListRecordingSubscriptions(pseudoIndex int32, subscriptionCount int32, applyStreamID bool, stream int32, channelFragment string) ([]*codecs.RecordingSubscriptionDescriptor, error) {
-	correlationID := nextCorrelationID()
-	logger.Debugf("ListRecordingSubscriptions(%, %d, %t, %d, %sd), correlationID:%d", pseudoIndex, subscriptionCount, applyStreamID, stream, channelFragment, correlationID)
-	correlations.Store(correlationID, archive.Control) // For subsequent lookup in the fragment assemblers
-	defer correlations.Delete(correlationID)           // Clear the lookup
-
-	archive.mtx.Lock()
-	defer archive.mtx.Unlock()
-	if err := archive.Proxy.ListRecordingSubscriptionsRequest(correlationID, pseudoIndex, subscriptionCount, applyStreamID, stream, channelFragment); err != nil {
+	var descriptors []*codecs.RecordingSubscriptionDescriptor
+	_, err := archive.ListRecordingSubscriptionsWithConsumer(pseudoIndex, subscriptionCount, applyStreamID, stream, channelFragment, func(d *codecs.RecordingSubscriptionDescriptor) {
+		descriptors = append(descriptors, d)
+	})
+	if err != nil {
 		return nil, err
 	}
-
-	if err := archive.Control.PollForDescriptors(correlationID, archive.SessionID, subscriptionCount); err != nil {
-		return nil, err
-	}
-
-	// If there's a ControlResponse let's see what transpired
-	response := archive.Control.Results.ControlResponse
-	if response != nil {
-		switch response.Code {
-		case codecs.ControlResponseCode.ERROR:
-			return nil, fmt.Errorf("response for correlationID %d (relevantId %d) failed %s", response.CorrelationId, response.RelevantId, response.ErrorMessage)
-
-		case codecs.ControlResponseCode.SUBSCRIPTION_UNKNOWN:
-			return archive.Control.Results.RecordingSubscriptionDescriptors, nil
-		}
-	}
-
-	// Otherwise we can return our results
-	return archive.Control.Results.RecordingSubscriptionDescriptors, nil
-
+	return descriptors, nil
 }
 
 // DetachSegments from the beginning of a recording up to the
@@ -978,19 +884,10 @@ func (archive *Archive) AttachSegments(recordingID int64) (int64, error) {
 // segment files.
 //
 // Returns the count of attached segment files.
-func (archive *Archive) MigrateSegments(recordingID int64, position int64) (int64, error) {
-	correlationID := nextCorrelationID()
-	logger.Debugf("MigrateSegments(%d, %d), correlationID:%d", recordingID, position, correlationID)
-	correlations.Store(correlationID, archive.Control) // For subsequent lookup in the fragment assemblers
-	defer correlations.Delete(correlationID)           // Clear the lookup
-
-	archive.mtx.Lock()
-	defer archive.mtx.Unlock()
-	if err := archive.Proxy.MigrateSegmentsRequest(correlationID, recordingID, position); err != nil {
-		return 0, err
-	}
-
-	return archive.Control.PollForResponse(correlationID, archive.SessionID)
+func (archive *Archive) MigrateSegments(srcRecordingID int64, dstRecordingID int64) (int64, error) {
+	return archive.request(func(correlationID int64) error {
+		return archive.Proxy.MigrateSegmentsRequest(correlationID, srcRecordingID, dstRecordingID)
+	})
 }
 
 // KeepAlive sends a simple packet to the media-driver
@@ -1142,19 +1039,9 @@ func (archive *Archive) StopReplication(replicationID int64) error {
 // Invalid and delete the corresponding segment files. The space in
 // the Catalog will be reclaimed upon compaction.
 //
-// Returns error on failure, nil on success
-func (archive *Archive) PurgeRecording(recordingID int64) error {
-	correlationID := nextCorrelationID()
-	logger.Debugf("PurgeRecording(%d), correlationID:%d", recordingID, correlationID)
-	correlations.Store(correlationID, archive.Control) // For subsequent lookup in the fragment assemblers
-	defer correlations.Delete(correlationID)           // Clear the lookup
-
-	archive.mtx.Lock()
-	defer archive.mtx.Unlock()
-	if err := archive.Proxy.PurgeRecordingRequest(correlationID, recordingID); err != nil {
-		return err
-	}
-
-	_, err := archive.Control.PollForResponse(correlationID, archive.SessionID)
-	return err
+// Returns the count of deleted segment files (as Java purgeRecording does).
+func (archive *Archive) PurgeRecording(recordingID int64) (int64, error) {
+	return archive.request(func(correlationID int64) error {
+		return archive.Proxy.PurgeRecordingRequest(correlationID, recordingID)
+	})
 }

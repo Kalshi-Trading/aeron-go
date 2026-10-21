@@ -47,23 +47,52 @@ docker-mirror:
 		docker pull -q $(DOCKER_MIRROR)/$$image && docker tag $(DOCKER_MIRROR)/$$image $$image || exit 1; \
 	done
 
-# Java 1.53.3 stacks used by AERON_E2E tests: archiving driver (docker-compose.yml), authenticating
-# archive (auth.compose.yml) and a 1-node echo cluster with its client driver (cluster.compose.yml).
-e2e-up:
-	$(COMPOSE) up -d --build --wait archiving-driver
+REPL_COMPOSE    ?= docker compose -f docker/replication.compose.yml
+TERM_COMPOSE    ?= docker compose -f docker/driver-protocol.compose.yml
+CLUSTER_SVC_COMPOSE ?= docker compose -f docker/cluster-service.compose.yml
+INTEROP_COMPOSE ?= docker compose -f docker/interop/docker-compose.yml
+AERON_JAR_PATH  ?= $(CURDIR)/systests/driver/aeron-all-1.53.3.jar
+E2E_ENV         ?= AERON_E2E=1 AERON_JAR=$(AERON_JAR_PATH) AERON_TERMINATE_DIR=/dev/shm/aeron-terminable \
+                   AERON_E2E_CLUSTER=1 AERON_E2E_BASIC_SUBSCRIBER=1
+
+# Java 1.53.3 stacks used by AERON_E2E tests (docker/*.compose.yml): archiving driver + Java BasicSubscriber,
+# second archive (replication), authenticating archive, publication verifier, terminable driver, 1-node echo
+# cluster with its client driver, and the interop tool image. counters/logbuffer/reassembly helpers and the
+# clustered-service node are started by their tests.
+e2e-up: jar
+	$(COMPOSE) --profile clients up -d --build --wait archiving-driver java-subscriber
+	$(REPL_COMPOSE) up -d --build --wait
 	$(AUTH_COMPOSE) up -d --build --wait auth-archiving-driver
+	$(COMPOSE) -f docker/publications.compose.yml up -d --build --wait pub-verifier
+	$(TERM_COMPOSE) up -d --build --wait terminable-driver
 	$(CLUSTER_COMPOSE) up -d --build --wait client-driver cluster-node-0
+	$(INTEROP_COMPOSE) --profile tools build
 
 e2e-down:
+	-$(CLUSTER_SVC_COMPOSE) down -v
 	-$(CLUSTER_COMPOSE) --profile three down -v
+	-$(TERM_COMPOSE) down -v
+	-$(REPL_COMPOSE) down -v
 	-$(AUTH_COMPOSE) down -v
-	$(COMPOSE) --profile e2e --profile clients down -v --remove-orphans
+	-docker compose -p aeron-counters -f docker/counters.compose.yml down -v
+	$(COMPOSE) -f docker/publications.compose.yml -f docker/logbuffer.compose.yml -f docker/reassembly.compose.yml \
+		--profile e2e --profile clients --profile tools down -v --remove-orphans
 
-# Every AERON_E2E=1 gated test in the repository against the docker Java 1.53.3 stacks. cluster/client
-# talks to the cluster's own client driver, everything else to the archiving driver at $(AERON_DIR).
+# Every AERON_E2E=1 gated test in the repository; keeps going after a failing phase and fails at the end.
+#   1. everything except cluster/ and cluster/client against the archiving driver at $(AERON_DIR)
+#   2. cluster/client against the 1-node cluster (its own client driver)
+#   3. cluster/ (Go clustered service); its ClusteredMediaDriver shares archive port 8110 with the auth archive
+#   4. cluster/client with CLUSTER_E2E_NODES=3 (leader failover); the 3 nodes reuse cluster-node-0's ports
 e2e-test:
-	AERON_E2E=1 $(GO) test -count=1 -p 1 -timeout 15m $$($(GO) list ./... | grep -v '/cluster/client$$')
-	AERON_E2E=1 AERON_DIR=$(CLUSTER_AERON_DIR) $(GO) test -count=1 -timeout 10m ./cluster/client/
+	status=0; \
+	$(E2E_ENV) $(GO) test -count=1 -p 1 -timeout 20m $$($(GO) list ./... | grep -v -e '/cluster$$' -e '/cluster/client$$') || status=1; \
+	$(E2E_ENV) AERON_DIR=$(CLUSTER_AERON_DIR) $(GO) test -count=1 -timeout 10m ./cluster/client/ || status=1; \
+	$(AUTH_COMPOSE) down -v; \
+	$(E2E_ENV) $(GO) test -count=1 -timeout 10m ./cluster/ || status=1; \
+	$(CLUSTER_COMPOSE) rm -sf cluster-node-0; \
+	$(CLUSTER_COMPOSE) --profile three up -d --build --wait node0 node1 node2 || status=1; \
+	$(E2E_ENV) AERON_DIR=$(CLUSTER_AERON_DIR) CLUSTER_E2E_NODES=3 $(GO) test -count=1 -timeout 10m ./cluster/client/ || status=1; \
+	exit $$status
 
 e2e:
 	$(MAKE) e2e-up

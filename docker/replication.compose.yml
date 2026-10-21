@@ -1,0 +1,40 @@
+# Second Java Aeron 1.53.3 media driver + archive used as the replication destination (and for
+# segment tests, via a small segment file length). Run alongside docker-compose.yml:
+#   docker compose -f docker/docker-compose.yml up -d --build archiving-driver
+#   docker compose -f docker/replication.compose.yml up -d --build
+# Go clients connect with AERON_DIR=/dev/shm/aeron-compose-2, control aeron:udp?endpoint=localhost:8011
+# stream 10, recording events aeron:udp?control-mode=dynamic|control=localhost:8031 stream 30.
+name: aeron-replication
+services:
+  archiving-driver-2:
+    build: .
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    shm_size: 2g
+    volumes:
+      - /dev/shm:/dev/shm
+    tmpfs:
+      - /data/archive:uid=1000,gid=1000
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-compose-2
+        -Daeron.dir.delete.on.start=true
+        -Daeron.client.liveness.timeout=10000000000
+        -Daeron.publication.unblock.timeout=20000000000
+        -Daeron.archive.dir=/data/archive/rec
+        -Daeron.archive.dir.delete.on.start=true
+        -Daeron.archive.control.channel=aeron:udp?endpoint=localhost:8011
+        -Daeron.archive.control.stream.id=10
+        -Daeron.archive.replication.channel=aeron:udp?endpoint=localhost:0
+        -Daeron.archive.recording.events.enabled=true
+        -Daeron.archive.recording.events.channel=aeron:udp?control-mode=dynamic|control=localhost:8031
+        -Daeron.archive.segment.file.length=262144
+        -Daeron.archive.id=2
+        -Daeron.threading.mode=SHARED
+        -Daeron.archive.threading.mode=SHARED
+    command: ["io.aeron.archive.ArchivingMediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-compose-2/cnc.dat"]
+      interval: 1s
+      retries: 30

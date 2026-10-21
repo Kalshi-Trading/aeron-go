@@ -16,7 +16,6 @@
 package aeron
 
 import (
-	"github.com/lirm/aeron-go/aeron/atomic"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron/broadcast"
@@ -295,13 +294,13 @@ func (aeron *Aeron) GetPublication(registrationID int64) (*Publication, error) {
 
 // AddExclusivePublication will add a new exclusive publication to the driver. If such publication already
 // exists within ClientConductor the same instance will be returned.
-func (aeron *Aeron) AddExclusivePublication(channel string, streamID int32) (*Publication, error) {
+func (aeron *Aeron) AddExclusivePublication(channel string, streamID int32) (*ExclusivePublication, error) {
 	registrationID, err := aeron.conductor.AddExclusivePublication(channel, streamID)
 	if err != nil {
 		return nil, err
 	}
 	for {
-		publication, err := aeron.conductor.FindPublication(registrationID)
+		publication, err := aeron.conductor.FindExclusivePublication(registrationID)
 		if publication != nil || err != nil {
 			return publication, err
 		}
@@ -312,8 +311,8 @@ func (aeron *Aeron) AddExclusivePublication(channel string, streamID int32) (*Pu
 // AddExclusivePublicationDeprecated will add a new exclusive publication to the driver. If such publication already
 // exists within ClientConductor the same instance will be returned.
 // Returns a channel, which can be used for either blocking or non-blocking want for media driver confirmation
-func (aeron *Aeron) AddExclusivePublicationDeprecated(channel string, streamID int32) chan *Publication {
-	ch := make(chan *Publication, 1)
+func (aeron *Aeron) AddExclusivePublicationDeprecated(channel string, streamID int32) chan *ExclusivePublication {
+	ch := make(chan *ExclusivePublication, 1)
 
 	registrationID, err := aeron.conductor.AddExclusivePublication(channel, streamID)
 	if err != nil {
@@ -323,7 +322,7 @@ func (aeron *Aeron) AddExclusivePublicationDeprecated(channel string, streamID i
 	}
 	go func() {
 		for {
-			publication, err := aeron.conductor.FindPublication(registrationID)
+			publication, err := aeron.conductor.FindExclusivePublication(registrationID)
 			if publication != nil || err != nil {
 				if err != nil {
 					aeron.conductor.onError(err)
@@ -350,8 +349,8 @@ func (aeron *Aeron) AsyncAddExclusivePublication(channel string, streamID int32)
 // Publication nor an error.
 // Also note that while aeron-go currently handles GetPublication and GetExclusivePublication the same way, they may
 // diverge in the future.  Other Aeron languages already handle these calls differently.
-func (aeron *Aeron) GetExclusivePublication(registrationID int64) (*Publication, error) {
-	return aeron.conductor.FindPublication(registrationID)
+func (aeron *Aeron) GetExclusivePublication(registrationID int64) (*ExclusivePublication, error) {
+	return aeron.conductor.FindExclusivePublication(registrationID)
 }
 
 // NextCorrelationID generates the next correlation id that is unique for the connected Media Driver.
@@ -371,36 +370,6 @@ func (aeron *Aeron) ClientID() int64 {
 // CounterReader returns Aeron's clientconductor's counterReader
 func (aeron *Aeron) CounterReader() *counters.Reader {
 	return aeron.conductor.CounterReader()
-}
-
-// AddCounter allocates a counter on the media driver and returns its registrationId.  The Counter should be freed by
-// calling Counter.Close().
-func (aeron *Aeron) AddCounter(
-	typeId int32,
-	keyBuffer *atomic.Buffer,
-	keyOffset int32,
-	keyLength int32,
-	labelBuffer *atomic.Buffer,
-	labelOffset int32,
-	labelLength int32) (int64, error) {
-	return aeron.conductor.AddCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
-}
-
-// AddCounterByLabel allocates a counter on the media driver and returns its registrationId.  The Counter should be
-// freed by calling Counter.Close().
-func (aeron *Aeron) AddCounterByLabel(typeId int32, label string) (int64, error) {
-	return aeron.conductor.AddCounterByLabel(typeId, label)
-}
-
-// FindCounter retrieves the Counter associated with the given registrationID.  This function is non-blocking.  The
-// value returned is dependent on what has occurred with respect to the media driver:
-//
-// - If the registrationID is unknown, an error is returned.
-// - If the media driver has not answered the command, (nil,nil) is returned.
-// - If the media driver has successfully added the Counter then what is returned is the Counter.
-// - If the media driver has returned an error, that error will be returned.
-func (aeron *Aeron) FindCounter(registrationID int64) (*Counter, error) {
-	return aeron.conductor.FindCounter(registrationID)
 }
 
 // AddAvailableCounterHandler adds a handler to the list to be called when a counter becomes available.  Return the
