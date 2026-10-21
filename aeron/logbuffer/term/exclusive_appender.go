@@ -60,12 +60,11 @@ func (appender *ExclusiveAppender) putRawTailOrdered(termID int32, termOffset in
 func (appender *ExclusiveAppender) reserve(termID, termOffset, alignedLength int32) (int32, bool) {
 	termLength := appender.termBuffer.Capacity()
 	resultingOffset := int64(termOffset) + int64(alignedLength)
+	appender.putRawTailOrdered(termID, int32(resultingOffset))
 	if resultingOffset > int64(termLength) {
-		appender.putRawTailOrdered(termID, termLength)
 		handleEndOfLogCondition(termID, appender.termBuffer, int64(termOffset), &appender.headerWriter, termLength)
 		return int32(AppenderTripped), false
 	}
-	appender.putRawTailOrdered(termID, int32(resultingOffset))
 	return int32(resultingOffset), true
 }
 
@@ -184,12 +183,14 @@ func (appender *ExclusiveAppender) AppendFragmentedMessageVectors(termID, termOf
 func (appender *ExclusiveAppender) AppendBlock(termID, termOffset int32, src *atomic.Buffer,
 	srcOffset, length int32) int32 {
 	resultingOffset := termOffset + length
-	lengthOfFirstFrame := src.GetInt32(srcOffset)
+	hdrLength := logbuffer.DataFrameHeader.Length
+	term := appender.termBuffer
 
 	appender.putRawTailOrdered(termID, resultingOffset)
-	src.PutInt32(srcOffset, 0)
-	appender.termBuffer.PutBytes(termOffset, src, srcOffset, length)
-	appender.termBuffer.PutInt32Ordered(termOffset, lengthOfFirstFrame)
-	src.PutInt32(srcOffset, lengthOfFirstFrame)
+	term.PutBytes(termOffset+hdrLength, src, srcOffset+hdrLength, length-hdrLength)
+	term.PutInt64(termOffset+24, src.GetInt64(srcOffset+24))
+	term.PutInt64(termOffset+16, src.GetInt64(srcOffset+16))
+	term.PutInt64(termOffset+8, src.GetInt64(srcOffset+8))
+	term.PutInt64Ordered(termOffset, src.GetInt64(srcOffset))
 	return resultingOffset
 }

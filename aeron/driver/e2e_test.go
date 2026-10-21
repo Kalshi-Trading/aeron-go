@@ -3,6 +3,7 @@ package driver
 import (
 	"fmt"
 	"math/rand"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -347,4 +348,23 @@ func TestE2ETerminateDriver(t *testing.T) {
 		require.True(t, time.Now().Before(deadline), "driver did not terminate")
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// A bind failure on the Java driver is reported as ON_ERROR with GENERIC_ERROR and the command's correlation id;
+// it must reach OnErrorResponse (as DriverEventsAdapter does), not OnChannelEndpointError.
+func TestE2EAddressInUseIsErrorResponse(t *testing.T) {
+	dir := e2eDir(t, "AERON_DIR", "/dev/shm/aeron-compose")
+	c := newE2EClient(t, dir)
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer conn.Close()
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+
+	subID, err := c.proxy.AddSubscription(fmt.Sprintf("aeron:udp?endpoint=127.0.0.1:%d", port), 1001)
+	require.NoError(t, err)
+	args := c.await(5*time.Second, "OnErrorResponse", corrIs(0, subID))
+	t.Logf("ON_ERROR %v", args)
+	assert.Equal(t, command.ErrorCodeGenericError, args[1])
+	assert.Contains(t, args[2], "Address already in use")
+	assert.NotContains(t, c.listener.calls, "OnChannelEndpointError")
 }

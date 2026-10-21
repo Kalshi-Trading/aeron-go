@@ -399,3 +399,23 @@ func TestE2EReplication(t *testing.T) {
 	assert.False(t, stopped)
 	live.stop(t, src)
 }
+
+func TestE2EUpdateChannel(t *testing.T) {
+	requireE2E(t)
+	a := e2eArchive1(t)
+	channel := fmt.Sprintf("aeron:ipc?term-length=%d|mtu=%d", e2eTermLength, e2eCatalogFrameLength)
+	stream := e2eStream()
+
+	r := startRecording(t, a, channel, stream)
+	r.publish(t, a, 2)
+	r.stop(t, a)
+
+	newChannel := fmt.Sprintf("aeron:ipc?term-length=%d|mtu=%d|alias=updated", e2eTermLength, e2eCatalogFrameLength)
+	require.NoError(t, a.UpdateChannel(r.recordingID, newChannel))
+	assert.Equal(t, newChannel, string(listOne(t, a, r.recordingID).OriginalChannel))
+
+	err := a.UpdateChannel(1<<40, newChannel)
+	require.Error(t, err, "unknown recording must fail")
+	_, err = a.PurgeRecording(r.recordingID)
+	require.NoError(t, err)
+}

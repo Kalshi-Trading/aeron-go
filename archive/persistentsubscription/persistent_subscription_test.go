@@ -74,7 +74,8 @@ func (s *fakeSubscription) resolvedEndpoint() string { return s.endpoint }
 
 type fakePublication struct{}
 
-func (fakePublication) isConnected() bool { return true }
+func (fakePublication) isConnected() bool          { return true }
+func (fakePublication) publisher() aeron.Publisher { return nil }
 
 type pendingSub struct {
 	sub      *fakeSubscription

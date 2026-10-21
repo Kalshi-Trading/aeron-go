@@ -226,3 +226,17 @@ func TestLogBufferUnblocker(t *testing.T) {
 		assert.Equal(t, PackTail(testTermID+1, 0), m.RawTailVolatile(1))
 	})
 }
+
+func TestIsFrameAligned(t *testing.T) {
+	require.True(t, IsFrameAligned(0))
+	require.True(t, IsFrameAligned(64))
+	require.False(t, IsFrameAligned(33))
+}
+
+func TestActiveTransportCountRoundTrip(t *testing.T) {
+	var m LogBufferMetaData
+	m.Wrap(atomic.MakeBuffer(make([]byte, LogMetaDataLength)), 0)
+	m.SetActiveTransportCount(3)
+	require.Equal(t, int32(3), m.ActiveTransportCount())
+	require.Equal(t, int32(3), m.Buffer().GetInt32(LogActiveTransportCount))
+}
