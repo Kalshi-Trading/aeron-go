@@ -15,9 +15,29 @@ Example subscriber can be found [here](https://github.com/lirm/aeron-go/tree/mas
 
 Example publication can be found [here](https://github.com/lirm/aeron-go/tree/master/examples/basic_publisher).
 
+The `parity` branch tracks the Java Aeron 1.53.3 client. Upgrading from upstream `lirm/aeron-go`
+master? Read [MIGRATION.md](MIGRATION.md) for every breaking change.
+
+## Features
+
+* Client (`aeron`): publications (`Publication`, `ExclusivePublication`, `Publisher`, `TryClaim`),
+  subscriptions/images (`Poll`, `ControlledPoll`, `BlockPoll`, `RawPoll`, `Reject`), counters,
+  multi-destination channels, response channels, `ChannelUri`, CnC/error log/loss report readers.
+* Archive (`archive`): the full `AeronArchive` API: recording, replay, catalog listing, replication,
+  segment management, recording signals, authentication ([archive/README.md](archive/README.md)).
+* ReplayMerge (`archive/replaymerge`): replay a recording and merge onto the live stream without gaps
+  (Java `ReplayMerge`; sample `archive/examples/basic_replay_merge`).
+* PersistentSubscription (`archive/persistentsubscription`): a subscription that starts from any
+  position in a recording, replays, joins the live stream once caught up and falls back to replay if the
+  live stream is lost (Java `PersistentSubscription`; sample `archive/examples/persistent_subscriber`).
+* Cluster client (`cluster/client`, Java `AeronCluster`) and clustered service container (`cluster`,
+  Java `ClusteredServiceContainer`) for schema v17 ([cluster/README.md](cluster/README.md)).
+* Docker harness with Java 1.53.3 media driver, archive and cluster: [docker/README.md](docker/README.md).
+
 The full set of ported Java samples (throughput, ping/pong, AeronStat/ErrorStat/LossStat/BacklogStat,
-archive record/replay, cluster echo client) is listed in [examples/README.md](examples/README.md); a
-public API audit against Java 1.53.3 is in [docs/API_AUDIT.md](docs/API_AUDIT.md).
+archive record/replay, ReplayMerge, PersistentSubscription, cluster echo client) is listed in
+[examples/README.md](examples/README.md); a public API audit against Java 1.53.3 is in
+[docs/API_AUDIT.md](docs/API_AUDIT.md).
 
 ## Common
 

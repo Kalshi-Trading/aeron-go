@@ -56,7 +56,11 @@ func (suite *SysTestSuite) SetupTest() {
 }
 
 func (suite *SysTestSuite) TearDownTest() {
+	if suite.mediaDriver == nil {
+		return // SetupTest skipped
+	}
 	suite.mediaDriver.StopMediaDriver()
+	suite.mediaDriver = nil
 }
 
 func (suite *SysTestSuite) send(n int, pub *aeron.Publication) {
@@ -89,7 +93,7 @@ func (suite *SysTestSuite) receive(n int, sub *aeron.Subscription) {
 			recvd := sub.Poll(handler, 10)
 			if recvd >= 1 {
 				fragmentsRead.Add(int32(recvd))
-				logger.Debugf("  have %d fragments", fragmentsRead)
+				logger.Debugf("  have %d fragments", fragmentsRead.Get())
 				break
 			}
 			if time.Now().After(timeoutAt) {

@@ -76,10 +76,14 @@ func main() {
 	// Enable recording events although the defaults will only log in debug mode
 	arch.EnableRecordingEvents()
 
-	recordingID, err := FindLatestRecording(arch, sampleChannel, sampleStream)
+	descriptor, err := examples.FindLatestRecording(arch, sampleChannel, sampleStream)
 	if err != nil {
 		logger.Fatalf(err.Error())
 	}
+	if descriptor == nil {
+		logger.Fatalf("No recordings found for channel %s and stream id %d", sampleChannel, sampleStream)
+	}
+	recordingID := descriptor.RecordingId
 	var position int64
 	var length int64 = math.MaxInt64
 
@@ -124,25 +128,4 @@ func main() {
 		idleStrategy.Idle(fragmentsRead)
 	}
 	fmt.Printf("Replayed %d messages\n", counter)
-}
-
-// FindLatestRecording to lookup the last recording
-func FindLatestRecording(arch *archive.Archive, channel string, stream int32) (int64, error) {
-	descriptors, err := arch.ListRecordingsForUri(0, 100, channel, stream)
-
-	if err != nil {
-		return 0, err
-	}
-
-	if len(descriptors) == 0 {
-		return 0, fmt.Errorf("no recordings found")
-	}
-
-	descriptor := descriptors[len(descriptors)-1]
-	if descriptor.StopPosition == 0 {
-		return 0, fmt.Errorf("recording length zero")
-	}
-
-	// Return the last recordingID
-	return descriptor.RecordingId, nil
 }

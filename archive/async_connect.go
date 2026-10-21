@@ -173,6 +173,12 @@ func NewAsyncConnect(options *Options, aeronCtx *aeron.Context) (*AsyncConnect, 
 	}
 	ac.aeron = opts.Aeron
 	ac.pendingArchive.aeron = opts.Aeron
+	if err := opts.applySessionID(ac.aeron.NextSessionID); err != nil {
+		if opts.OwnsAeronClient {
+			err = errors.Join(err, ac.aeron.Close())
+		}
+		return nil, err
+	}
 	ac.deadline = time.Now().Add(opts.Timeout)
 	return ac, nil
 }
@@ -231,9 +237,7 @@ func (ac *AsyncConnect) Poll() (*Archive, error) {
 			ac.state = AsyncConnectAwaitConnectResponse
 		}
 	case AsyncConnectSendArchiveIDRequest:
-		err = ac.trySend(AsyncConnectAwaitArchiveIDResponse, func() ([]byte, error) {
-			return codecs.ArchiveIdRequestPacket(ac.marshaller, ac.options.RangeChecking, ac.controlSessionID, ac.correlationID)
-		})
+		err = ac.sendArchiveIDRequest()
 	case AsyncConnectSendChallengeResponse:
 		err = ac.trySend(AsyncConnectAwaitChallengeResponse, func() ([]byte, error) {
 			return codecs.ChallengeResponsePacket(ac.marshaller, ac.options.RangeChecking, ac.controlSessionID,
@@ -290,7 +294,8 @@ func (ac *AsyncConnect) awaitSubscription() error {
 	}
 	sub, err := ac.aeron.GetSubscription(ac.subscriptionRegID)
 	if err != nil {
-		return err
+		ac.subscriptionRegID = aeron.NullValue
+		return ignoreTemporarilyUnavailable(err)
 	}
 	if sub == nil {
 		return nil
@@ -325,7 +330,8 @@ func (ac *AsyncConnect) addPublication() error {
 	}
 	pub, err := ac.aeron.GetExclusivePublication(ac.publicationRegID)
 	if err != nil {
-		return err
+		ac.publicationRegID = aeron.NullValue
+		return ignoreTemporarilyUnavailable(err)
 	}
 	if pub == nil {
 		return nil
@@ -334,6 +340,16 @@ func (ac *AsyncConnect) addPublication() error {
 	ac.publicationRegID = aeron.NullValue
 	ac.state = AsyncConnectAwaitPublicationConnected
 	return nil
+}
+
+// ignoreTemporarilyUnavailable lets the add be retried on the next poll when the driver rejects it with
+// RESOURCE_TEMPORARILY_UNAVAILABLE, as Java AsyncConnect does.
+func ignoreTemporarilyUnavailable(err error) error {
+	var regErr *aeron.RegistrationError
+	if errors.As(err, &regErr) && regErr.Code == aeron.ErrorCodeResourceTemporarilyUnavailable {
+		return nil
+	}
+	return err
 }
 
 func (ac *AsyncConnect) clientInfo() string {
@@ -364,21 +380,47 @@ func (ac *AsyncConnect) trySend(next AsyncConnectState, encode func() ([]byte, e
 	return nil
 }
 
-// offerWithRetry is used for messages that must be sent once the session is established.
-func (ac *AsyncConnect) offerWithRetry(b []byte) bool {
+func (ac *AsyncConnect) sendArchiveIDRequest() error {
+	b, err := codecs.ArchiveIdRequestPacket(ac.marshaller, ac.options.RangeChecking, ac.controlSessionID, ac.correlationID)
+	if err != nil {
+		return err
+	}
+	sent, err := ac.offer(b)
+	if sent {
+		ac.state = AsyncConnectAwaitArchiveIDResponse
+	}
+	return err
+}
+
+// offer is Java ArchiveProxy.offer: up to MessageRetryAttempts attempts, failing fast when the publication is
+// closed, not connected or at its max position.
+func (ac *AsyncConnect) offer(b []byte) (bool, error) {
 	buf := atomic.MakeBuffer(b, len(b))
-	for i := 0; i < 3; i++ {
-		if ac.publication.Offer(buf, 0, int32(len(b)), nil) > 0 {
-			return true
+	if r, ok := ac.options.IdleStrategy.(interface{ Reset() }); ok {
+		r.Reset()
+	}
+	for attempts := ac.options.MessageRetryAttempts; ; {
+		switch position := ac.publication.Offer(buf, 0, int32(len(b)), nil); {
+		case position > 0:
+			return true, nil
+		case position == aeron.PublicationClosed:
+			return false, NewArchiveException("connection to the archive has been closed", ErrorCodeGeneric, aeron.NullValue)
+		case position == aeron.NotConnected:
+			return false, NewArchiveException("connection to the archive is no longer available", ErrorCodeGeneric, aeron.NullValue)
+		case position == aeron.MaxPositionExceeded:
+			return false, NewArchiveException(fmt.Sprintf("offer failed due to max position being reached: term-length=%d",
+				ac.publication.TermBufferLength()), ErrorCodeGeneric, aeron.NullValue)
+		}
+		if attempts--; attempts <= 0 {
+			return false, nil
 		}
 		ac.options.IdleStrategy.Idle(0)
 	}
-	return false
 }
 
 func (ac *AsyncConnect) closeSession() {
 	if b, err := codecs.CloseSessionRequestPacket(ac.marshaller, ac.options.RangeChecking, ac.controlSessionID); err == nil {
-		ac.offerWithRetry(b)
+		_, _ = ac.offer(b)
 	}
 }
 
@@ -400,6 +442,7 @@ func (ac *AsyncConnect) pollForResponse() error {
 		e := &ConnectError{CorrelationID: ac.correlationID, Code: p.code, Message: p.errorMessage}
 		if p.code == codecs.ControlResponseCode.ERROR {
 			e.ErrorCode = int32(p.relevantID)
+			e.cause = newArchiveResponseException(p.errorMessage, p.relevantID, ac.correlationID)
 		} else {
 			e.Message = fmt.Sprintf("unexpected response: code=%d %s", p.code, p.errorMessage)
 		}
@@ -431,9 +474,10 @@ func (ac *AsyncConnect) transitionToDone(archiveID int64) error {
 	if err != nil {
 		return err
 	}
-	if !ac.offerWithRetry(b) {
+	if sent, err := ac.offer(b); !sent {
 		ac.closeSession()
-		return &ConnectError{Message: "failed to send keep alive after archive connect", CorrelationID: ac.correlationID}
+		return &ConnectError{Message: "failed to send keep alive after archive connect", CorrelationID: ac.correlationID,
+			cause: err}
 	}
 	a := ac.pendingArchive
 	a.SessionID = ac.controlSessionID
@@ -456,18 +500,18 @@ func (ac *AsyncConnect) Close() error {
 	if ac.options.OwnsAeronClient {
 		return ac.aeron.Close()
 	}
+	// As Java AsyncConnect.close: close what was resolved, otherwise remove the in-flight add by registration id so
+	// it is not leaked when the driver answers.
 	var errs []error
-	if ac.subscription == nil && ac.subscriptionRegID != aeron.NullValue {
-		ac.subscription, _ = ac.aeron.GetSubscription(ac.subscriptionRegID)
-	}
 	if ac.subscription != nil {
 		errs = append(errs, ac.subscription.Close())
-	}
-	if ac.publication == nil && ac.publicationRegID != aeron.NullValue {
-		ac.publication, _ = ac.aeron.GetExclusivePublication(ac.publicationRegID)
+	} else if ac.subscriptionRegID != aeron.NullValue {
+		errs = append(errs, ac.aeron.AsyncRemoveSubscription(ac.subscriptionRegID))
 	}
 	if ac.publication != nil {
 		errs = append(errs, ac.publication.Close())
+	} else if ac.publicationRegID != aeron.NullValue {
+		errs = append(errs, ac.aeron.AsyncRemovePublication(ac.publicationRegID))
 	}
 	return errors.Join(errs...)
 }

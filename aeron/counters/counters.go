@@ -17,7 +17,6 @@ limitations under the License.
 package counters
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/lirm/aeron-go/aeron/logging"
@@ -145,8 +144,14 @@ func MapFile(filename string) (*MetaDataFlyweight, *memmap.File, error) {
 	cncVer := meta.CncVersion.Get()
 	logger.Debugf("Mapped %s for ver %d", filename, cncVer)
 
-	if CurrentCncVersion != cncVer {
-		return nil, nil, errors.New(fmt.Sprintf("aeron cnc file version not understood: version=%d", cncVer))
+	if cncVer == 0 {
+		cncMap.Close()
+		return nil, nil, fmt.Errorf("CnC file is created but not initialised: %s", filename)
+	}
+	if util.SemanticVersionMajor(uint32(CurrentCncVersion)) != util.SemanticVersionMajor(uint32(cncVer)) {
+		cncMap.Close()
+		return nil, nil, fmt.Errorf("CnC version not compatible: app=%s file=%s",
+			util.SemanticVersionToString(uint32(CurrentCncVersion)), util.SemanticVersionToString(uint32(cncVer)))
 	}
 
 	return &meta, cncMap, nil

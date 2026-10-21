@@ -19,19 +19,19 @@ package atomic
 import "sync/atomic"
 
 type Long struct {
-	value int64
+	value atomic.Int64 // 64-bit aligned on 32-bit platforms
 }
 
 func (i *Long) Get() int64 {
-	return atomic.LoadInt64(&i.value)
+	return i.value.Load()
 }
 
 func (i *Long) Set(v int64) {
-	atomic.StoreInt64(&i.value, v)
+	i.value.Store(v)
 }
 
 func (i *Long) Add(delta int64) int64 {
-	return atomic.AddInt64(&i.value, delta)
+	return i.value.Add(delta)
 }
 
 func (i *Long) Inc() int64 {

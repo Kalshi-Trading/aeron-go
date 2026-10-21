@@ -16,7 +16,6 @@ package archive
 
 import (
 	"fmt"
-	"math/rand"
 	"strconv"
 	"sync"
 	"time"
@@ -45,8 +44,9 @@ type Options struct {
 	RecordingEventsStream  int32              // [enable] and stream
 	ArchiveLoglevel        zapcore.Level      // [runtime] via logging.SetLevel()
 	AeronLoglevel          zapcore.Level      // [runtime] via logging.SetLevel()
-	Timeout                time.Duration      // [runtime] Message timeout for sending/receiving control messages and connect (Java messageTimeoutNs)
-	IdleStrategy           idlestrategy.Idler // [runtime] Idlestrategy for sending/receiving control messages
+	Timeout                time.Duration      // [runtime] Message timeout for sending/receiving control messages and connect (Java messageTimeoutNs), default 10s
+	IdleStrategy           idlestrategy.Idler // [runtime] Idlestrategy for sending/receiving control messages, defaults to a backoff strategy
+	MessageRetryAttempts   int                // [init] Offer attempts for messages sent with retry (Java messageRetryAttempts), default 3
 	RangeChecking          bool               // [runtime] archive protocol marshalling checks
 
 	// ControlTermBufferLength, ControlTermBufferSparse and ControlMtuLength are applied to the control request and
@@ -99,6 +99,8 @@ const (
 	ControlTermBufferSparseDefault = true
 	ControlMtuLengthDefault        = 1408
 	MaxClientNameLength            = 100
+	MessageRetryAttemptsDefault    = 3
+	MessageTimeoutDefault          = 10 * time.Second
 )
 
 // These are the Options used by default for an Archive object
@@ -111,8 +113,8 @@ var defaultOptions = Options{
 	RecordingEventsStream:   30,
 	ArchiveLoglevel:         zapcore.WarnLevel,
 	AeronLoglevel:           zapcore.WarnLevel,
-	Timeout:                 time.Second * 5,
-	IdleStrategy:            idlestrategy.Sleeping{SleepFor: time.Millisecond * 50}, // FIXME: tune
+	Timeout:                 MessageTimeoutDefault,
+	MessageRetryAttempts:    MessageRetryAttemptsDefault,
 	RangeChecking:           false,
 	ControlTermBufferLength: ControlTermBufferLengthDefault,
 	ControlTermBufferSparse: ControlTermBufferSparseDefault,
@@ -155,6 +157,12 @@ func (o *Options) conclude() error {
 	if o.Timeout <= 0 {
 		return fmt.Errorf("archive options Timeout must be > 0, got %s", o.Timeout)
 	}
+	if o.MessageRetryAttempts == 0 {
+		o.MessageRetryAttempts = MessageRetryAttemptsDefault
+	}
+	if o.MessageRetryAttempts < 0 {
+		return fmt.Errorf("archive options MessageRetryAttempts must be > 0, got %d", o.MessageRetryAttempts)
+	}
 	if o.ControlTermBufferLength == 0 {
 		o.ControlTermBufferLength = ControlTermBufferLengthDefault
 	}
@@ -170,13 +178,6 @@ func (o *Options) conclude() error {
 	if err != nil {
 		return err
 	}
-	if !isControlModeResponse(response) && request.Get(aeron.SessionIdParamName) == "" &&
-		response.Get(aeron.SessionIdParamName) == "" {
-		// Java uses aeron.nextSessionId(); the Go client has no equivalent so a random non-reserved id is used.
-		sessionID := strconv.Itoa(int(rand.Int31n(1<<30) + 1))
-		request.Set(aeron.SessionIdParamName, sessionID)
-		response.Set(aeron.SessionIdParamName, sessionID)
-	}
 	o.RequestChannel = request.String()
 	o.ResponseChannel = response.String()
 
@@ -190,6 +191,33 @@ func (o *Options) conclude() error {
 		o.Lock = &sync.Mutex{}
 	}
 	o.concluded = true
+	return nil
+}
+
+// applySessionID sets the session-id of the control request and response channels to the id allocated by the
+// driver, as Java Context.conclude() does with aeron.nextSessionId(controlRequestStreamId). Channels using
+// control-mode=response are left alone.
+func (o *Options) applySessionID(nextSessionID func(streamID int32) (int32, error)) error {
+	response, err := aeron.ParseChannelUri(o.ResponseChannel)
+	if err != nil {
+		return err
+	}
+	if isControlModeResponse(response) {
+		return nil
+	}
+	request, err := aeron.ParseChannelUri(o.RequestChannel)
+	if err != nil {
+		return err
+	}
+	id, err := nextSessionID(o.RequestStream)
+	if err != nil {
+		return err
+	}
+	sessionID := strconv.Itoa(int(id))
+	request.Set(aeron.SessionIdParamName, sessionID)
+	response.Set(aeron.SessionIdParamName, sessionID)
+	o.RequestChannel = request.String()
+	o.ResponseChannel = response.String()
 	return nil
 }
 

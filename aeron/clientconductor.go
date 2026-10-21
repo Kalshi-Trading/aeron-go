@@ -232,6 +232,9 @@ type ClientConductor struct {
 	clientName             string
 	preTouchMappedMemory   bool
 	subscriberErrorHandler func(error)
+
+	awaitingIdleStrategy idlestrategy.Idler
+	driverAgentInvoker   AgentInvoker
 }
 
 // Init is the primary initialization method for ClientConductor
@@ -500,6 +503,18 @@ func (cc *ClientConductor) awaitResponse(correlationID int64) error {
 				"no response from MediaDriver within %v (correlationId=%d)",
 				time.Duration(cc.driverTimeoutNs), correlationID))
 		}
+		cc.awaitIdle()
+	}
+}
+
+// awaitIdle runs the embedded driver's agent invoker, if any, otherwise idles with the awaiting idle strategy.
+func (cc *ClientConductor) awaitIdle() {
+	switch {
+	case cc.driverAgentInvoker != nil:
+		cc.driverAgentInvoker.Invoke()
+	case cc.awaitingIdleStrategy != nil:
+		cc.awaitingIdleStrategy.Idle(0)
+	default:
 		time.Sleep(awaitingIdleSleep)
 	}
 }
@@ -615,6 +630,7 @@ func (cc *ClientConductor) closeImages(images []Image, handler UnavailableImageH
 		if image == nil {
 			continue
 		}
+		closeImage(image)
 		cc.linger(image, lingerNs)
 		if handler != nil {
 			img := image
@@ -832,7 +848,30 @@ func (cc *ClientConductor) AsyncRemovePublication(registrationID int64) error {
 	if err := cc.ensureOpen(); err != nil {
 		return err
 	}
+	if cc.removePendingLocked(registrationID, kindPendingPublication, kindPendingExclusivePublication) {
+		_, err := cc.driverProxy.RemovePublication(registrationID, false)
+		return err
+	}
 	return cc.releasePublicationLocked(registrationID, false)
+}
+
+// removePendingLocked forgets an async add which the driver has not yet answered, so that a later ready response
+// is ignored. Like Java ClientConductor.removePublication/removeSubscription the caller then sends the driver remove.
+func (cc *ClientConductor) removePendingLocked(registrationID int64, kinds ...resourceKind) bool {
+	res := cc.resources[registrationID]
+	if res == nil {
+		// A failed add whose error was never collected: the driver holds nothing to remove.
+		delete(cc.asyncErrors, registrationID)
+		return false
+	}
+	for _, k := range kinds {
+		if res.kind == k {
+			delete(cc.resources, registrationID)
+			delete(cc.asyncCommandIDs, registrationID)
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -908,23 +947,29 @@ func (cc *ClientConductor) FindSubscription(registrationID int64) (*Subscription
 	return cc.GetSubscription(registrationID)
 }
 
-// releaseSubscription is called by Subscription.Close after it has emptied its image list.
-func (cc *ClientConductor) releaseSubscription(regID int64, images []Image) error {
+// releaseSubscription closes sub, its images and sends REMOVE_SUBSCRIPTION (Java ClientConductor.removeSubscription).
+// The image list is emptied under adminLock so OnAvailableImage cannot add an image after the list was drained.
+func (cc *ClientConductor) releaseSubscription(sub *Subscription) error {
 	cc.adminLock.Lock()
 	defer cc.unlock()
-	return cc.releaseSubscriptionLocked(regID, images)
-}
-
-func (cc *ClientConductor) releaseSubscriptionLocked(regID int64, images []Image) error {
 	if cc.isTerminating.Get() || cc.isClosed.Get() {
 		return nil
 	}
+	if !sub.isClosed.CompareAndSet(false, true) {
+		return nil
+	}
+	return cc.releaseSubscriptionLocked(sub)
+}
+
+// releaseSubscriptionLocked must be called with adminLock held after sub has been marked closed.
+func (cc *ClientConductor) releaseSubscriptionLocked(sub *Subscription) error {
+	cc.closeImages(sub.images.Empty(), sub.UnavailableImageHandler(), explicitCloseLingerNs)
+	regID := sub.registrationID
 	res := cc.resources[regID]
-	if res == nil || res.kind != kindSubscription {
+	if res == nil || res.kind != kindSubscription || res.subscription != sub {
 		return nil
 	}
 	delete(cc.resources, regID)
-	cc.closeImages(images, res.subscription.UnavailableImageHandler(), explicitCloseLingerNs)
 	_, err := cc.driverProxy.RemoveSubscription(regID)
 	return err
 }
@@ -936,6 +981,10 @@ func (cc *ClientConductor) AsyncRemoveSubscription(registrationID int64) error {
 	if err := cc.ensureOpen(); err != nil {
 		return err
 	}
+	if cc.removePendingLocked(registrationID, kindPendingSubscription) {
+		_, err := cc.driverProxy.RemoveSubscription(registrationID)
+		return err
+	}
 	res := cc.resources[registrationID]
 	if res == nil || res.kind != kindSubscription {
 		return nil
@@ -943,7 +992,7 @@ func (cc *ClientConductor) AsyncRemoveSubscription(registrationID int64) error {
 	if !res.subscription.isClosed.CompareAndSet(false, true) {
 		return nil
 	}
-	return cc.releaseSubscriptionLocked(registrationID, res.subscription.images.Empty())
+	return cc.releaseSubscriptionLocked(res.subscription)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1070,6 +1119,9 @@ func (cc *ClientConductor) HasActiveCommands() bool {
 // AddCounter sends ADD_COUNTER without waiting and returns the registration id; poll GetCounter.
 func (cc *ClientConductor) AddCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
 	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (int64, error) {
+	if err := validateCounterKeyAndLabelLength(keyLength, labelLength); err != nil {
+		return 0, err
+	}
 	return cc.asyncAdd(func() (int64, error) {
 		return cc.sendAddCounter(kindPendingCounter, func() (int64, error) {
 			return cc.driverProxy.AddCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
@@ -1079,6 +1131,9 @@ func (cc *ClientConductor) AddCounter(typeId int32, keyBuffer *atomic.Buffer, ke
 
 // AddCounterByLabel sends ADD_COUNTER with an empty key without waiting; poll GetCounter.
 func (cc *ClientConductor) AddCounterByLabel(typeId int32, label string) (int64, error) {
+	if err := validateCounterLabel(label); err != nil {
+		return 0, err
+	}
 	return cc.asyncAdd(func() (int64, error) {
 		return cc.sendAddCounter(kindPendingCounter, func() (int64, error) {
 			return cc.driverProxy.AddCounterByLabel(typeId, label)
@@ -1090,6 +1145,9 @@ func (cc *ClientConductor) AddCounterByLabel(typeId int32, label string) (int64,
 // counters are not owned by this client and are never removed by it.
 func (cc *ClientConductor) AddStaticCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
 	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32, registrationId int64) (int64, error) {
+	if err := validateCounterKeyAndLabelLength(keyLength, labelLength); err != nil {
+		return 0, err
+	}
 	return cc.asyncAdd(func() (int64, error) {
 		return cc.sendAddCounter(kindPendingStaticCounter, func() (int64, error) {
 			return cc.driverProxy.AddStaticCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset,
@@ -1100,11 +1158,31 @@ func (cc *ClientConductor) AddStaticCounter(typeId int32, keyBuffer *atomic.Buff
 
 // AddStaticCounterByLabel is AddStaticCounter with an empty key.
 func (cc *ClientConductor) AddStaticCounterByLabel(typeId int32, label string, registrationId int64) (int64, error) {
+	if err := validateCounterLabel(label); err != nil {
+		return 0, err
+	}
 	return cc.asyncAdd(func() (int64, error) {
 		return cc.sendAddCounter(kindPendingStaticCounter, func() (int64, error) {
 			return cc.driverProxy.AddStaticCounterByLabel(typeId, label, registrationId)
 		})
 	})
+}
+
+func validateCounterKeyAndLabelLength(keyLength int32, labelLength int32) error {
+	if keyLength < 0 || keyLength > ctr.MaxKeyLength {
+		return fmt.Errorf("key length out of bounds: %d", keyLength)
+	}
+	if labelLength < 0 || labelLength > ctr.MaxLabelLength {
+		return fmt.Errorf("label length out of bounds: %d", labelLength)
+	}
+	return nil
+}
+
+func validateCounterLabel(label string) error {
+	if len(label) > int(ctr.MaxLabelLength) {
+		return fmt.Errorf("label length exceeds MAX_LABEL_LENGTH: %d", len(label))
+	}
+	return nil
 }
 
 func (cc *ClientConductor) sendAddCounter(kind resourceKind, send func() (int64, error)) (int64, error) {
@@ -1155,10 +1233,10 @@ func (cc *ClientConductor) FindCounter(registrationID int64) (*Counter, error) {
 }
 
 // releaseCounter is called by Counter.Close. Static counters are not removed from the driver.
-func (cc *ClientConductor) releaseCounter(counter Counter) error {
+func (cc *ClientConductor) releaseCounter(registrationID int64, counterID int32) error {
 	cc.adminLock.Lock()
 	defer cc.unlock()
-	return cc.releaseCounterLocked(counter.RegistrationId(), counter.Id())
+	return cc.releaseCounterLocked(registrationID, counterID)
 }
 
 func (cc *ClientConductor) releaseCounterLocked(registrationID int64, counterID int32) error {
@@ -1179,18 +1257,33 @@ func (cc *ClientConductor) releaseCounterLocked(registrationID int64, counterID 
 	return nil
 }
 
-// AsyncRemoveCounter closes the client-owned counter with the given registration id without blocking.
+// AsyncRemoveCounter closes the client-owned counter with the given registration id without blocking
+// (Aeron.asyncRemoveCounter). It is a no-op for NullValue or once the client is closed. If the add command is still
+// awaiting the driver's response, REMOVE_COUNTER is sent anyway so the counter is not leaked in the driver.
 func (cc *ClientConductor) AsyncRemoveCounter(registrationID int64) error {
 	cc.adminLock.Lock()
 	defer cc.unlock()
-	if err := cc.ensureOpen(); err != nil {
-		return err
-	}
-	res := cc.resources[registrationID]
-	if res == nil || res.kind != kindCounter {
+	if registrationID == nullValue || cc.isTerminating.Get() || cc.isClosed.Get() {
 		return nil
 	}
-	return cc.releaseCounterLocked(registrationID, res.counter.Id())
+	res := cc.resources[registrationID]
+	switch {
+	case res == nil:
+		return nil
+	case res.kind == kindCounter:
+		return cc.releaseCounterLocked(registrationID, res.counter.Id())
+	case res.kind == kindPendingCounter:
+		delete(cc.resources, registrationID)
+		delete(cc.asyncCommandIDs, registrationID)
+		corrID, err := cc.driverProxy.RemoveCounter(registrationID)
+		if err != nil {
+			return err
+		}
+		cc.asyncCommandIDs[corrID] = cc.nanoClock()
+		return nil
+	default:
+		return fmt.Errorf("registration id %d is not a client owned Counter", registrationID)
+	}
 }
 
 // NextSessionID asks the driver for the next available session id for a stream (driver >= 1.47).
@@ -1445,7 +1538,10 @@ func (cc *ClientConductor) OnChannelEndpointError(corrID int64, errorMessage str
 			cc.queueError(NewChannelEndpointError(statusIndicatorID, errorMessage))
 		}
 	}
-	cc.failCommand(corrID, NewRegistrationError(corrID, 4, errorMessage))
+	// corrID is a channel status indicator id here, so (as in Java) only an async command with that id is failed.
+	if _, ok := cc.asyncCommandIDs[corrID]; ok {
+		cc.failCommand(corrID, NewRegistrationError(corrID, int32(ErrorCodeChannelEndpointError), errorMessage))
+	}
 }
 
 func (cc *ClientConductor) OnAvailableCounter(corrID int64, counterID int32) {
@@ -1512,7 +1608,6 @@ func (cc *ClientConductor) OnPublicationError(buffer *atomic.Buffer, offset int3
 		if (res.kind == kindPublication || res.kind == kindExclusivePublication) &&
 			res.pubBase.originalRegID == frame.RegistrationID {
 			cc.queueCallback(func() { h(&frame) })
-			return
 		}
 	}
 }

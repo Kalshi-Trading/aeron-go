@@ -19,6 +19,7 @@ import (
 	"net"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
+	"github.com/lirm/aeron-go/aeron/command"
 )
 
 // PublicationErrorFrame describes an error frame received by a publication from a receiver, a port of
@@ -56,49 +57,21 @@ func (f *PublicationErrorFrame) String() string {
 		f.ErrorCode, f.ErrorMessage, f.SourceAddress)
 }
 
-// PublicationErrorFrameFlyweight layout (io.aeron.command.PublicationErrorFrameFlyweight).
-const (
-	pubErrRegistrationIDOffset         = 0
-	pubErrDestinationRegIDOffset       = pubErrRegistrationIDOffset + 8
-	pubErrSessionIDOffset              = pubErrDestinationRegIDOffset + 8
-	pubErrStreamIDOffset               = pubErrSessionIDOffset + 4
-	pubErrReceiverIDOffset             = pubErrStreamIDOffset + 4
-	pubErrGroupTagOffset               = pubErrReceiverIDOffset + 8
-	pubErrAddressTypeOffset            = pubErrGroupTagOffset + 8
-	pubErrAddressPortOffset            = pubErrAddressTypeOffset + 2
-	pubErrAddressOffset                = pubErrAddressPortOffset + 2
-	pubErrErrorCodeOffset              = pubErrAddressOffset + 16
-	pubErrErrorMessageOffset           = pubErrErrorCodeOffset + 4
-	pubErrAddressTypeIPv4        int16 = 1
-	pubErrAddressTypeIPv6        int16 = 2
-)
-
 // decodePublicationErrorFrame decodes an ON_PUBLICATION_ERROR message into frame.
 func decodePublicationErrorFrame(buffer *atomic.Buffer, offset int32, length int32, frame *PublicationErrorFrame) error {
-	if length < pubErrErrorMessageOffset+4 {
-		return fmt.Errorf("publication error frame too short: %d", length)
+	var fly command.PublicationErrorFrame
+	fly.Wrap(buffer, offset)
+	if err := fly.ValidateLength(length); err != nil {
+		return err
 	}
-	frame.RegistrationID = buffer.GetInt64(offset + pubErrRegistrationIDOffset)
-	frame.DestinationRegistrationID = buffer.GetInt64(offset + pubErrDestinationRegIDOffset)
-	frame.SessionID = buffer.GetInt32(offset + pubErrSessionIDOffset)
-	frame.StreamID = buffer.GetInt32(offset + pubErrStreamIDOffset)
-	frame.ReceiverID = buffer.GetInt64(offset + pubErrReceiverIDOffset)
-	frame.GroupTag = buffer.GetInt64(offset + pubErrGroupTagOffset)
-	frame.ErrorCode = buffer.GetInt32(offset + pubErrErrorCodeOffset)
-
-	frame.SourceAddress = nil
-	port := int(buffer.GetUInt16(offset + pubErrAddressPortOffset))
-	switch int16(buffer.GetUInt16(offset + pubErrAddressTypeOffset)) {
-	case pubErrAddressTypeIPv4:
-		frame.SourceAddress = &net.UDPAddr{IP: net.IP(buffer.GetBytesArray(offset+pubErrAddressOffset, 4)), Port: port}
-	case pubErrAddressTypeIPv6:
-		frame.SourceAddress = &net.UDPAddr{IP: net.IP(buffer.GetBytesArray(offset+pubErrAddressOffset, 16)), Port: port}
-	}
-
-	msgLen := buffer.GetInt32(offset + pubErrErrorMessageOffset)
-	if msgLen < 0 || pubErrErrorMessageOffset+4+msgLen > length {
-		return fmt.Errorf("invalid publication error frame message length: %d", msgLen)
-	}
-	frame.ErrorMessage = string(buffer.GetBytesArray(offset+pubErrErrorMessageOffset+4, msgLen))
+	frame.RegistrationID = fly.RegistrationID()
+	frame.DestinationRegistrationID = fly.DestinationRegistrationID()
+	frame.SessionID = fly.SessionID()
+	frame.StreamID = fly.StreamID()
+	frame.ReceiverID = fly.ReceiverID()
+	frame.GroupTag = fly.GroupTag()
+	frame.ErrorCode = ErrorCodeFromValue(fly.ErrorCode()).Value()
+	frame.SourceAddress, _ = fly.SourceAddress()
+	frame.ErrorMessage = fly.ErrorMessage()
 	return nil
 }
