@@ -76,15 +76,10 @@ func streamID() int32 {
 var stackOnce sync.Once
 var stackErr error
 var stackUp atomic.Bool
+var stackLock *os.File
 
 // TestMain tears the compose stack down after the run so the next adversarial suite starts from a clean host.
-// Concurrent runs of this suite (for example two go test invocations) would fight over the same containers and
-// qdiscs, so a run holds an exclusive lock for its whole duration.
 func TestMain(m *testing.M) {
-	if lock, err := os.OpenFile("/tmp/aeron-adv-network-faults.lock", os.O_CREATE|os.O_RDWR, 0o666); err == nil {
-		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX)
-		defer lock.Close()
-	}
 	code := m.Run()
 	if stackUp.Load() {
 		_ = exec.Command("docker", "exec", netemContainer, "tc", "qdisc", "del", "dev", "lo", "root").Run()
@@ -103,6 +98,12 @@ func requireStack(t *testing.T) {
 	// Recreate the drivers once per test binary so no state (archive recordings, lingering channels) from an earlier
 	// run leaks into this one.
 	stackOnce.Do(func() {
+		// Concurrent runs of this suite (two go test invocations) would fight over the same containers and qdiscs,
+		// so a run holds an exclusive lock until it exits.
+		if lock, err := os.OpenFile("/tmp/aeron-adv-network-faults.lock", os.O_CREATE|os.O_RDWR, 0o666); err == nil {
+			_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX)
+			stackLock = lock // kept reachable so the finalizer doesn't close it and drop the lock
+		}
 		if exec.Command("docker", "image", "inspect", interopImage).Run() != nil {
 			out, err := exec.Command("docker", "compose", "-f", "../../../docker/interop/docker-compose.yml",
 				"--profile", "tools", "build").CombinedOutput()

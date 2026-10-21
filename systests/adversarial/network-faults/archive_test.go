@@ -74,8 +74,19 @@ func TestArchiveControlPartition(t *testing.T) {
 	require.Less(t, elapsed, archiveTimeout+500*time.Millisecond, "request blocked past the message timeout")
 	clearNetem(t)
 	require.Less(t, time.Since(start), imageLiveness)
-	_, err = arch.ListRecordings(0, 10)
-	require.NoError(t, err)
+	// The timed out request may still reach the archive once the partition heals. As with Java 1.53.3, the archive
+	// then rejects a new listing on the session with ACTIVE_LISTING until it has streamed the late listing, whose
+	// descriptors the client must discard; a retry then succeeds.
+	awaitTrue(t, "listing after heal", archiveTimeout+3*time.Second, func() bool {
+		_, err = arch.ListRecordings(0, 10)
+		var ae *archive.ArchiveException
+		if errors.As(err, &ae) && ae.ErrorCode == archive.ErrorCodeActiveListing {
+			time.Sleep(50 * time.Millisecond)
+			return false
+		}
+		require.NoError(t, err)
+		return true
+	})
 	require.NoError(t, arch.StopRecording(recCh, stream))
 
 	netem(t, toBoth("loss 100%", archiveCtlPort, rp))
