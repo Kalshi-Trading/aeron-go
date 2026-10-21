@@ -1,22 +1,22 @@
-/*
-Copyright 2016 Stanislav Liberman
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2026 Kalshi Trading
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package logbuffer
 
 import (
+	"errors"
+	"fmt"
 	"unsafe"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
@@ -26,84 +26,111 @@ import (
 
 var logger = logging.MustGetLogger("logbuffers")
 
-// LogBuffers is the struct providing access to the file or files representing the terms containing the ring buffer
+// LogBuffers provides access to the memory mapped log file containing the term partitions and the metadata section.
 type LogBuffers struct {
-	mmapFiles []*memmap.File
-	buffers   [PartitionCount + 1]atomic.Buffer
-	meta      LogBufferMetaData
-	refCount  int
+	mmapFiles  []*memmap.File
+	buffers    [PartitionCount + 1]atomic.Buffer
+	meta       LogBufferMetaData
+	refCount   int
+	termLength int32
+	fileName   string
 }
 
-// Wrap is the factory method wrapping the LogBuffers structure around memory mapped file
+// Wrap maps the log file and panics if it cannot be mapped or fails validation. Prefer NewLogBuffers.
 func Wrap(fileName string) *LogBuffers {
-	buffers := new(LogBuffers)
+	buffers, err := NewLogBuffers(fileName)
+	if err != nil {
+		panic(err)
+	}
+	return buffers
+}
 
+// NewLogBuffers maps an existing log file, validating the term length and page size stored in the metadata and
+// that the file length matches ComputeLogLength(termLength, pageSize).
+func NewLogBuffers(fileName string) (*LogBuffers, error) {
 	logLength := memmap.GetFileSize(fileName)
-	termLength := computeTermLength(int32(logLength))
-
-	checkTermLength(termLength)
-
-	if logLength < maxSingleMappingSize {
-		mmap, err := memmap.MapExisting(fileName, 0, 0)
-		if err != nil {
-			panic(err)
-		}
-
-		buffers.mmapFiles = []*memmap.File{mmap}
-		basePtr := mmap.GetMemoryPtr()
-		for i := 0; i < PartitionCount; i++ {
-			ptr := unsafe.Add(basePtr, int64(i)*int64(termLength))
-			buffers.buffers[i].Wrap(ptr, int32(termLength))
-		}
-
-		ptr := unsafe.Add(basePtr, logLength-int64(LogMetaDataLength))
-		buffers.buffers[LogMetaDataSectionIndex].Wrap(ptr, LogMetaDataLength)
-
-		buffers.meta.Wrap(&buffers.buffers[LogMetaDataSectionIndex], 0)
-
-		//metaBytes := buffers.buffers[LogMetaDataSectionIndex].GetBytesArray(0, LogMetaDataLength)
-		//util.Print(metaBytes)
-
-		//fmt.Printf("meta: TermLen: %d \n", buffers.meta.TermLen.Get())
-		//fmt.Printf("meta: PageSize: %d \n", buffers.meta.PageSize.Get())
-		//fmt.Printf("meta: CorrelationId: %d \n", buffers.meta.CorrelationId.Get())
-		//fmt.Printf("meta: InitTermID: %d \n", buffers.meta.InitTermID.Get())
-		//fmt.Printf("meta: MTULen: %d \n", buffers.meta.MTULen.Get())
-		//fmt.Printf("meta: EndOfStreamPosOff: %d \n", buffers.meta.EndOfStreamPosOff.Get())
-	} else {
-		buffers.mmapFiles = make([]*memmap.File, PartitionCount+1)
-		metaDataSectionOffset := int64(termLength) * int64(LogMetaDataSectionIndex)
-		metaDataSectionLength := int(logLength - metaDataSectionOffset)
-
-		mmap, err := memmap.MapExisting(fileName, metaDataSectionOffset, metaDataSectionLength)
-		if err != nil {
-			panic("Failed to map the log buffer")
-		}
-		buffers.mmapFiles = append(buffers.mmapFiles, mmap)
-
-		for i := 0; i < PartitionCount; i++ {
-			// one map for each term
-			mmap, err := memmap.MapExisting(fileName, int64(i)*int64(termLength), int(termLength))
-			if err != nil {
-				panic("Failed to map the log buffer")
-			}
-			buffers.mmapFiles = append(buffers.mmapFiles, mmap)
-
-			basePtr := buffers.mmapFiles[i+1].GetMemoryPtr()
-
-			buffers.buffers[i].Wrap(basePtr, int32(termLength))
-		}
-		metaDataBasePtr := buffers.mmapFiles[0].GetMemoryPtr()
-		buffers.buffers[LogMetaDataSectionIndex].Wrap(metaDataBasePtr, LogMetaDataLength)
-		buffers.meta.Wrap(&buffers.buffers[PartitionCount], 0)
+	if logLength < 0 {
+		return nil, fmt.Errorf("log buffer file not found: %s", fileName)
+	}
+	minLength := int64(TermMinLength)*PartitionCount + int64(LogMetaDataLength)
+	if logLength < minLength {
+		return nil, fmt.Errorf("log buffer length less than min length of %d: length=%d file=%s",
+			minLength, logLength, fileName)
 	}
 
-	return buffers
+	mmap, err := memmap.MapExisting(fileName, 0, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to map log buffer %s: %w", fileName, err)
+	}
+
+	buffers := &LogBuffers{mmapFiles: []*memmap.File{mmap}, fileName: fileName}
+	base := mmap.GetMemoryPtr()
+	metaPtr := unsafe.Add(base, logLength-int64(LogMetaDataLength))
+	buffers.buffers[LogMetaDataSectionIndex].Wrap(metaPtr, LogMetaDataLength)
+	buffers.meta.Wrap(&buffers.buffers[LogMetaDataSectionIndex], 0)
+
+	termLength := buffers.meta.TermLength()
+	pageSize := buffers.meta.PageSize()
+	if err := CheckTermLength(termLength); err != nil {
+		mmap.Close()
+		return nil, fmt.Errorf("%w: file=%s", err, fileName)
+	}
+	if err := CheckPageSize(pageSize); err != nil {
+		mmap.Close()
+		return nil, fmt.Errorf("%w: file=%s", err, fileName)
+	}
+	if expected := ComputeLogLength(termLength, pageSize); expected != logLength {
+		mmap.Close()
+		return nil, fmt.Errorf("log buffer length %d does not match expected %d for termLength=%d pageSize=%d: file=%s",
+			logLength, expected, termLength, pageSize, fileName)
+	}
+
+	buffers.termLength = termLength
+	for i := 0; i < PartitionCount; i++ {
+		ptr := unsafe.Add(base, int64(i)*int64(termLength))
+		buffers.buffers[i].Wrap(ptr, termLength)
+	}
+	return buffers, nil
 }
 
 // Meta return log buffer meta data flyweight
 func (logBuffers *LogBuffers) Meta() *LogBufferMetaData {
 	return &logBuffers.meta
+}
+
+// MetaDataBuffer returns the buffer over the log metadata section.
+func (logBuffers *LogBuffers) MetaDataBuffer() *atomic.Buffer {
+	return &logBuffers.buffers[LogMetaDataSectionIndex]
+}
+
+// TermBuffers returns the term partition buffers.
+func (logBuffers *LogBuffers) TermBuffers() []*atomic.Buffer {
+	terms := make([]*atomic.Buffer, PartitionCount)
+	for i := range terms {
+		terms[i] = &logBuffers.buffers[i]
+	}
+	return terms
+}
+
+// TermLength returns the length of each term partition.
+func (logBuffers *LogBuffers) TermLength() int32 {
+	return logBuffers.termLength
+}
+
+// FileName returns the name of the mapped log file.
+func (logBuffers *LogBuffers) FileName() string {
+	return logBuffers.fileName
+}
+
+// PreTouch touches every page of the term buffers so they are faulted in before use.
+func (logBuffers *LogBuffers) PreTouch() {
+	pageSize := logBuffers.meta.PageSize()
+	for i := 0; i < PartitionCount; i++ {
+		term := &logBuffers.buffers[i]
+		for offset := int32(0); offset < logBuffers.termLength; offset += pageSize {
+			term.CompareAndSetInt32(offset, 0, 0)
+		}
+	}
 }
 
 // Buffer returns a buffer backing a specific term based on index. PartitionLength+1 is the size of the buffer array,
@@ -112,16 +139,17 @@ func (logBuffers *LogBuffers) Buffer(index int) *atomic.Buffer {
 	return &logBuffers.buffers[index]
 }
 
-// Close will try to unmap all backing memory maps
+// Close unmaps the backing memory maps, returning all errors encountered.
 func (logBuffers *LogBuffers) Close() error {
 	logger.Debug("Closing logBuffers")
-	// TODO accumulate errors
-	var err error
+	var errs []error
 	for _, mmap := range logBuffers.mmapFiles {
-		err = mmap.Close()
+		if err := mmap.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	logBuffers.mmapFiles = nil
-	return err
+	return errors.Join(errs...)
 }
 
 // IncRef increments the reference count. Returns the current reference count after increment.

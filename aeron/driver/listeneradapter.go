@@ -242,7 +242,8 @@ func (adapter *ListenerAdapter) ReceiveMessages() int {
 			logger.Debugf("received ON_PUBLICATION_ERROR")
 			adapter.listener.OnPublicationError(buffer, offset, length)
 		default:
-			// Java silently ignores unhandled events (e.g. ON_STATIC_COUNTER / ON_NEXT_AVAILABLE_SESSION_ID for other clients).
+			// Java silently ignores unhandled events (e.g. ON_STATIC_COUNTER / ON_NEXT_AVAILABLE_SESSION_ID for other clients,
+			// or ON_PUBLICATION_ERROR broadcast after an image is rejected).
 			logger.Debugf("received unhandled %d", msgTypeID)
 		}
 	}
