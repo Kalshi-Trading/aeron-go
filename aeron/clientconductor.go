@@ -847,7 +847,30 @@ func (cc *ClientConductor) AsyncRemovePublication(registrationID int64) error {
 	if err := cc.ensureOpen(); err != nil {
 		return err
 	}
+	if cc.removePendingLocked(registrationID, kindPendingPublication, kindPendingExclusivePublication) {
+		_, err := cc.driverProxy.RemovePublication(registrationID, false)
+		return err
+	}
 	return cc.releasePublicationLocked(registrationID, false)
+}
+
+// removePendingLocked forgets an async add which the driver has not yet answered, so that a later ready response
+// is ignored. Like Java ClientConductor.removePublication/removeSubscription the caller then sends the driver remove.
+func (cc *ClientConductor) removePendingLocked(registrationID int64, kinds ...resourceKind) bool {
+	res := cc.resources[registrationID]
+	if res == nil {
+		// A failed add whose error was never collected: the driver holds nothing to remove.
+		delete(cc.asyncErrors, registrationID)
+		return false
+	}
+	for _, k := range kinds {
+		if res.kind == k {
+			delete(cc.resources, registrationID)
+			delete(cc.asyncCommandIDs, registrationID)
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -949,6 +972,10 @@ func (cc *ClientConductor) AsyncRemoveSubscription(registrationID int64) error {
 	cc.adminLock.Lock()
 	defer cc.unlock()
 	if err := cc.ensureOpen(); err != nil {
+		return err
+	}
+	if cc.removePendingLocked(registrationID, kindPendingSubscription) {
+		_, err := cc.driverProxy.RemoveSubscription(registrationID)
 		return err
 	}
 	res := cc.resources[registrationID]

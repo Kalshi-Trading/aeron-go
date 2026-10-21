@@ -5,9 +5,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
+	"github.com/lirm/aeron-go/aeron/idlestrategy"
 	"github.com/lirm/aeron-go/aeron/logbuffer/term"
 	"github.com/lirm/aeron-go/archive/codecs"
 	"github.com/stretchr/testify/assert"
@@ -32,11 +34,10 @@ func TestOptionsConcludeAppliesControlChannelDefaults(t *testing.T) {
 		assert.Equal(t, "4096", uri.Get(aeron.MtuLengthParamName))
 		assert.Equal(t, "false", uri.Get(aeron.SparseParamName))
 	}
-	req, _ := aeron.ParseChannelUri(c.RequestChannel)
-	resp, _ := aeron.ParseChannelUri(c.ResponseChannel)
-	assert.NotEmpty(t, req.Get(aeron.SessionIdParamName))
-	assert.Equal(t, req.Get(aeron.SessionIdParamName), resp.Get(aeron.SessionIdParamName))
+	assert.NotContains(t, c.RequestChannel, "session-id", "session-id comes from the driver in NewAsyncConnect")
 	assert.NotNil(t, c.Lock)
+	assert.NotNil(t, c.IdleStrategy)
+	assert.Equal(t, MessageRetryAttemptsDefault, c.MessageRetryAttempts)
 	assert.NotNil(t, c.CredentialsSupplier)
 	assert.Error(t, c.conclude(), "double conclude")
 }
@@ -49,15 +50,40 @@ func TestOptionsConcludeKeepsExplicitParams(t *testing.T) {
 	assert.Equal(t, "1m", uri.Get(aeron.TermLengthParamName))
 	assert.Equal(t, "8k", uri.Get(aeron.MtuLengthParamName))
 	assert.Equal(t, "false", uri.Get(aeron.SparseParamName))
-	assert.Equal(t, "7", uri.Get(aeron.SessionIdParamName))
+}
+
+func TestOptionsApplySessionIDOverwritesLikeJava(t *testing.T) {
+	o := DefaultOptions()
+	o.RequestChannel = "aeron:udp?endpoint=localhost:8010|session-id=7"
+	require.NoError(t, o.conclude())
+	var stream int32
+	require.NoError(t, o.applySessionID(func(s int32) (int32, error) { stream = s; return -42, nil }))
+	assert.Equal(t, o.RequestStream, stream)
+	req, _ := aeron.ParseChannelUri(o.RequestChannel)
 	resp, _ := aeron.ParseChannelUri(o.ResponseChannel)
-	assert.Empty(t, resp.Get(aeron.SessionIdParamName))
+	assert.Equal(t, "-42", req.Get(aeron.SessionIdParamName))
+	assert.Equal(t, "-42", resp.Get(aeron.SessionIdParamName))
+
+	boom := errors.New("boom")
+	o = DefaultOptions()
+	require.NoError(t, o.conclude())
+	assert.ErrorIs(t, o.applySessionID(func(int32) (int32, error) { return 0, boom }), boom)
+}
+
+func TestOptionsDefaultsMatchJava(t *testing.T) {
+	o := DefaultOptions()
+	assert.Equal(t, 10*time.Second, o.Timeout, "Java MESSAGE_TIMEOUT_DEFAULT_NS")
+	assert.Equal(t, 3, o.MessageRetryAttempts, "Java MESSAGE_RETRY_ATTEMPTS_DEFAULT")
+	require.NoError(t, o.conclude())
+	_, isBackoff := o.IdleStrategy.(*idlestrategy.BackoffIdleStrategy)
+	assert.True(t, isBackoff, "Java defaults to a BackoffIdleStrategy, got %T", o.IdleStrategy)
 }
 
 func TestOptionsConcludeResponseModeHasNoSessionID(t *testing.T) {
 	o := DefaultOptions()
 	o.ResponseChannel = "aeron:udp?control-mode=response|control=localhost:10002"
 	require.NoError(t, o.conclude())
+	require.NoError(t, o.applySessionID(func(int32) (int32, error) { panic("must not allocate") }))
 	assert.NotContains(t, o.RequestChannel, "session-id")
 	assert.NotContains(t, o.ResponseChannel, "session-id")
 }
@@ -67,6 +93,7 @@ func TestOptionsConcludeValidation(t *testing.T) {
 		"request":  func(o *Options) { o.RequestChannel = "" },
 		"response": func(o *Options) { o.ResponseChannel = "" },
 		"timeout":  func(o *Options) { o.Timeout = 0 },
+		"retries":  func(o *Options) { o.MessageRetryAttempts = -1 },
 		"name":     func(o *Options) { o.ClientName = strings.Repeat("x", MaxClientNameLength+1) },
 		"uri":      func(o *Options) { o.RequestChannel = "not-a-uri" },
 	} {
