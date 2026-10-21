@@ -90,7 +90,7 @@ func ReadSince(buffer *atomic.Buffer, consumer ErrorConsumer, sinceTimestampMs i
 		if length > capacity-offset {
 			length = capacity - offset
 		}
-		if length <= 0 {
+		if length < EncodedErrorOffset {
 			break
 		}
 		lastTs := buffer.GetInt64Volatile(offset + LastObservationTimestampOffset)

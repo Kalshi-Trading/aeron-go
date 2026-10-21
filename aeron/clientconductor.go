@@ -1608,7 +1608,6 @@ func (cc *ClientConductor) OnPublicationError(buffer *atomic.Buffer, offset int3
 		if (res.kind == kindPublication || res.kind == kindExclusivePublication) &&
 			res.pubBase.originalRegID == frame.RegistrationID {
 			cc.queueCallback(func() { h(&frame) })
-			return
 		}
 	}
 }
