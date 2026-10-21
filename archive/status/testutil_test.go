@@ -69,7 +69,7 @@ func recordingPosKey(recordingId int64, sessionId int32, sourceIdentity string, 
 		b := []byte(sourceIdentity)
 		key.PutInt32(SourceIdentityLengthOffset, int32(len(b)))
 		if len(b) > 0 {
-			key.PutBytesArray(SourceIdentityOffset, &b, 0, int32(len(b)))
+			key.PutBytesSlice(SourceIdentityOffset, b)
 		}
 		key.PutInt64(SourceIdentityOffset+int32(len(b)), archiveId)
 	}

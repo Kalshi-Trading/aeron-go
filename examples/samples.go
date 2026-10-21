@@ -109,7 +109,7 @@ func imageSubscription(image aeron.Image) (string, int32) {
 func PrintStringMessage(streamID int32) term.FragmentHandler {
 	return func(buffer *aatomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
 		fmt.Printf("Message to stream %d from session %d (%d@%d) <<%s>>\n",
-			streamID, header.SessionId(), length, offset, string(buffer.GetBytesArray(offset, length)))
+			streamID, header.SessionID(), length, offset, string(buffer.GetBytesArray(offset, length)))
 	}
 }
 

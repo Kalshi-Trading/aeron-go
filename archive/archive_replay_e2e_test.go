@@ -187,7 +187,7 @@ func TestE2ERecordingAndReplay(t *testing.T) {
 		}
 		var counter *aeron.Counter
 		eventually(t, "counter", func() bool {
-			counter, err = a.aeron.FindCounter(counterRegistrationID)
+			counter, err = a.aeron.GetCounter(counterRegistrationID)
 			return err == nil && counter != nil
 		})
 		defer counter.Close()
@@ -195,7 +195,7 @@ func TestE2ERecordingAndReplay(t *testing.T) {
 
 		params := NewReplayParams()
 		params.Position = 0
-		params.BoundingLimitCounterID = counter.Id()
+		params.BoundingLimitCounterID = counter.ID()
 		replaySessionID, err := a.StartReplayWithParams(recordingID, replayChannel, replayStream, params)
 		if err != nil {
 			t.Fatalf("bounded StartReplayWithParams: %v", err)

@@ -69,7 +69,7 @@ func offerAll(t *testing.T, pub *aeron.Publication, from, count int) {
 	buf := atomic.MakeBuffer(make([]byte, 64))
 	for i := from; i < from+count; i++ {
 		msg := []byte(fmt.Sprintf("msg-%06d", i))
-		buf.PutBytesArray(0, &msg, 0, int32(len(msg)))
+		buf.PutBytesSlice(0, msg)
 		await(t, "offer", 5*time.Second, func() bool { return pub.Offer(buf, 0, int32(len(msg)), nil) > 0 })
 	}
 }
@@ -123,7 +123,7 @@ func TestE2ERecordingPosAndBoundedReplay(t *testing.T) {
 	require.Equal(t, counterId, status.FindCounterIdByRecording(reader, recordingId, e2eArchiveId))
 	require.Equal(t, counterId, status.FindCounterIdByRecording(reader, recordingId, status.NullValue))
 	require.Equal(t, counters.NullCounterId, status.FindCounterIdByRecording(reader, recordingId, e2eArchiveId+1))
-	require.Equal(t, counterId, archive.FindCounterIdBySession(reader, pub.SessionID()))
+	require.Equal(t, counterId, status.FindCounterIdBySession(reader, pub.SessionID(), status.NullValue))
 	require.Equal(t, e2eArchiveId, status.GetArchiveId(reader, counterId))
 	sid, ok := status.GetSessionId(reader, counterId)
 	require.True(t, ok)
@@ -227,7 +227,7 @@ func TestE2EBoundedReplayStopsAtLimitCounter(t *testing.T) {
 	require.NoError(t, err)
 	var limit *aeron.Counter
 	await(t, "limit counter", 5*time.Second, func() bool {
-		limit, err = a.FindCounter(regId)
+		limit, err = a.GetCounter(regId)
 		require.NoError(t, err)
 		return limit != nil
 	})
@@ -244,7 +244,7 @@ func TestE2EBoundedReplayStopsAtLimitCounter(t *testing.T) {
 		require.Equal(t, fmt.Sprintf("msg-%06d", received), string(buffer.GetBytesArray(offset, length)))
 		received++
 	}
-	replaySessionId, err := arch.BoundedReplay(recordingId, 0, math.MaxInt64, limit.Id(), replayStream, replayChannel)
+	replaySessionId, err := arch.BoundedReplay(recordingId, 0, math.MaxInt64, limit.ID(), replayStream, replayChannel)
 	require.NoError(t, err)
 	defer func() { _ = arch.StopReplay(replaySessionId) }()
 
@@ -257,7 +257,7 @@ func TestE2EBoundedReplayStopsAtLimitCounter(t *testing.T) {
 
 	limit.Counter().Set(int64(end))
 	await(t, "second half", 10*time.Second, func() bool { sub.Poll(handler, 100); return received >= total })
-	t.Logf("limit counter %d gated replay at %d msgs (pos %d) then released to %d (pos %d)", limit.Id(), 100, halfway, received, end)
+	t.Logf("limit counter %d gated replay at %d msgs (pos %d) then released to %d (pos %d)", limit.ID(), 100, halfway, received, end)
 }
 
 func labelOf(reader *counters.Reader, counterId int32) string {

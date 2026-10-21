@@ -91,7 +91,7 @@ func (h *HeaderFlyweight) getInt64Unaligned(o int32) int64 {
 func (h *HeaderFlyweight) putInt64Unaligned(o int32, v int64) {
 	b := make([]byte, 8)
 	binary.LittleEndian.PutUint64(b, uint64(v))
-	h.buf.PutBytesArray(h.offset+o, &b, 0, 8)
+	h.buf.PutBytesSlice(h.offset+o, b[:8])
 }
 
 // FlagsToChars renders flags as 8 '0'/'1' characters, most significant bit first.

@@ -161,7 +161,7 @@ func imageForHeader(subscription *aeron.Subscription, header *logbuffer.Header) 
 	if subscription == nil {
 		return nil
 	}
-	return subscription.ImageBySessionID(header.SessionId())
+	return subscription.ImageBySessionID(header.SessionID())
 }
 
 // isImageClosed reports whether img has been closed or removed from the subscription. The Go Header carries no

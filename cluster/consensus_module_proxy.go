@@ -60,19 +60,6 @@ func (proxy *consensusModuleProxy) cancelTimer(correlationId int64) bool {
 	return proxy.send(buf, SBEHeaderLength+cancelTimerBlockLength)
 }
 
-// clusterMembersQuery requests the cluster membership; the response is delivered as egress to the requester
-// (ClusterMembersResponse/ClusterMembersExtendedResponse), matching ConsensusModuleProxy.clusterMembersQuery.
-func (proxy *consensusModuleProxy) clusterMembersQuery(correlationId int64, extended bool) bool {
-	buf := proxy.initBuffer(clusterMembersQueryTemplateId, clusterMembersQueryBlockLength)
-	buf.PutInt64(SBEHeaderLength, correlationId)
-	var ext int32
-	if extended {
-		ext = 1
-	}
-	buf.PutInt32(SBEHeaderLength+8, ext)
-	return proxy.send(buf, SBEHeaderLength+clusterMembersQueryBlockLength)
-}
-
 func (proxy *consensusModuleProxy) initBuffer(templateId uint16, blockLength uint16) *atomic.Buffer {
 	buf := proxy.buffer
 	buf.PutUInt16(0, blockLength)

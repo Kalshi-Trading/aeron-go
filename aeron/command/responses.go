@@ -697,7 +697,7 @@ func (m *PublicationErrorFrame) SetSourceAddress(addr *net.UDPAddr) error {
 	}
 	m.buffer.PutUInt16(m.offset+pubErrAddressTypeOffset, addressType)
 	m.buffer.PutUInt16(m.offset+pubErrAddressPortOffset, uint16(addr.Port))
-	m.buffer.PutBytesArray(m.offset+pubErrAddressOffset, &ip, 0, ipv6AddressLength)
+	m.buffer.PutBytesSlice(m.offset+pubErrAddressOffset, ip[:ipv6AddressLength])
 	return nil
 }
 

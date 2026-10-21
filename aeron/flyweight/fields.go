@@ -200,7 +200,7 @@ func (fld *LengthAndRawDataField) CopyBuffer(buffer *atomic.Buffer, offset int32
 func (fld *LengthAndRawDataField) CopyString(data string) {
 	fld.SetLength(int32(len(data)))
 	bArr := []byte(data)
-	fld.buf.PutBytesArray(0, &bArr, 0, int32(len(data)))
+	fld.buf.PutBytesSlice(0, bArr[:len(data)])
 }
 
 func (fld *LengthAndRawDataField) GetAsBuffer() *atomic.Buffer {

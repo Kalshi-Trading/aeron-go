@@ -78,7 +78,7 @@ func appendToCounterLabel(metaData *atomic.Buffer, counterID int32, value string
 	if len(b) == 0 {
 		return 0, nil
 	}
-	metaData.PutBytesArray(recordOffset+ctr.LabelOffset+4+existing, &b, 0, int32(len(b)))
+	metaData.PutBytesSlice(recordOffset+ctr.LabelOffset+4+existing, b)
 	metaData.PutInt32Ordered(recordOffset+ctr.LabelOffset, existing+int32(len(b)))
 	return int32(len(b)), nil
 }

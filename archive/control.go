@@ -69,14 +69,6 @@ type ControlResults struct {
 	ErrorResponse                    error // An *ArchiveException when the archive returned an ERROR response
 }
 
-// PollContext contains the information we'll need in the image Poll()
-// callback to match against our request or for async events to invoke
-// the appropriate listener
-type PollContext struct {
-	control       *Control
-	correlationID int64
-}
-
 var ErrNotConnected = fmt.Errorf("not connected")
 
 // CodecIds stops us allocating every object when we need only one

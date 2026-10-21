@@ -59,9 +59,9 @@ func (reader *Reader) forEachAllocated(fn func(counterId int32, metaDataOffset i
 	}
 }
 
-// FindByRegistrationId returns the id of the first allocated counter with the given registration id, or
+// FindByRegistrationID returns the id of the first allocated counter with the given registration id, or
 // NullCounterId.
-func (reader *Reader) FindByRegistrationId(registrationId int64) int32 {
+func (reader *Reader) FindByRegistrationID(registrationId int64) int32 {
 	result := NullCounterId
 	reader.findAllocated(func(counterId int32, metaDataOffset int32) bool {
 		if registrationId == reader.values.GetInt64Volatile(counterOffset(counterId)+RegistrationIdOffset) {
@@ -73,9 +73,9 @@ func (reader *Reader) FindByRegistrationId(registrationId int64) int32 {
 	return result
 }
 
-// FindByTypeIdAndRegistrationId returns the id of the first allocated counter with the given type id and registration
+// FindByTypeIDAndRegistrationID returns the id of the first allocated counter with the given type id and registration
 // id, or NullCounterId.
-func (reader *Reader) FindByTypeIdAndRegistrationId(typeId int32, registrationId int64) int32 {
+func (reader *Reader) FindByTypeIDAndRegistrationID(typeId int32, registrationId int64) int32 {
 	result := NullCounterId
 	reader.findAllocated(func(counterId int32, metaDataOffset int32) bool {
 		if typeId == reader.metaData.GetInt32(metaDataOffset+TypeIdOffset) &&
@@ -103,8 +103,8 @@ func (reader *Reader) findAllocated(match func(counterId int32, metaDataOffset i
 	}
 }
 
-// GetCounterReferenceId returns the reference id of the counter, or DefaultReferenceId if out of range.
-func (reader *Reader) GetCounterReferenceId(counterId int32) int64 {
+// GetCounterReferenceID returns the reference id of the counter, or DefaultReferenceId if out of range.
+func (reader *Reader) GetCounterReferenceID(counterId int32) int64 {
 	if !reader.isValidCounterId(counterId) {
 		return DefaultReferenceId
 	}

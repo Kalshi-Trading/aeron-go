@@ -134,7 +134,7 @@ func TestE2EEchoKeepAliveAdminSnapshot(t *testing.T) {
 	for cl.TryClaim(int32(len(payload)), &claim) < 0 {
 		cl.PollEgress()
 	}
-	claim.Buffer().PutBytesArray(claim.Offset()+SessionHeaderLength, &payload, 0, int32(len(payload)))
+	claim.Buffer().PutBytesSlice(claim.Offset()+SessionHeaderLength, payload)
 	claim.Commit()
 	// Large fragmented message exercises the fragment assembler.
 	large := make([]byte, 6000)

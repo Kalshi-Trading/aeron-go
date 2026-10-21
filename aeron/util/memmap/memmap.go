@@ -143,7 +143,9 @@ func (mmap *File) Close() (err error) {
 }
 
 func doMap(f *os.File, offset int64, length int) (*File, error) {
-
+	if length <= 0 {
+		return nil, fmt.Errorf("mmap: invalid map length %d", length)
+	}
 	mm, err := mapper.MapRegion(f, length, mapper.RDWR, 0, offset)
 	if err != nil {
 		return nil, err

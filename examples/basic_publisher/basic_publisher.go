@@ -60,7 +60,7 @@ func main() {
 	for i := 0; i < messages && ctx.Err() == nil; i++ {
 		fmt.Printf("Offering %d/%d - ", i, messages)
 		msg := []byte(fmt.Sprintf("Hello World! %d", i))
-		buffer.PutBytesArray(0, &msg, 0, int32(len(msg)))
+		buffer.PutBytesSlice(0, msg)
 		result := publication.Offer(buffer, 0, int32(len(msg)), nil)
 		if result > 0 {
 			fmt.Println("yay!")

@@ -198,8 +198,8 @@ func TestJavaPublisherToGoImagePolls(t *testing.T) {
 	var received []int
 	record := func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
 		require.Equal(t, int32(messageLength), length)
-		require.Equal(t, image.SessionID(), header.SessionId())
-		require.Equal(t, int32(2001), header.StreamId())
+		require.Equal(t, image.SessionID(), header.SessionID())
+		require.Equal(t, int32(2001), header.StreamID())
 		require.Equal(t, header.TermOffset()+frameLength, header.NextTermOffset())
 		require.Equal(t, uint8(0xC0), header.Flags())
 		received = append(received, payloadIndex(buffer, offset))

@@ -53,7 +53,7 @@ func (hdr *Header) SetBuffer(buffer *atomic.Buffer) *Header {
 // Position calculates the position the image will have advanced to on consuming this message, taking into account
 // the fragmented frame length when the message was reassembled.
 func (hdr *Header) Position() int64 {
-	return ComputePosition(hdr.TermId(), hdr.NextTermOffset(), hdr.positionBitsToShift, hdr.initialTermID)
+	return ComputePosition(hdr.TermID(), hdr.NextTermOffset(), hdr.positionBitsToShift, hdr.initialTermID)
 }
 
 // Offset is the offset of the frame header within the buffer.
@@ -69,20 +69,21 @@ func (hdr *Header) FrameLength() int32 {
 	return GetFrameLength(&hdr.buffer, hdr.offset)
 }
 
-func (hdr *Header) TermId() int32 {
-	return GetTermId(&hdr.buffer, hdr.offset)
+func (hdr *Header) TermID() int32 {
+	return GetFrameTermID(&hdr.buffer, hdr.offset)
 }
 
-func (hdr *Header) SessionId() int32 {
-	return GetSessionId(&hdr.buffer, hdr.offset)
+func (hdr *Header) SessionID() int32 {
+	return GetFrameSessionID(&hdr.buffer, hdr.offset)
 }
 
-func (hdr *Header) StreamId() int32 {
-	return GetStreamId(&hdr.buffer, hdr.offset)
+func (hdr *Header) StreamID() int32 {
+	return GetFrameStreamID(&hdr.buffer, hdr.offset)
 }
 
+// Deprecated: use ReservedValue.
 func (hdr *Header) GetReservedValue() int64 {
-	return GetReservedValue(&hdr.buffer, hdr.offset)
+	return hdr.ReservedValue()
 }
 
 func (hdr *Header) SetOffset(offset int32) *Header {
@@ -90,7 +91,7 @@ func (hdr *Header) SetOffset(offset int32) *Header {
 	return hdr
 }
 
-func (hdr *Header) InitialTermId() int32 {
+func (hdr *Header) InitialTermID() int32 {
 	return hdr.initialTermID
 }
 
@@ -109,7 +110,7 @@ func (hdr *Header) SetReservedValue(reservedValue int64) *Header {
 	return hdr
 }
 
-func (hdr *Header) SetSessionId(value int32) *Header {
+func (hdr *Header) SetSessionID(value int32) *Header {
 	hdr.buffer.PutInt32(sessionIdOffset(hdr.offset), value)
 	return hdr
 }

@@ -26,13 +26,13 @@ import (
 func TestChannelUriStringBuilderValidate(t *testing.T) {
 	assert.Error(t, NewChannelUriStringBuilder().Validate())
 	assert.Error(t, NewChannelUriStringBuilder().Media("udp").Validate())
-	assert.Error(t, NewChannelUriStringBuilder().Media("udp").Endpoint("address:port").TermId(999).Validate())
+	assert.Error(t, NewChannelUriStringBuilder().Media("udp").Endpoint("address:port").TermID(999).Validate())
 	assert.NoError(t, NewChannelUriStringBuilder().Media("udp").ControlEndpoint("localhost:1").Validate())
 	assert.NoError(t, NewChannelUriStringBuilder().Media("ipc").Validate())
-	assert.Error(t, NewChannelUriStringBuilder().Media("ipc").InitialTermId(10).TermId(5).TermOffset(0).Validate())
-	assert.Error(t, NewChannelUriStringBuilder().Media("ipc").InitialTermId(0).TermId(0).TermOffset(1<<20).
+	assert.Error(t, NewChannelUriStringBuilder().Media("ipc").InitialTermID(10).TermID(5).TermOffset(0).Validate())
+	assert.Error(t, NewChannelUriStringBuilder().Media("ipc").InitialTermID(0).TermID(0).TermOffset(1<<20).
 		TermLength(64*1024).Validate())
-	assert.NoError(t, NewChannelUriStringBuilder().Media("ipc").InitialTermId(0).TermId(1).TermOffset(64).
+	assert.NoError(t, NewChannelUriStringBuilder().Media("ipc").InitialTermID(0).TermID(1).TermOffset(64).
 		TermLength(64*1024).Validate())
 }
 
@@ -50,7 +50,7 @@ func TestChannelUriStringBuilderGenerate(t *testing.T) {
 		{"complexUdp", NewChannelUriStringBuilder().Media("udp").Endpoint("localhost:9999").Ttl(9).
 			TermLength(1024 * 128), "aeron:udp?endpoint=localhost:9999|term-length=128k|ttl=9"},
 		{"replayUdp", NewChannelUriStringBuilder().Media("udp").Endpoint("address:9999").TermLength(1024 * 128).
-			InitialTermId(777).TermId(999).TermOffset(64),
+			InitialTermID(777).TermID(999).TermOffset(64),
 			"aeron:udp?endpoint=address:9999|term-length=128k|init-term-id=777|term-id=999|term-offset=64"},
 		{"socketParams", NewChannelUriStringBuilder().Media("udp").Endpoint("address:9999").
 			SocketSndbufLength(8192).SocketRcvbufLength(4096), "aeron:udp?endpoint=address:9999|so-sndbuf=8k|so-rcvbuf=4k"},
@@ -61,9 +61,9 @@ func TestChannelUriStringBuilderGenerate(t *testing.T) {
 		{"mdcDynamic", NewChannelUriStringBuilder().Media("udp").ControlEndpoint("localhost:40456").
 			ControlMode(MdcControlModeDynamic).ChannelAndEntityTags(1, 2),
 			"aeron:udp?tags=1,2|control=localhost:40456|control-mode=dynamic"},
-		{"taggedSession", NewChannelUriStringBuilder().Media("ipc").TaggedSessionId(123456),
+		{"taggedSession", NewChannelUriStringBuilder().Media("ipc").TaggedSessionID(123456),
 			"aeron:ipc?session-id=tag:123456"},
-		{"untaggedSessionAfterTag", NewChannelUriStringBuilder().Media("ipc").TaggedSessionId(5).SessionId(-6),
+		{"untaggedSessionAfterTag", NewChannelUriStringBuilder().Media("ipc").TaggedSessionID(5).SessionID(-6),
 			"aeron:ipc?session-id=-6"},
 		{"maxFc", NewChannelUriStringBuilder().Media("udp").Endpoint("x:1").MaxFlowControl(),
 			"aeron:udp?endpoint=x:1|fc=max"},
@@ -79,9 +79,9 @@ func TestChannelUriStringBuilderGenerate(t *testing.T) {
 		{"taggedFcMinOnly", NewChannelUriStringBuilder().Media("udp").Endpoint("x:1").
 			TaggedFlowControl(nil, cubPtr(int32(4)), ""), "aeron:udp?endpoint=x:1|fc=tagged,g:/4"},
 		{"response", NewChannelUriStringBuilder().Media("udp").ControlEndpoint("localhost:10001").
-			ControlMode(ControlModeResponse).ResponseCorrelationId(42),
+			ControlMode(ControlModeResponse).ResponseCorrelationID(42),
 			"aeron:udp?control=localhost:10001|control-mode=response|response-correlation-id=42"},
-		{"responsePrototype", NewChannelUriStringBuilder().Media("ipc").ResponseCorrelationIdString("prototype"),
+		{"responsePrototype", NewChannelUriStringBuilder().Media("ipc").ResponseCorrelationIDString("prototype"),
 			"aeron:ipc?response-correlation-id=prototype"},
 		{"bools", NewChannelUriStringBuilder().Media("ipc").Reliable(false).Sparse(true).Eos(false).Tether(true).
 			Group(true).Rejoin(false).SpiesSimulateConnection(true),
@@ -154,8 +154,8 @@ func TestChannelUriStringBuilderFromStringWithTaggedSessionIdAndIpc(t *testing.T
 	uri := "aeron:ipc?session-id=tag:123456"
 	b, err := NewChannelUriStringBuilderFromString(uri)
 	require.NoError(t, err)
-	assert.True(t, b.GetIsSessionIdTagged())
-	id, _ := b.GetSessionId()
+	assert.True(t, b.GetIsSessionIDTagged())
+	id, _ := b.GetSessionID()
 	assert.Equal(t, int64(123456), id)
 	assert.Empty(t, MustParseChannelUri(uri).diff(MustParseChannelUri(b.MustBuild())))
 }
@@ -209,7 +209,7 @@ func TestChannelUriStringBuilderSetterErrors(t *testing.T) {
 		"mediaRcvTs":   NewChannelUriStringBuilder().MediaReceiveTimestampOffset("breserved"),
 		"channelRcvTs": NewChannelUriStringBuilder().ChannelReceiveTimestampOffset("breserved"),
 		"channelSndTs": NewChannelUriStringBuilder().ChannelSendTimestampOffset("breserved"),
-		"responseCorr": NewChannelUriStringBuilder().ResponseCorrelationId(-2),
+		"responseCorr": NewChannelUriStringBuilder().ResponseCorrelationID(-2),
 		"position":     NewChannelUriStringBuilder().InitialPosition(-1, 0, 64*1024),
 		"positionAlgn": NewChannelUriStringBuilder().InitialPosition(31, 0, 64*1024),
 		"positionTerm": NewChannelUriStringBuilder().InitialPosition(0, 0, 100),
@@ -259,9 +259,9 @@ func TestChannelUriStringBuilderMaxResendStreamIdPubWnd(t *testing.T) {
 	v, _ = b.GetMaxResend()
 	assert.Equal(t, int32(30), v)
 
-	_, ok := NewChannelUriStringBuilder().GetStreamId()
+	_, ok := NewChannelUriStringBuilder().GetStreamID()
 	assert.False(t, ok)
-	s := NewChannelUriStringBuilder().Media("ipc").StreamId(1234).MustBuild()
+	s := NewChannelUriStringBuilder().Media("ipc").StreamID(1234).MustBuild()
 	assert.Equal(t, "1234", MustParseChannelUri(s).Get(StreamIdParamName))
 
 	_, ok = NewChannelUriStringBuilder().GetPublicationWindowLength()
@@ -305,7 +305,7 @@ func TestChannelUriStringBuilderShouldFormatSizeAndDurations(t *testing.T) {
 		MaxResend(1000).
 		Tether(true).
 		Rejoin(false).
-		StreamId(-87).
+		StreamID(-87).
 		InitialPosition(17*1024*1024, -9, 4*1024*1024).
 		MustBuild()
 	expected := "aeron:udp?endpoint=localhost:5050|mtu=8k|term-length=4m|rcv-wnd=1k|so-sndbuf=64k|" +
@@ -331,7 +331,7 @@ func TestChannelUriStringBuilderUnsetAll(t *testing.T) {
 	}
 	require.NoError(t, b.Err())
 	assert.Equal(t, "aeron-spy:aeron:udp", b.String())
-	assert.False(t, b.GetIsSessionIdTagged())
+	assert.False(t, b.GetIsSessionIDTagged())
 }
 
 func TestUriSizeAndDurationHelpers(t *testing.T) {

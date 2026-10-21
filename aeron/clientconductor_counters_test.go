@@ -39,9 +39,9 @@ func TestStaticCounterIsNotClientOwnedAndNotRemovedOnClose(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, counter)
 	require.False(t, counter.IsClientOwned())
-	require.Equal(t, corrID, counter.CorrelationId())
-	require.Equal(t, staticCounterRegId, counter.RegistrationId())
-	require.Equal(t, CounterId, counter.Id())
+	require.Equal(t, corrID, counter.CorrelationID())
+	require.Equal(t, staticCounterRegId, counter.RegistrationID())
+	require.Equal(t, CounterId, counter.ID())
 	counter.Increment()
 	require.EqualValues(t, 1, tc.counterReader.GetCounterValue(CounterId))
 
@@ -70,8 +70,8 @@ func TestClientOwnedCounterClosedOnUnavailable(t *testing.T) {
 	counter, err := tc.GetCounter(id)
 	require.NoError(t, err)
 	require.True(t, counter.IsClientOwned())
-	require.Equal(t, id, counter.RegistrationId())
-	require.Equal(t, id, counter.CorrelationId())
+	require.Equal(t, id, counter.RegistrationID())
+	require.Equal(t, id, counter.CorrelationID())
 
 	tc.OnUnavailableCounter(id, CounterId)
 	require.True(t, counter.IsClosed())

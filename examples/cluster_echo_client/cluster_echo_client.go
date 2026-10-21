@@ -83,7 +83,7 @@ func main() {
 	messages := *examples.ExamplesConfig.Messages
 	for i := 0; i < messages && ctx.Err() == nil; i++ {
 		msg := []byte(fmt.Sprintf("Hello Cluster! %d", i))
-		buffer.PutBytesArray(0, &msg, 0, int32(len(msg)))
+		buffer.PutBytesSlice(0, msg)
 		deadline = time.Now().Add(*timeout)
 		for ac.Offer(buffer, 0, int32(len(msg))) < 0 {
 			if ctx.Err() != nil || time.Now().After(deadline) {

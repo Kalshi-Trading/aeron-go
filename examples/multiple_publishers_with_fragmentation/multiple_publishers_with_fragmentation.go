@@ -64,7 +64,7 @@ func main() {
 	messages := *examples.ExamplesConfig.Messages
 	offer := func(pub *aeron.Publication, buf *atomic.Buffer, stream int32, n int) bool {
 		msg := []byte(fmt.Sprintf("Hello World! %d", n))
-		buf.PutBytesArray(0, &msg, 0, int32(len(msg)))
+		buf.PutBytesSlice(0, msg)
 		result := pub.Offer(buf, 0, buf.Capacity(), nil)
 		if result > 0 {
 			fmt.Printf("Successfully sent data on stream id %d and data length %d at offset %d\n",

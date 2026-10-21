@@ -81,10 +81,10 @@ func TestHeader_ReservedValue(t *testing.T) {
 
 	var header Header
 	header.Wrap(buffer.Ptr(), 1000)
-	assert.Equal(t, header.GetReservedValue(), int64(0))
+	assert.Equal(t, header.ReservedValue(), int64(0))
 
 	header.SetReservedValue(123)
-	assert.Equal(t, header.GetReservedValue(), int64(123))
+	assert.Equal(t, header.ReservedValue(), int64(123))
 }
 
 func TestLogBuffers_Meta(t *testing.T) {

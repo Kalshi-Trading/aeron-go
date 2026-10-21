@@ -151,9 +151,9 @@ func counterOffset(counterId int32) int32 {
 	return counterId * CounterLength
 }
 
-// MaxCounterId returns the maximum (inclusive) counter id which can be supported given the length of the values
+// MaxCounterID returns the maximum (inclusive) counter id which can be supported given the length of the values
 // buffer.
-func (reader *Reader) MaxCounterId() int32 {
+func (reader *Reader) MaxCounterID() int32 {
 	return int32(reader.maxCounterID)
 }
 
@@ -310,24 +310,24 @@ func (reader *Reader) GetCounterValue(counterId int32) int64 {
 	return reader.values.GetInt64Volatile(counterOffset(counterId))
 }
 
-// GetCounterRegistrationId returns the registration id of the counter, or DefaultRegistrationId if out of range.
-func (reader *Reader) GetCounterRegistrationId(counterId int32) int64 {
+// GetCounterRegistrationID returns the registration id of the counter, or DefaultRegistrationId if out of range.
+func (reader *Reader) GetCounterRegistrationID(counterId int32) int64 {
 	if !reader.isValidCounterId(counterId) {
 		return DefaultRegistrationId
 	}
 	return reader.values.GetInt64Volatile(counterOffset(counterId) + RegistrationIdOffset)
 }
 
-// GetCounterOwnerId returns the owner (client) id of the counter, or DefaultOwnerId if out of range.
-func (reader *Reader) GetCounterOwnerId(counterId int32) int64 {
+// GetCounterOwnerID returns the owner (client) id of the counter, or DefaultOwnerId if out of range.
+func (reader *Reader) GetCounterOwnerID(counterId int32) int64 {
 	if !reader.isValidCounterId(counterId) {
 		return DefaultOwnerId
 	}
 	return reader.values.GetInt64Volatile(counterOffset(counterId) + OwnerIdOffset)
 }
 
-// GetCounterTypeId returns the type id for a counter, or -1 if out of range.
-func (reader *Reader) GetCounterTypeId(counterId int32) int32 {
+// GetCounterTypeID returns the type id for a counter, or -1 if out of range.
+func (reader *Reader) GetCounterTypeID(counterId int32) int32 {
 	if !reader.isValidCounterId(counterId) {
 		return -1
 	}
@@ -343,8 +343,8 @@ func (reader *Reader) isValidCounterId(counterId int32) bool {
 	return counterId >= 0 && int(counterId) <= reader.maxCounterID
 }
 
-// ValidateCounterId returns an error if counterId is outside 0..MaxCounterId.
-func (reader *Reader) ValidateCounterId(counterId int32) error {
+// ValidateCounterID returns an error if counterId is outside 0..MaxCounterId.
+func (reader *Reader) ValidateCounterID(counterId int32) error {
 	if !reader.isValidCounterId(counterId) {
 		return fmt.Errorf("counter id %d out of range: 0 - maxCounterId=%d", counterId, reader.maxCounterID)
 	}
@@ -352,7 +352,7 @@ func (reader *Reader) ValidateCounterId(counterId int32) error {
 }
 
 func (reader *Reader) validateCounterIdAndOffset(counterId int32, offset int32, size int32) error {
-	if err := reader.ValidateCounterId(counterId); err != nil {
+	if err := reader.ValidateCounterID(counterId); err != nil {
 		return err
 	}
 	if offset < 0 || offset+size > MaxKeyLength {

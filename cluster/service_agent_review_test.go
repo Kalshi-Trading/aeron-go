@@ -114,7 +114,7 @@ func newTestCountersReader(cs ...testCounter) *counters.Reader {
 		meta.PutInt32(m+counters.TypeIdOffset, c.typeId)
 		meta.PutInt64(m+counters.FreeForReuseDeadlineOffset, counters.NotFreeToReuse)
 		if len(c.key) > 0 {
-			meta.PutBytesArray(m+counters.KeyOffset, &c.key, 0, int32(len(c.key)))
+			meta.PutBytesSlice(m+counters.KeyOffset, c.key)
 		}
 		values.PutInt64(counters.CounterOffset(id)+counters.RegistrationIdOffset, c.regId)
 		meta.PutInt32Ordered(m, counters.RecordAllocated)
@@ -234,7 +234,7 @@ func TestAgentCommitPositionUnavailableTerminatesExpected(t *testing.T) {
 	reader := newTestCountersReader(testCounter{typeId: commitPosCounterTypeId, regId: 99})
 	agent := newReviewAgent(&fakePub{}, &fakeService{})
 	agent.counters = reader
-	commitPos, err := counters.NewReadableRegisteredCounter(reader, reader.GetCounterRegistrationId(0), 0)
+	commitPos, err := counters.NewReadableRegisteredCounter(reader, reader.GetCounterRegistrationID(0), 0)
 	require.NoError(t, err)
 	agent.storeCommitPosition(commitPos)
 

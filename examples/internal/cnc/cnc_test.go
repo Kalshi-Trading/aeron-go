@@ -11,7 +11,7 @@ import (
 func putString(buf *atomic.Buffer, offset int32, s string) {
 	b := []byte(s)
 	buf.PutInt32(offset, int32(len(b)))
-	buf.PutBytesArray(offset+4, &b, 0, int32(len(b)))
+	buf.PutBytesSlice(offset+4, b)
 }
 
 func TestFilter(t *testing.T) {

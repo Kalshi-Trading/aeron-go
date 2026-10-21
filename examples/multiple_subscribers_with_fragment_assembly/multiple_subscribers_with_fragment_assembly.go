@@ -65,7 +65,7 @@ func main() {
 	reassembled := func(stream int32, expectedLength int32) term.FragmentHandler {
 		return func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
 			fmt.Printf("message to stream %d from session %x term id %x term offset %d (%d@%d)\n",
-				stream, header.SessionId(), header.TermId(), header.Offset(), length, offset)
+				stream, header.SessionID(), header.TermID(), header.Offset(), length, offset)
 			if length != expectedLength {
 				fmt.Printf("Received message was not assembled properly; received length was %d, but was expecting %d\n",
 					length, expectedLength)

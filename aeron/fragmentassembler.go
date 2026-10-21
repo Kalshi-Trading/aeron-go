@@ -114,12 +114,12 @@ func (f *FragmentAssembler) OnFragment(
 	if (flags & unfragmented) == unfragmented {
 		f.delegate(buffer, offset, length, header)
 	} else if (flags & beginFrag) == beginFrag {
-		builder := getBufferBuilder(f.builderBySessionIdMap, header.SessionId(), f.initialBufferLength)
+		builder := getBufferBuilder(f.builderBySessionIdMap, header.SessionID(), f.initialBufferLength)
 		builder.Reset().
 			CaptureHeader(header).
 			Append(buffer, offset, length).
 			SetNextTermOffset(header.NextTermOffset())
-	} else if builder, ok := f.builderBySessionIdMap[header.SessionId()]; ok {
+	} else if builder, ok := f.builderBySessionIdMap[header.SessionID()]; ok {
 		if header.TermOffset() == builder.nextTermOffset {
 			builder.Append(buffer, offset, length)
 			if (flags & endFrag) == endFrag {

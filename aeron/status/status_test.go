@@ -31,7 +31,7 @@ func (f *fakeCounters) addLocalAddress(id, channelStatusID int32, value int64, a
 	f.meta.PutInt32(key+ChannelStatusIDOffset, channelStatusID)
 	b := []byte(addr)
 	f.meta.PutInt32(key+LocalSocketAddressLengthOffset, int32(len(b)))
-	f.meta.PutBytesArray(key+LocalSocketAddressStringOffset, &b, 0, int32(len(b)))
+	f.meta.PutBytesSlice(key+LocalSocketAddressStringOffset, b)
 	f.values.PutInt64(id*counters.CounterLength, value)
 	f.meta.PutInt32(off, counters.RecordAllocated)
 }

@@ -294,7 +294,7 @@ func (agent *ClusteredServiceAgent) counterUnavailable(_ *counters.Reader, regis
 
 func (agent *ClusteredServiceAgent) onClose() {
 	if agent.unavailableCounterRegId != 0 && !agent.aeronClient.IsClosed() {
-		agent.aeronClient.RemoveUnavailableCounterHandlerById(agent.unavailableCounterRegId)
+		agent.aeronClient.RemoveUnavailableCounterHandlerByID(agent.unavailableCounterRegId)
 	}
 	if agent.isServiceActive {
 		agent.isServiceActive = false
@@ -328,7 +328,7 @@ func (agent *ClusteredServiceAgent) awaitCommitPositionCounter() error {
 		})
 		if id != counters.NullCounterId {
 			commitPos, err := counters.NewReadableRegisteredCounter(
-				agent.counters, agent.counters.GetCounterRegistrationId(id), id)
+				agent.counters, agent.counters.GetCounterRegistrationID(id), id)
 			if err != nil {
 				return err
 			}
