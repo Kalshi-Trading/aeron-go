@@ -49,6 +49,8 @@ var Events = struct {
 	OnUnavailableCounter int32
 	/** inform clients of client timeout */
 	OnClientTimeout int32
+	/** static counter added or found (Aeron 1.45+) */
+	OnStaticCounter int32
 }{
 	0x0F01,
 	0x0F02,
@@ -60,6 +62,7 @@ var Events = struct {
 	0x0F08,
 	0x0F09,
 	0x0F0A,
+	0x0F0B,
 }
 
 type SubscriberPosition struct {
@@ -90,6 +93,7 @@ type Listener interface {
 	OnAvailableCounter(correlationID int64, counterID int32)
 	OnUnavailableCounter(correlationID int64, counterID int32)
 	OnClientTimeout(clientID int64)
+	OnStaticCounter(correlationID int64, counterID int32)
 }
 
 type ListenerAdapter struct {
@@ -216,6 +220,13 @@ func (adapter *ListenerAdapter) ReceiveMessages() int {
 			msg.Wrap(buffer, int(offset))
 
 			adapter.listener.OnUnavailableCounter(msg.correlationID.Get(), msg.counterID.Get())
+		case Events.OnStaticCounter:
+			logger.Debugf("received ON_STATIC_COUNTER")
+
+			var msg counterUpdate
+			msg.Wrap(buffer, int(offset))
+
+			adapter.listener.OnStaticCounter(msg.correlationID.Get(), msg.counterID.Get())
 		case Events.OnClientTimeout:
 			logger.Debugf("received ON_CLIENT_TIMEOUT")
 
