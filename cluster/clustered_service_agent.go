@@ -433,17 +433,20 @@ func (agent *ClusteredServiceAgent) awaitRecoveryCounter() (int32, int64) {
 	}
 }
 
-// snapshotArchiveOptions reuses the agent's Aeron client for snapshot archive connections, like Java's
-// AeronArchive.Context.aeron(aeron): the agent's aeron.Context is already bound to that client.
-func (agent *ClusteredServiceAgent) snapshotArchiveOptions() *archive.Options {
-	opts := agent.opts.ArchiveOptions.Clone()
+// archiveOptions shares the agent's Aeron client with each archive connection, as Java's ClusteredServiceAgent
+// does via AeronArchive.Context.aeron(aeron).ownsAeronClient(false).
+func (agent *ClusteredServiceAgent) archiveOptions() *archive.Options {
+	opts := archive.DefaultOptions()
+	if agent.opts.ArchiveOptions != nil {
+		opts = agent.opts.ArchiveOptions.Clone()
+	}
 	opts.Aeron = agent.aeronClient
 	opts.OwnsAeronClient = false
 	return opts
 }
 
 func (agent *ClusteredServiceAgent) loadSnapshot(recordingId int64) error {
-	arch, err := archive.NewArchive(agent.snapshotArchiveOptions(), agent.aeronCtx)
+	arch, err := archive.NewArchive(agent.archiveOptions(), agent.aeronCtx)
 	if err != nil {
 		return err
 	}
@@ -911,7 +914,7 @@ func (agent *ClusteredServiceAgent) takeSnapshot(logPos int64, leadershipTermId 
 	}
 	defer closePublication(pub)
 
-	arch, err := archive.NewArchive(agent.snapshotArchiveOptions(), agent.aeronCtx)
+	arch, err := archive.NewArchive(agent.archiveOptions(), agent.aeronCtx)
 	if err != nil {
 		return NullValue, err
 	}
