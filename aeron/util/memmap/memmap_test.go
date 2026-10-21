@@ -16,6 +16,8 @@ package memmap
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
@@ -48,5 +50,50 @@ func TestMmapBasics(t *testing.T) {
 	t.Logf("2: Got %d stuff from file\n", num)
 	if num != expected {
 		t.Fail()
+	}
+}
+
+func isMapped(t *testing.T, name string) bool {
+	maps, err := os.ReadFile("/proc/self/maps")
+	if err != nil {
+		t.Skip("no /proc/self/maps")
+	}
+	return strings.Contains(string(maps), name)
+}
+
+// A second Close of an already unmapped File must not unmap whatever was later mapped at the same address.
+func TestCloseTwiceDoesNotUnmapReusedAddress(t *testing.T) {
+	dir := t.TempDir()
+	a, err := NewFile(dir+"/a.dat", 0, 1<<16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewFile(dir+"/b.dat", 0, 1<<16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if b.GetMemoryPtr() != a.GetMemoryPtr() {
+		t.Skip("kernel did not reuse the address")
+	}
+	_ = a.Close()
+	if !isMapped(t, dir+"/b.dat") {
+		t.Fatal("closing a stale File unmapped a newer mapping at the same address")
+	}
+}
+
+func TestCloseIsIdempotent(t *testing.T) {
+	f, err := NewFile(t.TempDir()+"/c.dat", 0, 1<<12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
 	}
 }

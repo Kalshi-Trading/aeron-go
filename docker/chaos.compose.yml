@@ -1,0 +1,109 @@
+# Java Aeron 1.53.3 stacks for the robustness/fault-injection tests in systests/chaos (AERON_E2E=1 AERON_E2E_CHAOS=1).
+# The tests kill and restart these containers, so they are separate from the shared archiving-driver:
+#
+#   chaos-driver   standalone MediaDriver, AERON_DIR=/dev/shm/aeron-chaos (killed/restarted by the tests)
+#   chaos-archive  standalone Archive on chaos-driver: control localhost:8410 stream 10, events 8430, archive id 7.
+#                  Its catalog lives in /dev/shm/aeron-chaos-archive so it survives a kill/restart; the mark file is
+#                  on a per-start tmpfs so a restart is not refused with "active mark file detected".
+#   lossy-driver   ArchivingMediaDriver at /dev/shm/aeron-lossy whose receive endpoints drop data frames
+#                  (DebugReceiveChannelEndpoint, aeron.debug.receive.data.loss.rate): control localhost:8510, archive id 8.
+#
+#   docker compose -f docker/chaos.compose.yml up -d --build --wait
+#   AERON_E2E=1 AERON_E2E_CHAOS=1 go test -count=1 -p 1 ./systests/chaos/
+name: aeron-chaos
+services:
+  chaos-driver:
+    build: .
+    image: docker-archiving-driver
+    container_name: aeron-chaos-driver
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    shm_size: 1g
+    volumes:
+      - /dev/shm:/dev/shm
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-chaos
+        -Daeron.dir.delete.on.start=true
+        -Daeron.client.liveness.timeout=3000000000
+        -Daeron.image.liveness.timeout=3000000000
+        -Daeron.publication.unblock.timeout=5000000000
+        -Daeron.publication.connection.timeout=2000000000
+        -Daeron.timer.interval=100000000
+        -Daeron.untethered.window.limit.timeout=1000000000
+        -Daeron.untethered.resting.timeout=1000000000
+        -Daeron.threading.mode=SHARED
+    command: ["io.aeron.driver.MediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-chaos/cnc.dat"]
+      interval: 1s
+      retries: 30
+
+  chaos-archive:
+    image: docker-archiving-driver
+    container_name: aeron-chaos-archive
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    restart: on-failure
+    volumes:
+      - /dev/shm:/dev/shm
+    tmpfs:
+      - /tmp/mark:uid=1000,gid=1000
+    depends_on:
+      chaos-driver:
+        condition: service_healthy
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-chaos
+        -Daeron.driver.timeout=3000
+        -Daeron.archive.dir=/dev/shm/aeron-chaos-archive
+        -Daeron.archive.mark.file.dir=/tmp/mark
+        -Daeron.archive.control.channel=aeron:udp?endpoint=localhost:8410
+        -Daeron.archive.control.stream.id=10
+        -Daeron.archive.replication.channel=aeron:udp?endpoint=localhost:0
+        -Daeron.archive.recording.events.enabled=true
+        -Daeron.archive.recording.events.channel=aeron:udp?control-mode=dynamic|control=localhost:8430
+        -Daeron.archive.id=7
+        -Daeron.archive.threading.mode=SHARED
+    command: ["io.aeron.archive.Archive"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/mark/archive-mark.dat"]
+      interval: 1s
+      retries: 30
+
+  lossy-driver:
+    image: docker-archiving-driver
+    container_name: aeron-lossy-driver
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    shm_size: 1g
+    volumes:
+      - /dev/shm:/dev/shm
+    tmpfs:
+      - /data/archive:uid=1000,gid=1000
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-lossy
+        -Daeron.dir.delete.on.start=true
+        -Daeron.ReceiveChannelEndpoint.supplier=io.aeron.driver.ext.DebugReceiveChannelEndpointSupplier
+        -Daeron.debug.receive.data.loss.rate=${AERON_CHAOS_LOSS_RATE:-0.05}
+        -Daeron.debug.receive.data.loss.seed=42
+        -Daeron.client.liveness.timeout=10000000000
+        -Daeron.archive.dir=/data/archive/rec
+        -Daeron.archive.dir.delete.on.start=true
+        -Daeron.archive.control.channel=aeron:udp?endpoint=localhost:8510
+        -Daeron.archive.control.stream.id=10
+        -Daeron.archive.replication.channel=aeron:udp?endpoint=localhost:0
+        -Daeron.archive.recording.events.enabled=true
+        -Daeron.archive.recording.events.channel=aeron:udp?control-mode=dynamic|control=localhost:8530
+        -Daeron.archive.id=8
+        -Daeron.threading.mode=SHARED
+        -Daeron.archive.threading.mode=SHARED
+    command: ["io.aeron.archive.ArchivingMediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-lossy/cnc.dat"]
+      interval: 1s
+      retries: 30
