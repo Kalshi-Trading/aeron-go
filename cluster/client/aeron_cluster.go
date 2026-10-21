@@ -12,539 +12,454 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package client is a Go port of io.aeron.cluster.client.AeronCluster (Aeron 1.53.3, cluster schema v17).
 package client
 
 import (
-	"bytes"
-	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
+	"github.com/lirm/aeron-go/aeron/logbuffer/term"
 	"github.com/lirm/aeron-go/aeron/logging"
-	"github.com/lirm/aeron-go/aeron/util"
-	"github.com/lirm/aeron-go/cluster"
 	"github.com/lirm/aeron-go/cluster/codecs"
 )
 
 var logger = logging.MustGetLogger("cluster-client")
 var marshaller = codecs.NewSbeGoMarshaller()
 
-var TemporaryError = errors.New("temporary error")
-
-type AeronCluster struct {
-	opts                 *Options
-	aeronClient          *aeron.Aeron
-	egressSub            *aeron.Subscription
-	ingressChannel       *aeron.ChannelUri
-	ingressPub           *aeron.Publication
-	clusterSessionId     int64
-	leadershipTermId     int64
-	leaderMemberId       int32
-	memberByIdMap        map[int32]*memberIngress
-	fragmentAssembler    *aeron.FragmentAssembler
-	egressListener       EgressListener
-	sessionMsgHdrBuffer  *atomic.Buffer
-	keepAliveBuffer      *atomic.Buffer
-	state                clientState
-	correlationId        int64
-	nextRetryConnectTime int64
-	awaitTimeoutTime     int64
-}
-
-type memberIngress struct {
-	memberId    int32
-	endpoint    string
-	publication *aeron.Publication
-}
+const (
+	sendAttempts  = 3
+	fragmentLimit = 10
+)
 
 type clientState int8
 
 const (
-	clientDisconnected clientState = iota
-	clientCreatePublications
-	clientAwaitPublicationConnected
-	clientAwaitConnectReply
-	clientConnected
-	clientClosed
+	stateConnected clientState = iota
+	stateAwaitNewLeader
+	stateAwaitNewLeaderConnection
+	statePendingClose
+	stateClosed
 )
 
-const (
-	protocolMajorVersion = 0
-	protocolMinorVersion = 2
-	protocolPatchVersion = 0
-)
-
-var protocolSemanticVersion = util.SemanticVersionCompose(
-	protocolMajorVersion, protocolMinorVersion, protocolPatchVersion)
-
-func NewAeronCluster(
-	aeronCtx *aeron.Context,
-	options *Options,
-	egressListener EgressListener,
-) (*AeronCluster, error) {
-	if egressListener == nil {
-		return nil, fmt.Errorf("egressListener is nil")
+func (s clientState) String() string {
+	switch s {
+	case stateConnected:
+		return "CONNECTED"
+	case stateAwaitNewLeader:
+		return "AWAIT_NEW_LEADER"
+	case stateAwaitNewLeaderConnection:
+		return "AWAIT_NEW_LEADER_CONNECTION"
+	case statePendingClose:
+		return "PENDING_CLOSE"
+	case stateClosed:
+		return "CLOSED"
 	}
-	ingressChannel, err := aeron.ParseChannelUri(options.IngressChannel)
-	if err != nil {
-		return nil, err
-	}
-	if ingressChannel.IsIpc() && options.IngressEndpoints != "" {
-		return nil, fmt.Errorf("IngressEndpoints must be empty when using IPC ingress")
-	}
-
-	aeronClient, err := aeron.Connect(aeronCtx)
-	if err != nil {
-		return nil, err
-	}
-
-	egressSub, err := aeronClient.AddSubscription(options.EgressChannel, options.EgressStreamId)
-	if err != nil {
-		return nil, err
-	}
-
-	sessionMsgHdrBuf := codecs.MakeClusterMessageBuffer(cluster.SessionMessageHeaderTemplateId, cluster.SessionMessageHdrBlockLength)
-
-	client := &AeronCluster{
-		opts:                options,
-		aeronClient:         aeronClient,
-		egressSub:           egressSub,
-		ingressChannel:      &ingressChannel,
-		clusterSessionId:    cluster.NullValue,
-		leadershipTermId:    cluster.NullValue,
-		leaderMemberId:      cluster.NullValue,
-		memberByIdMap:       make(map[int32]*memberIngress),
-		egressListener:      egressListener,
-		state:               clientDisconnected,
-		sessionMsgHdrBuffer: sessionMsgHdrBuf,
-		keepAliveBuffer:     codecs.MakeClusterMessageBuffer(cluster.SessionKeepAliveTemplateId, 16),
-	}
-	client.fragmentAssembler = aeron.NewFragmentAssembler(client.onFragment, 0)
-	client.updateMemberEndpoints(options.IngressEndpoints)
-
-	return client, nil
+	return "UNKNOWN"
 }
 
-func (ac *AeronCluster) ClusterSessionId() int64 {
-	return ac.clusterSessionId
+// AeronCluster is a client for interacting with an Aeron Cluster, mirroring io.aeron.cluster.client.AeronCluster.
+// Create with Connect or NewAsyncConnect. Not safe for concurrent use.
+type AeronCluster struct {
+	ctx                         *Context
+	clusterSessionId            int64
+	leadershipTermId            int64
+	leaderMemberId              int32
+	subscription                *aeron.Subscription
+	egressImage                 aeron.Image
+	publication                 *aeron.Publication
+	state                       clientState
+	stateDeadline               time.Time
+	bufferClaim                 logbuffer.Claim
+	headerBuffer                *atomic.Buffer
+	fragmentAssembler           *aeron.FragmentAssembler
+	controlledFragmentAssembler *aeron.ControlledFragmentAssembler
+	egressListener              EgressListener
+	controlledEgressListener    ControlledEgressListener
+	egressExtension             EgressListenerExtension
+	controlledEgressExtension   ControlledEgressListenerExtension
+	endpointByIdMap             map[int32]*memberIngress
 }
 
-func (ac *AeronCluster) LeadershipTermId() int64 {
-	return ac.leadershipTermId
+func newAeronCluster(
+	ctx *Context,
+	publication *aeron.Publication,
+	subscription *aeron.Subscription,
+	egressImage aeron.Image,
+	clusterSessionId int64,
+	leadershipTermId int64,
+	leaderMemberId int32,
+) *AeronCluster {
+	ac := &AeronCluster{
+		ctx:                      ctx,
+		clusterSessionId:         clusterSessionId,
+		leadershipTermId:         leadershipTermId,
+		leaderMemberId:           leaderMemberId,
+		subscription:             subscription,
+		egressImage:              egressImage,
+		publication:              publication,
+		headerBuffer:             atomic.MakeBuffer(make([]byte, SessionHeaderLength)),
+		egressListener:           ctx.EgressListener,
+		controlledEgressListener: ctx.ControlledEgressListener,
+		endpointByIdMap:          make(map[int32]*memberIngress),
+	}
+	ac.fragmentAssembler = aeron.NewFragmentAssembler(ac.onFragment, 0)
+	ac.controlledFragmentAssembler = aeron.NewControlledFragmentAssembler(ac.onControlledFragment, 0)
+	writeMessageHeader(ac.headerBuffer, 0, sessionMessageHeaderBlockLength, sessionMessageHeaderTemplateId)
+	ac.headerBuffer.PutInt64(MessageHeaderLength, leadershipTermId)
+	ac.headerBuffer.PutInt64(MessageHeaderLength+8, clusterSessionId)
+	ac.setState(stateConnected, time.Time{})
+	return ac
 }
 
-func (ac *AeronCluster) LeaderMemberId() int32 {
-	return ac.leaderMemberId
+// SetEgressListenerExtension sets a handler for egress messages with a non-cluster schema (PollEgress).
+func (ac *AeronCluster) SetEgressListenerExtension(extension EgressListenerExtension) {
+	ac.egressExtension = extension
 }
 
-func (ac *AeronCluster) IsConnected() bool {
-	return ac.state == clientConnected
+// SetControlledEgressListenerExtension sets a handler for egress messages with a non-cluster schema
+// (ControlledPollEgress).
+func (ac *AeronCluster) SetControlledEgressListenerExtension(extension ControlledEgressListenerExtension) {
+	ac.controlledEgressExtension = extension
 }
 
-func (ac *AeronCluster) IsClosed() bool {
-	return ac.state == clientClosed
-}
-
-func (ac *AeronCluster) Poll() int {
-	switch ac.state {
-	case clientDisconnected:
-		if time.Now().UnixMilli() > ac.nextRetryConnectTime {
-			ac.state = clientCreatePublications
+// Close the session (sending a SessionCloseRequest if connected) and release resources. Idempotent.
+func (ac *AeronCluster) Close() error {
+	if ac.state == stateClosed {
+		return nil
+	}
+	if ac.state == stateConnected && ac.publication != nil && ac.publication.IsConnected() {
+		ac.closeSession()
+	}
+	if !ac.ctx.OwnsAeronClient {
+		if ac.subscription != nil {
+			if err := ac.subscription.Close(); err != nil {
+				ac.ctx.ErrorHandler(err)
+			}
 		}
-	case clientCreatePublications:
-		ret, err := ac.createPublications()
-		if err != nil {
-			logger.Warningf("error from createPublications %w", err)
+		if ac.publication != nil {
+			if err := ac.publication.Close(); err != nil {
+				ac.ctx.ErrorHandler(err)
+			}
 		}
-		return ret
-	case clientAwaitPublicationConnected:
-		ret, err := ac.awaitPublicationConnected()
-		if err != nil {
-			logger.Warningf("error from awaitPublicationConnected %w", err)
+	}
+	ac.setState(stateClosed, time.Time{})
+	return ac.ctx.Close()
+}
+
+// IsClosed reports whether the client has been closed (explicitly, by the cluster, or after a new leader timeout).
+func (ac *AeronCluster) IsClosed() bool { return ac.state == stateClosed }
+
+// IsConnected reports whether the client is connected to a leader and may send ingress.
+func (ac *AeronCluster) IsConnected() bool { return ac.state == stateConnected }
+
+// Context returns the concluded context.
+func (ac *AeronCluster) Context() *Context { return ac.ctx }
+
+// ClusterSessionId allocated by the cluster for this session.
+func (ac *AeronCluster) ClusterSessionId() int64 { return ac.clusterSessionId }
+
+// LeadershipTermId of the current leader.
+func (ac *AeronCluster) LeadershipTermId() int64 { return ac.leadershipTermId }
+
+// LeaderMemberId of the current leader.
+func (ac *AeronCluster) LeaderMemberId() int32 { return ac.leaderMemberId }
+
+// IngressPublication to the current leader. Prefer Offer/TryClaim which prepend the session header.
+func (ac *AeronCluster) IngressPublication() *aeron.Publication { return ac.publication }
+
+// EgressSubscription from the cluster.
+func (ac *AeronCluster) EgressSubscription() *aeron.Subscription { return ac.subscription }
+
+// TryClaim claims length bytes plus the session header. The session header is already written; write the
+// message at bufferClaim.Offset()+SessionHeaderLength then Commit.
+func (ac *AeronCluster) TryClaim(length int32, bufferClaim *logbuffer.Claim) int64 {
+	result := ac.publication.TryClaim(length+SessionHeaderLength, bufferClaim)
+	ac.TrackIngressPublicationResult(result)
+	if result > 0 {
+		bufferClaim.Buffer().PutBytes(bufferClaim.Offset(), ac.headerBuffer, 0, SessionHeaderLength)
+	}
+	return result
+}
+
+// Offer a message to the cluster with the session header prepended.
+func (ac *AeronCluster) Offer(buffer *atomic.Buffer, offset int32, length int32) int64 {
+	result := ac.publication.Offer2(ac.headerBuffer, 0, SessionHeaderLength, buffer, offset, length, nil)
+	ac.TrackIngressPublicationResult(result)
+	return result
+}
+
+// SendKeepAlive sends a SessionKeepAlive, retrying up to 3 times on back pressure.
+func (ac *AeronCluster) SendKeepAlive() (bool, error) {
+	length := MessageHeaderLength + int32(sessionKeepAliveBlockLength)
+	for attempts := sendAttempts; ; {
+		position := ac.publication.TryClaim(length, &ac.bufferClaim)
+		ac.TrackIngressPublicationResult(position)
+		if position > 0 {
+			buf, offset := ac.bufferClaim.Buffer(), ac.bufferClaim.Offset()
+			writeMessageHeader(buf, offset, sessionKeepAliveBlockLength, sessionKeepAliveTemplateId)
+			buf.PutInt64(offset+MessageHeaderLength, ac.leadershipTermId)
+			buf.PutInt64(offset+MessageHeaderLength+8, ac.clusterSessionId)
+			ac.bufferClaim.Commit()
+			return true, nil
 		}
-		return ret
-	case clientAwaitConnectReply:
-		now := time.Now().UnixMilli()
-		if ac.ingressPub.IsConnected() && now < ac.awaitTimeoutTime {
-			return ac.pollEgress(1)
-		} else {
-			logger.Warningf("timed out waiting for session connect reply")
-			ac.state = clientDisconnected
-			ac.nextRetryConnectTime = now + (30 * time.Second).Milliseconds()
+		if position == aeron.MaxPositionExceeded {
+			return false, fmt.Errorf("%w: max position exceeded: channel=%s", ErrCluster,
+				ac.publication.Channel())
 		}
-	case clientConnected:
-		if ac.ingressPub.IsConnected() {
-			return ac.pollEgress(10)
-			// TODO: check if state == closed
-		} else {
-			ac.egressListener.OnDisconnect(ac, "ingress publication disconnected")
-			ac.state = clientCreatePublications
+		if attempts--; attempts <= 0 {
+			return false, nil
 		}
+		ac.ctx.idle(0)
+	}
+}
+
+// SendAdminRequestToTakeASnapshot asks the cluster to take a snapshot. The result arrives via OnAdminResponse
+// with the given correlationId. Requires the cluster's AuthorisationService to allow it.
+func (ac *AeronCluster) SendAdminRequestToTakeASnapshot(correlationId int64) (bool, error) {
+	length := MessageHeaderLength + int32(adminRequestBlockLength) + 4
+	for attempts := sendAttempts; ; {
+		position := ac.publication.TryClaim(length, &ac.bufferClaim)
+		ac.TrackIngressPublicationResult(position)
+		if position > 0 {
+			buf, offset := ac.bufferClaim.Buffer(), ac.bufferClaim.Offset()
+			writeMessageHeader(buf, offset, adminRequestBlockLength, adminRequestTemplateId)
+			body := offset + MessageHeaderLength
+			buf.PutInt64(body, ac.leadershipTermId)
+			buf.PutInt64(body+8, ac.clusterSessionId)
+			buf.PutInt64(body+16, correlationId)
+			buf.PutInt32(body+24, int32(codecs.AdminRequestType.SNAPSHOT))
+			buf.PutInt32(body+int32(adminRequestBlockLength), 0)
+			ac.bufferClaim.Commit()
+			return true, nil
+		}
+		if position == aeron.PublicationClosed {
+			return false, fmt.Errorf("%w: ingress publication is closed", ErrCluster)
+		}
+		if position == aeron.MaxPositionExceeded {
+			return false, fmt.Errorf("%w: max position exceeded: channel=%s", ErrCluster,
+				ac.publication.Channel())
+		}
+		if attempts--; attempts <= 0 {
+			return false, nil
+		}
+		ac.ctx.idle(0)
+	}
+}
+
+// PollEgress polls the egress subscription dispatching to Context.EgressListener, then handles state changes.
+func (ac *AeronCluster) PollEgress() int {
+	if ac.state == stateClosed {
+		return 0
+	}
+	workCount := ac.subscription.Poll(ac.fragmentAssembler.OnFragment, fragmentLimit)
+	return workCount + ac.checkEgressImage() + ac.PollStateChanges()
+}
+
+// ControlledPollEgress polls the egress subscription dispatching to Context.ControlledEgressListener.
+func (ac *AeronCluster) ControlledPollEgress() int {
+	if ac.state == stateClosed {
+		return 0
+	}
+	workCount := ac.subscription.ControlledPoll(ac.controlledFragmentAssembler.OnFragment, fragmentLimit)
+	return workCount + ac.checkEgressImage() + ac.PollStateChanges()
+}
+
+func (ac *AeronCluster) checkEgressImage() int {
+	if (ac.state == stateConnected || ac.state == stateAwaitNewLeaderConnection) &&
+		isImageClosed(ac.subscription, ac.egressImage) {
+		ac.onDisconnected()
+		return 1
 	}
 	return 0
 }
 
-func (ac *AeronCluster) Offer(buffer *atomic.Buffer, offset, length int32) int64 {
-	if ac.state != clientConnected {
-		return aeron.NotConnected
+// PollStateChanges closes the client if the session was closed or no new leader arrived within
+// Context.NewLeaderTimeout. Called by PollEgress; call directly when polling egress via an EgressAdapter.
+func (ac *AeronCluster) PollStateChanges() int {
+	if ac.state == statePendingClose ||
+		((ac.state == stateAwaitNewLeader || ac.state == stateAwaitNewLeaderConnection) &&
+			!time.Now().Before(ac.stateDeadline)) {
+		if err := ac.Close(); err != nil {
+			ac.ctx.ErrorHandler(err)
+		}
+		return 1
+	}
+	return 0
+}
+
+// OnNewLeader updates the client for a new leader, connecting an ingress publication to it. Called
+// automatically by PollEgress; call when handling NewLeaderEvent via an EgressAdapter.
+func (ac *AeronCluster) OnNewLeader(clusterSessionId int64, leadershipTermId int64, leaderMemberId int32,
+	ingressEndpoints string) error {
+	if clusterSessionId != ac.clusterSessionId {
+		return fmt.Errorf("%w: invalid clusterSessionId=%d expected=%d", ErrCluster, clusterSessionId,
+			ac.clusterSessionId)
+	}
+	ac.setState(stateAwaitNewLeaderConnection, time.Now().Add(ac.ctx.MessageTimeout))
+	ac.leadershipTermId = leadershipTermId
+	ac.leaderMemberId = leaderMemberId
+	ac.headerBuffer.PutInt64(MessageHeaderLength, leadershipTermId)
+	if ac.publication != nil {
+		_ = ac.publication.Close()
+	}
+
+	var err error
+	if ac.ctx.IngressEndpoints == "" {
+		var pub *aeron.Publication
+		if pub, err = ac.addNewLeaderIngressPublication(ac.ctx.IngressChannel); err == nil {
+			ac.publication = pub
+		}
 	} else {
-		hdrBuf := ac.sessionMsgHdrBuffer
-		return ac.ingressPub.Offer2(hdrBuf, 0, hdrBuf.Capacity(), buffer, offset, length, nil)
+		ac.ctx.IngressEndpoints = ingressEndpoints
+		err = ac.updateMemberEndpoints(ingressEndpoints, leaderMemberId)
+	}
+	ac.fragmentAssembler.Clear()
+	ac.controlledFragmentAssembler = aeron.NewControlledFragmentAssembler(ac.onControlledFragment, 0)
+	ac.egressListener.OnNewLeader(clusterSessionId, leadershipTermId, leaderMemberId, ingressEndpoints)
+	ac.controlledEgressListener.OnNewLeader(clusterSessionId, leadershipTermId, leaderMemberId, ingressEndpoints)
+	return err
+}
+
+// TrackIngressPublicationResult updates connection state from an ingress publication result. Call after
+// offering directly to IngressPublication.
+func (ac *AeronCluster) TrackIngressPublicationResult(result int64) {
+	switch ac.state {
+	case stateConnected:
+		if result == aeron.NotConnected || result == aeron.PublicationClosed {
+			ac.onDisconnected()
+		} else if result == aeron.MaxPositionExceeded {
+			_ = ac.publication.Close()
+			ac.setState(statePendingClose, time.Time{})
+		}
+	case stateAwaitNewLeaderConnection:
+		if result > 0 {
+			ac.setState(stateConnected, time.Time{})
+		}
 	}
 }
 
-func (ac *AeronCluster) SendKeepAlive() bool {
-	if !ac.IsConnected() {
-		return false
-	}
-	buf := ac.keepAliveBuffer
-	for i := 0; i < 3; i++ {
-		if result := ac.ingressPub.Offer(buf, 0, buf.Capacity(), nil); result >= 0 {
-			return true
-		}
-		ac.opts.IdleStrategy.Idle(0)
-	}
-	return false
-}
-
-func (ac *AeronCluster) Close() {
-	if ac.IsConnected() && ac.ingressPub.IsConnected() {
-		ac.sendCloseSession()
-	}
-	if ac.ingressPub != nil {
-		if err := ac.ingressPub.Close(); err != nil {
-			logger.Debugf("error closing ingress publication: %v", err)
-		}
-		ac.ingressPub = nil
-	}
-	if ac.egressSub != nil {
-		if err := ac.egressSub.Close(); err != nil {
-			logger.Debugf("error closing egress subscription: %v", err)
-		}
-		ac.egressSub = nil
-	}
-	if err := ac.aeronClient.Close(); err != nil {
-		logger.Debugf("error closing aeron client: %v", err)
-	}
-	ac.state = clientClosed
-}
-
-func (ac *AeronCluster) updateMemberEndpoints(endpoints string) {
-	if endpoints == "" {
-		return
-	}
-	logger.Debugf("updateMemberEndpoints: %s", endpoints)
-	for idx, endpoint := range strings.Split(endpoints, ",") {
-		if delim := strings.IndexByte(endpoint, '='); delim > 0 {
-			memberId, err := strconv.ParseInt(endpoint[:delim], 10, 32)
+func (ac *AeronCluster) addNewLeaderIngressPublication(channel string) (*aeron.Publication, error) {
+	streamId := ac.ctx.IngressStreamId
+	deadline := time.Now().Add(ac.ctx.MessageTimeout)
+	registrationId := int64(nullValue)
+	var lastErr error
+	for {
+		if registrationId == nullValue {
+			id, err := asyncAddIngressPublication(ac.ctx, channel, streamId)
 			if err != nil {
-				logger.Warningf("invalid endpoint at idx=%d: %s", idx, endpoint)
-				continue
+				return nil, err
 			}
-			address := endpoint[delim+1:]
-			member := ac.memberByIdMap[int32(memberId)]
-			if member == nil {
-				member = &memberIngress{
-					memberId: int32(memberId),
-					endpoint: address,
-				}
-				ac.memberByIdMap[member.memberId] = member
-			} else if address != member.endpoint {
-				member.endpoint = address
-				if member.publication != nil {
-					member.close()
-				}
-			}
-			if member.memberId == ac.leaderMemberId {
-				if member.publication == nil {
-					pub, err := ac.createIngressPublication(address)
-					if err == nil {
-						member.publication = pub
-					} else {
-						logger.Warning(err)
-					}
-				}
-				ac.ingressPub = member.publication
-				ac.fragmentAssembler.Clear()
-			}
-		} else {
-			logger.Warningf("endpoint at idx=%d missing '=' separator: %s", idx, endpoint)
+			registrationId = id
 		}
-	}
-}
-
-func (ac *AeronCluster) createPublications() (int, error) {
-	if len(ac.memberByIdMap) > 0 {
-		for _, member := range ac.memberByIdMap {
-			if member.publication == nil {
-				pub, err := ac.createIngressPublication(member.endpoint)
-				if err != nil {
-					return 0, err
-				}
-				member.publication = pub
-			}
+		pub, err := getIngressPublication(ac.ctx, registrationId)
+		if pub != nil {
+			return pub, nil
 		}
-	} else if ac.ingressPub == nil {
-		pub, err := ac.createIngressPublication(ac.opts.IngressChannel)
 		if err != nil {
-			return 0, err
+			lastErr = err
+			registrationId = nullValue
 		}
-		ac.ingressPub = pub
-	}
-	ac.state = clientAwaitPublicationConnected
-	ac.awaitTimeoutTime = time.Now().UnixMilli() + (5 * time.Second).Milliseconds()
-	return 1, nil
-}
-
-func (ac *AeronCluster) createIngressPublication(endpoint string) (*aeron.Publication, error) {
-	if ac.ingressChannel.IsUdp() {
-		ac.ingressChannel.Set("endpoint", endpoint)
-	}
-	channel := ac.ingressChannel.String()
-	logger.Debugf("createIngressPublication - endpoint=%s isUdp=%v isExclusive=%v",
-		endpoint, ac.ingressChannel.IsUdp(), ac.opts.IsIngressExclusive)
-	if ac.opts.IsIngressExclusive {
-		return ac.aeronClient.AddExclusivePublication(channel, ac.opts.IngressStreamId)
-	} else {
-		return ac.aeronClient.AddPublication(channel, ac.opts.IngressStreamId)
-	}
-}
-
-func (ac *AeronCluster) awaitPublicationConnected() (int, error) {
-	responseChannel := ac.egressSub.TryResolveChannelEndpointPort()
-	if responseChannel == "" {
-		// TODO: Is this an error or success condition?
-		return 0, nil
-	}
-	now := time.Now().UnixMilli()
-	if now > ac.awaitTimeoutTime {
-		ac.state = clientDisconnected
-		// close publications? shouldn't be necessary unless we've hit some bug
-		ac.nextRetryConnectTime = now + (30 * time.Second).Milliseconds()
-		return 0, errors.New("timed out waiting for connected publication")
-	}
-	if len(ac.memberByIdMap) > 0 {
-		for _, member := range ac.memberByIdMap {
-			if member.publication != nil && member.publication.IsConnected() {
-				ac.ingressPub = member.publication
-				ac.fragmentAssembler.Clear()
-				err := ac.sendConnectRequest(responseChannel)
-				if err == nil {
-					logger.Debugf("sent connect request to memberId=%d correlationId=%d channel=%s",
-						member.memberId, ac.correlationId, member.publication.Channel())
-					ac.state = clientAwaitConnectReply
-					ac.awaitTimeoutTime = now + (3 * time.Second).Milliseconds()
-					break
-				}
-				if !errors.Is(err, TemporaryError) {
-					return 0, err
-				}
-			}
+		if !time.Now().Before(deadline) {
+			return nil, fmt.Errorf("%w: failed to add new leader ingress publication (leaderMemberId=%d, "+
+				"leadershipTermId=%d, channel=%s, streamId=%d) within %v: lastErr=%v", ErrTimeout,
+				ac.leaderMemberId, ac.leadershipTermId, channel, streamId, ac.ctx.MessageTimeout, lastErr)
 		}
-	} else if ac.ingressPub.IsConnected() && ac.sendConnectRequest(responseChannel) == nil {
-		ac.state = clientAwaitConnectReply
-		ac.awaitTimeoutTime = now + (3 * time.Second).Milliseconds()
+		ac.ctx.idle(ac.ctx.runAgentInvokers())
 	}
-	return 0, nil
 }
 
-// Returns nil on success, TemporaryError, or any other error is a permanent error.
-func (ac *AeronCluster) sendConnectRequest(responseChannel string) error {
-	ac.correlationId = ac.aeronClient.NextCorrelationID()
-	req := codecs.SessionConnectRequest{
-		CorrelationId:    ac.correlationId,
-		ResponseStreamId: ac.opts.EgressStreamId,
-		Version:          int32(protocolSemanticVersion),
-		ResponseChannel:  []byte(responseChannel),
-	}
-	header := codecs.MessageHeader{
-		BlockLength: req.SbeBlockLength(),
-		TemplateId:  req.SbeTemplateId(),
-		SchemaId:    req.SbeSchemaId(),
-		Version:     req.SbeSchemaVersion(),
-	}
-	writer := new(bytes.Buffer)
-	if err := header.Encode(marshaller, writer); err != nil {
+func (ac *AeronCluster) updateMemberEndpoints(ingressEndpoints string, leaderMemberId int32) error {
+	closeAllMembers(ac.endpointByIdMap)
+	members, err := parseMemberIngress(ac.ctx, ingressEndpoints)
+	if err != nil {
 		return err
 	}
-	if err := req.Encode(marshaller, writer, true); err != nil {
+	ac.endpointByIdMap = members
+	newLeader := members[leaderMemberId]
+	if newLeader == nil {
+		return fmt.Errorf("%w: new leaderMemberId=%d not in ingressEndpoints=%s", ErrCluster, leaderMemberId,
+			ingressEndpoints)
+	}
+	channel, err := ingressChannelForEndpoint(ac.ctx, newLeader.endpoint)
+	if err != nil {
 		return err
 	}
-	buffer := atomic.MakeBuffer(writer.Bytes())
-	result := ac.ingressPub.Offer(buffer, 0, buffer.Capacity(), nil)
-	if result >= 0 {
-		return nil
-	} else {
-		return fmt.Errorf("%w, failed to send connect request, channel=%s result=%d",
-			TemporaryError, ac.ingressPub.Channel(), result)
+	pub, err := ac.addNewLeaderIngressPublication(channel)
+	if err != nil {
+		return err
+	}
+	newLeader.publication = pub
+	ac.publication = pub
+	return nil
+}
+
+func (ac *AeronCluster) onDisconnected() {
+	if ac.publication != nil {
+		_ = ac.publication.Close()
+	}
+	ac.setState(stateAwaitNewLeader, time.Now().Add(ac.ctx.newLeaderTimeout()))
+}
+
+func (ac *AeronCluster) onSessionEvent(e *codecs.SessionEvent) {
+	if e.Code == codecs.EventCode.CLOSED {
+		ac.setState(statePendingClose, time.Time{})
 	}
 }
 
-func (ac *AeronCluster) pollEgress(fragmentLimit int) int {
-	return ac.egressSub.Poll(ac.fragmentAssembler.OnFragment, fragmentLimit)
+func (ac *AeronCluster) onNewLeaderEvent(header *logbuffer.Header, e *codecs.NewLeaderEvent) term.ControlledPollAction {
+	ac.egressImage = imageForHeader(ac.subscription, header)
+	if err := ac.OnNewLeader(e.ClusterSessionId, e.LeadershipTermId, e.LeaderMemberId,
+		string(e.IngressEndpoints)); err != nil {
+		ac.ctx.ErrorHandler(err)
+	}
+	return term.ControlledPollActionCommit
 }
 
-func (ac *AeronCluster) onFragment(buffer *atomic.Buffer, offset, length int32, header *logbuffer.Header) {
-	if length < cluster.SBEHeaderLength {
-		return
+func (ac *AeronCluster) onFragment(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
+	var ext ControlledEgressListenerExtension
+	if ac.egressExtension != nil {
+		ext = uncontrolledExtension{ac.egressExtension}
 	}
-	blockLength := buffer.GetUInt16(offset)
-	templateId := buffer.GetUInt16(offset + 2)
-	schemaId := buffer.GetUInt16(offset + 4)
-	version := buffer.GetUInt16(offset + 6)
-	if schemaId != cluster.ClusterSchemaId {
-		logger.Errorf("unexpected schemaId=%d templateId=%d blockLen=%d version=%d",
-			schemaId, templateId, blockLength, version)
-		return
-	}
-	offset += cluster.SBEHeaderLength
-	length -= cluster.SBEHeaderLength
-
-	switch templateId {
-	case cluster.SessionMessageHeaderTemplateId:
-		ac.onSessionMessage(buffer, offset, length, header)
-	case cluster.SessionEventTemplateId:
-		ac.onSessionEvent(buffer, offset, length, version, blockLength)
-	case cluster.NewLeaderEventTemlateId:
-		ac.onNewLeaderEvent(buffer, offset, length, version, blockLength)
-	case cluster.ChallengeTemplateId:
-		e := codecs.Challenge{}
-		buf := bytes.Buffer{}
-		buffer.WriteBytes(&buf, offset, length)
-		if err := e.Decode(marshaller, &buf, version, blockLength, true); err != nil {
-			logger.Errorf("new leader event decode error: %v", err)
-		} else {
-			logger.Warningf("received challenge, corrId=%d clusterSessionId=%d", e.CorrelationId, e.ClusterSessionId)
-		}
-	}
+	dispatchEgress(ac.clusterSessionId, buffer, offset, length, header, uncontrolled{ac.egressListener}, ext,
+		ac.onNewLeaderEvent, ac.onSessionEvent, ac.ctx.ErrorHandler)
 }
 
-func (ac *AeronCluster) onNewLeaderEvent(buffer *atomic.Buffer, offset, length int32, version, blockLength uint16) {
-	e := codecs.NewLeaderEvent{}
-	buf := bytes.Buffer{}
-	buffer.WriteBytes(&buf, offset, length)
-	if err := e.Decode(marshaller, &buf, version, blockLength, true); err != nil {
-		logger.Errorf("new leader event decode error: %v", err)
-	} else if ac.state == clientConnected && e.ClusterSessionId == ac.clusterSessionId {
-		ac.leadershipTermId = e.LeadershipTermId
-		ac.leaderMemberId = e.LeaderMemberId
-		ac.sessionMsgHdrBuffer.PutInt64(cluster.SBEHeaderLength, e.LeadershipTermId)
-		ac.keepAliveBuffer.PutInt64(cluster.SBEHeaderLength, e.LeadershipTermId)
-		if ac.opts.IngressEndpoints != "" {
-			if err := ac.ingressPub.Close(); err != nil {
-				logger.Warningf("error closing ingress publication: %v", err)
-			}
-			ac.ingressPub = nil
-			ac.updateMemberEndpoints(string(e.IngressEndpoints))
-		}
-		ac.fragmentAssembler.Clear()
-		ac.egressListener.OnNewLeader(ac, e.LeadershipTermId, e.LeaderMemberId)
-	} else {
-		logger.Debugf("ignored new leader event - state=%v thisSessionId=%d targetSessionId=%d leaderMemberId=%d leaderTermId=%d",
-			ac.state, ac.clusterSessionId, e.ClusterSessionId, e.LeaderMemberId, e.LeadershipTermId)
-	}
+func (ac *AeronCluster) onControlledFragment(buffer *atomic.Buffer, offset int32, length int32,
+	header *logbuffer.Header) term.ControlledPollAction {
+	return dispatchEgress(ac.clusterSessionId, buffer, offset, length, header, ac.controlledEgressListener,
+		ac.controlledEgressExtension, ac.onNewLeaderEvent, ac.onSessionEvent, ac.ctx.ErrorHandler)
 }
 
-func (ac *AeronCluster) onSessionEvent(buffer *atomic.Buffer, offset, length int32, version, blockLength uint16) {
-	e := codecs.SessionEvent{}
-	buf := bytes.Buffer{}
-	buffer.WriteBytes(&buf, offset, length)
-	if err := e.Decode(marshaller, &buf, version, blockLength, true); err != nil {
-		logger.Errorf("session event decode error: %v", err)
-	} else if ac.state == clientAwaitConnectReply && e.CorrelationId == ac.correlationId {
-		switch e.Code {
-		case codecs.EventCode.OK:
-			ac.leadershipTermId = e.LeadershipTermId
-			ac.leaderMemberId = e.LeaderMemberId
-			ac.clusterSessionId = e.ClusterSessionId
-			ac.sessionMsgHdrBuffer.PutInt64(cluster.SBEHeaderLength, e.LeadershipTermId)
-			ac.sessionMsgHdrBuffer.PutInt64(cluster.SBEHeaderLength+8, e.ClusterSessionId)
-			ac.keepAliveBuffer.PutInt64(cluster.SBEHeaderLength, e.LeadershipTermId)
-			ac.keepAliveBuffer.PutInt64(cluster.SBEHeaderLength+8, e.ClusterSessionId)
-			ac.state = clientConnected
-			ac.closeNonLeaderPublications()
-			ac.egressListener.OnConnect(ac)
-		case codecs.EventCode.REDIRECT:
-			logger.Infof("got redirect - leaderTermId=%d leaderMemberId=%d", e.LeadershipTermId, e.LeaderMemberId)
-			ac.leaderMemberId = e.LeaderMemberId
-			ac.updateMemberEndpoints(string(e.Detail))
-			ac.closeNonLeaderPublications()
-			ac.state = clientAwaitPublicationConnected
-		case codecs.EventCode.ERROR:
-			ac.egressListener.OnError(ac, string(e.Detail))
-			ac.state = clientDisconnected
-			ac.nextRetryConnectTime = time.Now().UnixMilli() + (5 * time.Second).Milliseconds()
-		case codecs.EventCode.AUTHENTICATION_REJECTED:
-			ac.egressListener.OnError(ac, fmt.Sprintf("authentication rejected (%s)", string(e.Detail)))
-			ac.state = clientDisconnected
-			ac.nextRetryConnectTime = time.Now().UnixMilli() + time.Minute.Milliseconds()
-		}
-	} else if ac.state == clientConnected && e.ClusterSessionId == ac.clusterSessionId {
-		if e.Code == codecs.EventCode.CLOSED {
-			ac.egressListener.OnDisconnect(ac, string(e.Detail))
-			ac.state = clientClosed
-		} else if e.Code == codecs.EventCode.ERROR {
-			ac.egressListener.OnError(ac, string(e.Detail))
-		} else {
-			logger.Infof("onSessionEvent - code=%v (%s)", e.Code, string(e.Detail))
-		}
-	} else {
-		logger.Debugf("ignored session event - state=%v thisSessionId=%d targetSessionId=%d code=%d (%s)",
-			ac.state, ac.clusterSessionId, e.ClusterSessionId, e.Code, string(e.Detail))
-	}
-}
-
-func (ac *AeronCluster) closeNonLeaderPublications() {
-	for _, member := range ac.memberByIdMap {
-		if member.memberId != ac.leaderMemberId {
-			member.close()
-		}
-	}
-}
-
-func (ac *AeronCluster) onSessionMessage(buffer *atomic.Buffer, offset, length int32, header *logbuffer.Header) {
-	if length < cluster.SessionMessageHeaderLength {
-		logger.Errorf("received invalid session message - length: %d", length)
-		return
-	}
-	leadershipTermId := buffer.GetInt64(offset)
-	clusterSessionId := buffer.GetInt64(offset + 8)
-	timestamp := buffer.GetInt64(offset + 16)
-	if ac.state != clientConnected {
-		logger.Debugf("received unexpected session message - leadershipTermId=%d clusterSessionId=%d state=%v",
-			leadershipTermId, clusterSessionId, ac.state)
-	} else if clusterSessionId == ac.clusterSessionId {
-		ac.egressListener.OnMessage(ac, timestamp, buffer, offset+cluster.SessionMessageHeaderLength,
-			length-cluster.SessionMessageHeaderLength, header)
-	} else {
-		logger.Debugf("received unexpected session msg - leaderTermId=%d targetSessionId=%d thisSessionId=%d",
-			leadershipTermId, clusterSessionId, ac.clusterSessionId)
-	}
-}
-
-func (ac *AeronCluster) sendCloseSession() {
-	buf := codecs.MakeClusterMessageBuffer(cluster.SessionCloseRequestTemplateId, 16)
-	buf.PutInt64(cluster.SBEHeaderLength, ac.leadershipTermId)
-	buf.PutInt64(cluster.SBEHeaderLength+8, ac.clusterSessionId)
-	for i := 0; i < 3; i++ {
-		if result := ac.ingressPub.Offer(buf, 0, buf.Capacity(), nil); result >= 0 {
+func (ac *AeronCluster) closeSession() {
+	length := MessageHeaderLength + int32(sessionCloseRequestBlockLength)
+	for attempts := sendAttempts; ; {
+		position := ac.publication.TryClaim(length, &ac.bufferClaim)
+		ac.TrackIngressPublicationResult(position)
+		if position > 0 {
+			buf, offset := ac.bufferClaim.Buffer(), ac.bufferClaim.Offset()
+			writeMessageHeader(buf, offset, sessionCloseRequestBlockLength, sessionCloseRequestTemplateId)
+			buf.PutInt64(offset+MessageHeaderLength, ac.leadershipTermId)
+			buf.PutInt64(offset+MessageHeaderLength+8, ac.clusterSessionId)
+			ac.bufferClaim.Commit()
 			return
 		}
-		ac.opts.IdleStrategy.Idle(0)
+		if attempts--; attempts <= 0 {
+			return
+		}
+		ac.ctx.idle(0)
 	}
 }
 
-func (member *memberIngress) close() {
-	if member.publication != nil {
-		if err := member.publication.Close(); err != nil {
-			logger.Warningf("error closing member publication, memberId=%d endpoint=%s: %v",
-				member.memberId, member.endpoint, err)
-		}
-		member.publication = nil
-	}
+func (ac *AeronCluster) setState(newState clientState, deadline time.Time) {
+	logger.Debugf("AeronCluster %v -> %v", ac.state, newState)
+	ac.state = newState
+	ac.stateDeadline = deadline
+}
+
+func atomicBufferOf(data []byte) *atomic.Buffer {
+	return atomic.MakeBuffer(data)
 }

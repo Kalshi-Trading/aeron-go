@@ -70,11 +70,11 @@ func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool)
 
 type recorder struct {
 	mu     sync.Mutex
-	frames []status.PublicationErrorFrame
+	frames []aeron.PublicationErrorFrame
 	errs   []error
 }
 
-func (r *recorder) frame(f *status.PublicationErrorFrame) {
+func (r *recorder) frame(f *aeron.PublicationErrorFrame) {
 	r.mu.Lock()
 	r.frames = append(r.frames, *f)
 	r.mu.Unlock()
@@ -86,10 +86,10 @@ func (r *recorder) err(e error) {
 	r.mu.Unlock()
 }
 
-func (r *recorder) snapshot() []status.PublicationErrorFrame {
+func (r *recorder) snapshot() []aeron.PublicationErrorFrame {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]status.PublicationErrorFrame(nil), r.frames...)
+	return append([]aeron.PublicationErrorFrame(nil), r.frames...)
 }
 
 func connect(t *testing.T, dir string, rec *recorder) *aeron.Aeron {
@@ -274,7 +274,7 @@ func TestPublicationErrorFrame(t *testing.T) {
 	}
 	time.Sleep(100 * time.Millisecond)
 
-	var got status.PublicationErrorFrame
+	var got aeron.PublicationErrorFrame
 	waitFor(t, 5*time.Second, "publication error frame", func() bool {
 		for _, f := range rec.snapshot() {
 			if f.RegistrationID == pub.OriginalRegistrationID() {

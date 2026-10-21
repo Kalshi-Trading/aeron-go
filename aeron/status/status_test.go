@@ -1,7 +1,6 @@
 package status
 
 import (
-	"net"
 	"reflect"
 	"testing"
 	"unsafe"
@@ -65,35 +64,5 @@ func TestStatusStrings(t *testing.T) {
 		if String(v) != s {
 			t.Errorf("String(%d)=%q", v, String(v))
 		}
-	}
-}
-
-func TestPublicationErrorFrameRoundTrip(t *testing.T) {
-	mem := make([]byte, 512)
-	buf := atomic.MakeBuffer(unsafe.Pointer(&mem[0]), int32(len(mem)))
-	for _, addr := range []*net.UDPAddr{
-		{IP: net.IPv4(10, 1, 2, 3).To4(), Port: 40123},
-		{IP: net.ParseIP("fe80::1"), Port: 65535},
-		nil,
-	} {
-		in := PublicationErrorFrame{RegistrationID: 11, SessionID: -3, StreamID: 1001, ReceiverID: 99,
-			DestinationRegistrationID: -1, GroupTag: 5, ErrorCode: 13, ErrorMessage: "image rejected", SourceAddress: addr}
-		n := EncodePublicationErrorFrame(buf, 16, &in)
-		if n != 64+4+int32(len(in.ErrorMessage)) {
-			t.Errorf("encoded length %d", n)
-		}
-		out, err := DecodePublicationErrorFrame(buf, 16, n)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(in, out) {
-			t.Errorf("round trip mismatch\n%v\n%v", in, out)
-		}
-		if _, err := DecodePublicationErrorFrame(buf, 16, n-1); err == nil {
-			t.Error("truncated frame should fail")
-		}
-	}
-	if PublicationErrorErrorCodeOffset != 60 || PublicationErrorErrorMessageOffset != 64 {
-		t.Error("offsets must match Java PublicationErrorFrameFlyweight")
 	}
 }

@@ -208,9 +208,8 @@ type ClientConductor struct {
 	availableCounterHandlers   []*IdAndAvailableCounterHandler
 	unavailableCounterHandlers []*IdAndUnavailableCounterHandler
 
-	errorHandler                 func(error)
-	publicationErrorFrameHandler PublicationErrorFrameHandler
-	imageFactory                 ImageFactory
+	errorHandler func(error)
+	imageFactory ImageFactory
 
 	running          atomic.Bool
 	conductorRunning atomic.Bool
@@ -225,6 +224,17 @@ type ClientConductor struct {
 	resourceLingerTimeoutNs         int64
 
 	heartbeatTimestamp *ctr.AtomicCounter
+
+	counterMetaDataBuffer        *atomic.Buffer
+	keepaliveIntervalNs          int64
+	closeLingerNs                int64
+	clientName                   string
+	preTouchMappedMemory         bool
+	subscriberErrorHandler       func(error)
+	closeHandler                 CloseHandler
+	closeOnce                    sync.Once
+	publicationErrorFrameHandler PublicationErrorFrameHandler
+	publicationErrorFrame        PublicationErrorFrame
 }
 
 // Init is the primary initialization method for ClientConductor
@@ -244,6 +254,8 @@ func (cc *ClientConductor) Init(driverProxy DriverProxy, bcast *broadcast.CopyRe
 	cc.resourceLingerTimeoutNs = lingerTo.Nanoseconds()
 
 	cc.counterValuesBuffer = counters.ValuesBuf.Get()
+	cc.counterMetaDataBuffer = counters.MetaDataBuf.Get()
+	cc.keepaliveIntervalNs = keepaliveTimeoutNS
 	cc.counterReader = ctr.NewReader(counters.ValuesBuf.Get(), counters.MetaDataBuf.Get())
 
 	cc.pendingCloses = make(map[int64]chan bool)
@@ -277,6 +289,7 @@ func (cc *ClientConductor) Close() (err error) {
 	for cc.conductorRunning.Get() && time.Now().Before(timeout) {
 		time.Sleep(10 * time.Millisecond)
 	}
+	cc.notifyClose()
 	if cc.conductorRunning.Get() {
 		msg := fmt.Sprintf("failed to stop conductor after %v", timeoutDuration)
 		logger.Warning(msg)
@@ -295,10 +308,7 @@ func (cc *ClientConductor) Start(idleStrategy idlestrategy.Idler) {
 
 // run is the main execution loop of ClientConductor.
 func (cc *ClientConductor) run(idleStrategy idlestrategy.Idler) {
-	now := time.Now().UnixNano()
-	cc.timeOfLastKeepalive = now
-	cc.timeOfLastCheckManagedResources = now
-	cc.timeOfLastDoWork = now
+	cc.initDutyCycleTimes()
 
 	// Stay on the same thread for performance
 	runtime.LockOSThread()
@@ -311,8 +321,12 @@ func (cc *ClientConductor) run(idleStrategy idlestrategy.Idler) {
 			cc.onError(errors.New(errStr))
 			cc.running.Set(false)
 		}
+		if cc.closeLingerNs > 0 {
+			time.Sleep(time.Duration(cc.closeLingerNs))
+		}
 		cc.forceCloseResources()
 		cc.conductorRunning.Set(false)
+		cc.notifyClose()
 
 		logger.Infof("ClientConductor done")
 	}()
@@ -840,7 +854,7 @@ func (cc *ClientConductor) OnNewPublication(streamID int32, sessionID int32, pos
 			pubDef.sessionID = sessionID
 			pubDef.posLimitCounterID = posLimitCounterID
 			pubDef.channelStatusIndicatorID = channelStatusIndicatorID
-			pubDef.buffers = logbuffer.Wrap(logFileName)
+			pubDef.buffers = cc.wrapLogBuffers(logFileName)
 			pubDef.buffers.IncRef()
 			pubDef.origRegID = origRegID
 
@@ -869,7 +883,7 @@ func (cc *ClientConductor) OnNewExclusivePublication(streamID int32, sessionID i
 			pubDef.sessionID = sessionID
 			pubDef.posLimitCounterID = posLimitCounterID
 			pubDef.channelStatusIndicatorID = channelStatusIndicatorID
-			pubDef.buffers = logbuffer.Wrap(logFileName)
+			pubDef.buffers = cc.wrapLogBuffers(logFileName)
 			pubDef.buffers.IncRef()
 			pubDef.origRegID = origRegID
 
@@ -977,9 +991,7 @@ func (cc *ClientConductor) OnAvailableImage(streamID int32, sessionID int32, log
 
 				sub.subscription.addImage(image)
 
-				if handler := sub.subscription.AvailableImageHandler(); handler != nil {
-					handler(image)
-				}
+				cc.callSubscriberHandler(sub.subscription.AvailableImageHandler(), image)
 			}
 		}
 	}
@@ -995,9 +1007,7 @@ func (cc *ClientConductor) OnUnavailableImage(corrID int64, subscriptionRegistra
 		if sub.regID == subscriptionRegistrationID {
 			if sub.subscription != nil {
 				image := sub.subscription.removeImage(corrID)
-				if handler := sub.subscription.UnavailableImageHandler(); handler != nil {
-					handler(image)
-				}
+				cc.callSubscriberHandler(sub.subscription.UnavailableImageHandler(), image)
 				cc.lingeringResources <- lingerResourse{time.Now().UnixNano(), image}
 				runtime.KeepAlive(image)
 			}
@@ -1083,7 +1093,7 @@ func (cc *ClientConductor) onHeartbeatCheckTimeouts() (int, error) {
 
 	cc.timeOfLastDoWork = now
 
-	if now > (cc.timeOfLastKeepalive + keepaliveTimeoutNS) {
+	if now > (cc.timeOfLastKeepalive + cc.keepaliveIntervalNs) {
 		age := cc.driverProxy.TimeOfLastDriverKeepalive()*time.Millisecond.Nanoseconds() + cc.driverTimeoutNs
 		if now > age {
 			cc.driverActive.Set(false)
@@ -1111,6 +1121,7 @@ func (cc *ClientConductor) onHeartbeatCheckTimeouts() (int, error) {
 					logger.Warning("unable to allocate heartbeat counter %d", counterId)
 				} else {
 					cc.heartbeatTimestamp.Set(now / time.Millisecond.Nanoseconds())
+					cc.onHeartbeatCounterFound(counterId)
 				}
 			}
 		}

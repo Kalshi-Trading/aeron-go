@@ -24,7 +24,6 @@ import (
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/broadcast"
 	"github.com/lirm/aeron-go/aeron/command"
-	"github.com/lirm/aeron-go/aeron/status"
 )
 
 var logger = logging.MustGetLogger("driver")
@@ -54,8 +53,6 @@ var Events = struct {
 	OnStaticCounter int32
 	/** error frame received by a publication */
 	OnPublicationError int32
-	/** response to get next available session id */
-	OnNextAvailableSessionID int32
 }{
 	0x0F01,
 	0x0F02,
@@ -69,7 +66,6 @@ var Events = struct {
 	0x0F0A,
 	0x0F0B,
 	0x0F0C,
-	0x0F0D,
 }
 
 type SubscriberPosition struct {
@@ -100,11 +96,7 @@ type Listener interface {
 	OnAvailableCounter(correlationID int64, counterID int32)
 	OnUnavailableCounter(correlationID int64, counterID int32)
 	OnClientTimeout(clientID int64)
-}
-
-// PublicationErrorListener is optionally implemented by a Listener to receive ON_PUBLICATION_ERROR events.
-type PublicationErrorListener interface {
-	OnPublicationError(frame *status.PublicationErrorFrame)
+	OnPublicationError(buffer *atomic.Buffer, offset int32, length int32)
 }
 
 type ListenerAdapter struct {
@@ -240,17 +232,9 @@ func (adapter *ListenerAdapter) ReceiveMessages() int {
 			adapter.listener.OnClientTimeout(msg.clientID.Get())
 		case Events.OnPublicationError:
 			logger.Debugf("received ON_PUBLICATION_ERROR")
-
-			if l, ok := adapter.listener.(PublicationErrorListener); ok {
-				frame, err := status.DecodePublicationErrorFrame(buffer, offset, length)
-				if err != nil {
-					logger.Warningf("invalid ON_PUBLICATION_ERROR: %v", err)
-					return
-				}
-				l.OnPublicationError(&frame)
-			}
+			adapter.listener.OnPublicationError(buffer, offset, length)
 		default:
-			// Java silently ignores unhandled events (e.g. ON_STATIC_COUNTER responses for other clients).
+			// Java silently ignores unhandled events (e.g. ON_STATIC_COUNTER for other clients).
 			logger.Debugf("received unhandled %d", msgTypeID)
 		}
 	}
