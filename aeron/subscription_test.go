@@ -135,6 +135,18 @@ func (_m *MockReceivingConductor) AddRcvDestination(registrationID int64, endpoi
 	return r0
 }
 
+// AsyncAddRcvDestination provides a mock function with given fields: registrationID, endpointChannel
+func (_m *MockReceivingConductor) AsyncAddRcvDestination(registrationID int64, endpointChannel string) (int64, error) {
+	ret := _m.Called(registrationID, endpointChannel)
+	return ret.Get(0).(int64), ret.Error(1)
+}
+
+// AsyncRemoveRcvDestination provides a mock function with given fields: registrationID, endpointChannel
+func (_m *MockReceivingConductor) AsyncRemoveRcvDestination(registrationID int64, endpointChannel string) (int64, error) {
+	ret := _m.Called(registrationID, endpointChannel)
+	return ret.Get(0).(int64), ret.Error(1)
+}
+
 // CounterReader provides a mock function with given fields:
 func (_m *MockReceivingConductor) CounterReader() *counters.Reader {
 	ret := _m.Called()
