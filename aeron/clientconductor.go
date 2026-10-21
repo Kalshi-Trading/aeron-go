@@ -1077,6 +1077,9 @@ func (cc *ClientConductor) HasActiveCommands() bool {
 // AddCounter sends ADD_COUNTER without waiting and returns the registration id; poll GetCounter.
 func (cc *ClientConductor) AddCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
 	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (int64, error) {
+	if err := validateCounterKeyAndLabelLength(keyLength, labelLength); err != nil {
+		return 0, err
+	}
 	return cc.asyncAdd(func() (int64, error) {
 		return cc.sendAddCounter(kindPendingCounter, func() (int64, error) {
 			return cc.driverProxy.AddCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset, labelLength)
@@ -1086,6 +1089,9 @@ func (cc *ClientConductor) AddCounter(typeId int32, keyBuffer *atomic.Buffer, ke
 
 // AddCounterByLabel sends ADD_COUNTER with an empty key without waiting; poll GetCounter.
 func (cc *ClientConductor) AddCounterByLabel(typeId int32, label string) (int64, error) {
+	if err := validateCounterLabel(label); err != nil {
+		return 0, err
+	}
 	return cc.asyncAdd(func() (int64, error) {
 		return cc.sendAddCounter(kindPendingCounter, func() (int64, error) {
 			return cc.driverProxy.AddCounterByLabel(typeId, label)
@@ -1097,6 +1103,9 @@ func (cc *ClientConductor) AddCounterByLabel(typeId int32, label string) (int64,
 // counters are not owned by this client and are never removed by it.
 func (cc *ClientConductor) AddStaticCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
 	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32, registrationId int64) (int64, error) {
+	if err := validateCounterKeyAndLabelLength(keyLength, labelLength); err != nil {
+		return 0, err
+	}
 	return cc.asyncAdd(func() (int64, error) {
 		return cc.sendAddCounter(kindPendingStaticCounter, func() (int64, error) {
 			return cc.driverProxy.AddStaticCounter(typeId, keyBuffer, keyOffset, keyLength, labelBuffer, labelOffset,
@@ -1107,11 +1116,31 @@ func (cc *ClientConductor) AddStaticCounter(typeId int32, keyBuffer *atomic.Buff
 
 // AddStaticCounterByLabel is AddStaticCounter with an empty key.
 func (cc *ClientConductor) AddStaticCounterByLabel(typeId int32, label string, registrationId int64) (int64, error) {
+	if err := validateCounterLabel(label); err != nil {
+		return 0, err
+	}
 	return cc.asyncAdd(func() (int64, error) {
 		return cc.sendAddCounter(kindPendingStaticCounter, func() (int64, error) {
 			return cc.driverProxy.AddStaticCounterByLabel(typeId, label, registrationId)
 		})
 	})
+}
+
+func validateCounterKeyAndLabelLength(keyLength int32, labelLength int32) error {
+	if keyLength < 0 || keyLength > ctr.MaxKeyLength {
+		return fmt.Errorf("key length out of bounds: %d", keyLength)
+	}
+	if labelLength < 0 || labelLength > ctr.MaxLabelLength {
+		return fmt.Errorf("label length out of bounds: %d", labelLength)
+	}
+	return nil
+}
+
+func validateCounterLabel(label string) error {
+	if len(label) > int(ctr.MaxLabelLength) {
+		return fmt.Errorf("label length exceeds MAX_LABEL_LENGTH: %d", len(label))
+	}
+	return nil
 }
 
 func (cc *ClientConductor) sendAddCounter(kind resourceKind, send func() (int64, error)) (int64, error) {
@@ -1162,10 +1191,10 @@ func (cc *ClientConductor) FindCounter(registrationID int64) (*Counter, error) {
 }
 
 // releaseCounter is called by Counter.Close. Static counters are not removed from the driver.
-func (cc *ClientConductor) releaseCounter(counter Counter) error {
+func (cc *ClientConductor) releaseCounter(registrationID int64, counterID int32) error {
 	cc.adminLock.Lock()
 	defer cc.unlock()
-	return cc.releaseCounterLocked(counter.RegistrationId(), counter.Id())
+	return cc.releaseCounterLocked(registrationID, counterID)
 }
 
 func (cc *ClientConductor) releaseCounterLocked(registrationID int64, counterID int32) error {
@@ -1186,18 +1215,33 @@ func (cc *ClientConductor) releaseCounterLocked(registrationID int64, counterID 
 	return nil
 }
 
-// AsyncRemoveCounter closes the client-owned counter with the given registration id without blocking.
+// AsyncRemoveCounter closes the client-owned counter with the given registration id without blocking
+// (Aeron.asyncRemoveCounter). It is a no-op for NullValue or once the client is closed. If the add command is still
+// awaiting the driver's response, REMOVE_COUNTER is sent anyway so the counter is not leaked in the driver.
 func (cc *ClientConductor) AsyncRemoveCounter(registrationID int64) error {
 	cc.adminLock.Lock()
 	defer cc.unlock()
-	if err := cc.ensureOpen(); err != nil {
-		return err
-	}
-	res := cc.resources[registrationID]
-	if res == nil || res.kind != kindCounter {
+	if registrationID == nullValue || cc.isTerminating.Get() || cc.isClosed.Get() {
 		return nil
 	}
-	return cc.releaseCounterLocked(registrationID, res.counter.Id())
+	res := cc.resources[registrationID]
+	switch {
+	case res == nil:
+		return nil
+	case res.kind == kindCounter:
+		return cc.releaseCounterLocked(registrationID, res.counter.Id())
+	case res.kind == kindPendingCounter:
+		delete(cc.resources, registrationID)
+		delete(cc.asyncCommandIDs, registrationID)
+		corrID, err := cc.driverProxy.RemoveCounter(registrationID)
+		if err != nil {
+			return err
+		}
+		cc.asyncCommandIDs[corrID] = cc.nanoClock()
+		return nil
+	default:
+		return fmt.Errorf("registration id %d is not a client owned Counter", registrationID)
+	}
 }
 
 // NextSessionID asks the driver for the next available session id for a stream (driver >= 1.47).

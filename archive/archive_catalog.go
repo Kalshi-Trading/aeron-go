@@ -270,7 +270,7 @@ func (p *descriptorPoller) onFragment(buffer *atomic.Buffer, offset int32, lengt
 			return term.ControlledPollActionContinue
 		}
 		if resp.Code == codecs.ControlResponseCode.ERROR {
-			err := fmt.Errorf("response for correlationID %d (relevantId %d) failed %s", resp.CorrelationId, resp.RelevantId, resp.ErrorMessage)
+			err := newArchiveResponseException(string(resp.ErrorMessage), resp.RelevantId, resp.CorrelationId)
 			if resp.CorrelationId == p.correlationID {
 				p.archive.Control.Results.ControlResponse = resp
 				p.err = err
