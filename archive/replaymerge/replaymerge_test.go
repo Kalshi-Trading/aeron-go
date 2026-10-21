@@ -14,6 +14,7 @@ package replaymerge
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 
@@ -78,6 +79,7 @@ type fakeSubscription struct {
 	removed          []string
 	addErr           error
 	lookupSessionID  int32
+	syncCalls        []string // destination changes that block on the driver
 }
 
 func (s *fakeSubscription) Channel() string   { return s.channel }
@@ -92,6 +94,7 @@ func (s *fakeSubscription) ImageBySessionID(sessionID int32) aeron.Image {
 }
 func (s *fakeSubscription) ResolvedEndpoint() string { return s.resolvedEndpoint }
 func (s *fakeSubscription) AddDestination(c string) error {
+	s.syncCalls = append(s.syncCalls, "add:"+c)
 	if s.addErr != nil {
 		return s.addErr
 	}
@@ -99,8 +102,20 @@ func (s *fakeSubscription) AddDestination(c string) error {
 	return nil
 }
 func (s *fakeSubscription) RemoveDestination(c string) error {
+	s.syncCalls = append(s.syncCalls, "remove:"+c)
 	s.removed = append(s.removed, c)
 	return nil
+}
+func (s *fakeSubscription) AsyncAddDestination(c string) (int64, error) {
+	if s.addErr != nil {
+		return 0, s.addErr
+	}
+	s.added = append(s.added, c)
+	return int64(len(s.added)), nil
+}
+func (s *fakeSubscription) AsyncRemoveDestination(c string) (int64, error) {
+	s.removed = append(s.removed, c)
+	return int64(len(s.removed)), nil
 }
 
 type replayCall struct {
@@ -418,7 +433,6 @@ func TestGetRecordingPositionBackoffAndNullPosition(t *testing.T) {
 		n := len(h.arch.maxPosCalls)
 		h.step(1)
 		require.Equal(t, n+1, len(h.arch.maxPosCalls), "backoff %d", backoff)
-		h.clock.now -= 0
 		h.rm.timeOfLastProgressMs = h.clock.now // keep the progress check happy
 	}
 }
@@ -433,8 +447,8 @@ func TestArchiveErrorFailsMerge(t *testing.T) {
 	_, err := h.rm.DoWork()
 	var archErr *ArchiveError
 	require.ErrorAs(t, err, &archErr)
-	assert.Equal(t, int32(3), archErr.ErrorCode)
-	assert.Equal(t, "unknown recording", archErr.Message)
+	assert.Equal(t, archive.ErrorCodeActiveSubscription, archErr.ErrorCode)
+	assert.Contains(t, archErr.Message, "error: unknown recording")
 	assert.True(t, h.rm.HasFailed())
 
 	// Close after failure removes the replay destination, replay was never active.
@@ -558,4 +572,73 @@ func TestPollAndControlledPoll(t *testing.T) {
 	h.arch.responseDown = true
 	_, err = h.rm.Poll(handler, 10)
 	assert.ErrorIs(t, err, ErrArchiveNotConnected)
+}
+
+// Java adds and removes destinations from the duty cycle and close with asyncAddDestination/asyncRemoveDestination,
+// so DoWork and Close never wait on a driver round trip.
+func TestDestinationsChangedAsynchronouslyAfterConstruction(t *testing.T) {
+	h := newHarness(t, testReplayDestPort)
+	require.Equal(t, []string{"add:" + testReplayDestPort}, h.sub.syncCalls)
+	recorded := int64(1 << 20)
+	h.arch.onMaxPos = func() int64 { return recorded }
+	h.runUntil(StateCatchup, 50)
+	h.sub.image = &fakeImage{position: recorded, transportCount: 2, termLength: 64 * 1024}
+	h.runUntil(StateAttemptLiveJoin, 5)
+	h.runUntil(StateCatchup, 50)
+	require.True(t, h.rm.IsLiveAdded())
+	h.runUntil(StateMerged, 100)
+	assert.Equal(t, []string{testReplayDestPort, testLiveDest}, h.sub.added)
+	assert.Equal(t, []string{testReplayDestPort}, h.sub.removed)
+	assert.Equal(t, []int64{testReplaySession}, h.arch.stopReplays)
+	assert.Equal(t, []string{"add:" + testReplayDestPort}, h.sub.syncCalls)
+}
+
+func TestCloseRemovesReplayDestinationAsynchronously(t *testing.T) {
+	h := newHarness(t, testReplayDestPort)
+	h.sub.syncCalls = nil
+	require.NoError(t, h.rm.Close())
+	assert.Equal(t, []string{testReplayDestPort}, h.sub.removed)
+	assert.Empty(t, h.sub.syncCalls)
+}
+
+func TestLiveDestinationAddErrorFailsMerge(t *testing.T) {
+	h := newHarness(t, testReplayDestPort)
+	recorded := int64(1 << 20)
+	h.arch.onMaxPos = func() int64 { return recorded }
+	h.runUntil(StateCatchup, 50)
+	h.sub.image = &fakeImage{position: recorded, transportCount: 1, termLength: 64 * 1024}
+	h.runUntil(StateAttemptLiveJoin, 5)
+	closedErr := errors.New("subscription is closed")
+	h.sub.addErr = closedErr
+	var err error
+	for i := 0; i < 100 && err == nil; i++ {
+		h.clock.now += 10
+		_, err = h.rm.DoWork()
+	}
+	require.ErrorIs(t, err, closedErr)
+	assert.True(t, h.rm.HasFailed())
+	assert.False(t, h.rm.IsLiveAdded())
+}
+
+// Java throws ArchiveException(message, errorCode, correlationId) for an ERROR response, the same type the rest of
+// the archive client returns, so callers can inspect the error code the same way.
+func TestArchiveErrorIsArchiveException(t *testing.T) {
+	h := newHarness(t, testReplayDestPort)
+	h.arch.onMaxPos = func() int64 { return 1024 }
+	h.arch.replayErr = &codecs.ControlResponse{ControlSessionId: testSessionID,
+		RelevantId: int64(archive.ErrorCodeUnknownRecording), Code: codecs.ControlResponseCode.ERROR,
+		ErrorMessage: []uint8("unknown recording id: 5")}
+	h.runUntil(StateReplay, 20)
+	h.step(1)
+	_, err := h.rm.DoWork()
+	code, isArchiveErr := archive.ArchiveErrorCodeOf(err)
+	require.True(t, isArchiveErr, "%T: %v", err, err)
+	assert.Equal(t, archive.ErrorCodeUnknownRecording, code)
+	assert.ErrorIs(t, err, &archive.ArchiveException{ErrorCode: archive.ErrorCodeUnknownRecording})
+	var archErr *archive.ArchiveException
+	require.ErrorAs(t, err, &archErr)
+	assert.Equal(t, h.arch.replays[0].correlationID, archErr.CorrelationID)
+	assert.Equal(t, fmt.Sprintf("archive response for correlationId=%d, error: unknown recording id: 5",
+		h.arch.replays[0].correlationID), archErr.Message)
+	assert.True(t, h.rm.HasFailed())
 }

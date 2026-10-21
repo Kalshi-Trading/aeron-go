@@ -63,6 +63,8 @@ type ReceivingConductor interface {
 	releaseSubscription(regID int64, images []Image) error
 	AddRcvDestination(registrationID int64, endpointChannel string) error
 	RemoveRcvDestination(registrationID int64, endpointChannel string) error
+	AsyncAddRcvDestination(registrationID int64, endpointChannel string) (int64, error)
+	AsyncRemoveRcvDestination(registrationID int64, endpointChannel string) (int64, error)
 	rejectImage(imageCorrelationID int64, position int64, reason string) error
 }
 
@@ -393,6 +395,28 @@ func (sub *Subscription) RemoveDestination(endpointChannel string) error {
 	}
 
 	return sub.conductor.RemoveRcvDestination(sub.registrationID, endpointChannel)
+}
+
+// AsyncAddDestination adds a destination manually to a multi-destination Subscription without waiting for the
+// driver. The returned correlation id can be checked with Aeron.IsCommandActive; driver errors go to the error
+// handler.
+func (sub *Subscription) AsyncAddDestination(endpointChannel string) (int64, error) {
+	if sub.IsClosed() {
+		return 0, errors.New("subscription is closed")
+	}
+
+	return sub.conductor.AsyncAddRcvDestination(sub.registrationID, endpointChannel)
+}
+
+// AsyncRemoveDestination removes a destination manually from a multi-destination Subscription without waiting for
+// the driver. The returned correlation id can be checked with Aeron.IsCommandActive; driver errors go to the error
+// handler.
+func (sub *Subscription) AsyncRemoveDestination(endpointChannel string) (int64, error) {
+	if sub.IsClosed() {
+		return 0, errors.New("subscription is closed")
+	}
+
+	return sub.conductor.AsyncRemoveRcvDestination(sub.registrationID, endpointChannel)
 }
 
 // IsConnectedTo is a helper function used primarily by tests, which is used within the same process to verify that
