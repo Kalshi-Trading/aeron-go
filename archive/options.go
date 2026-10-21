@@ -62,6 +62,19 @@ type Options struct {
 	// Defaults to NullCredentialsSupplier.
 	CredentialsSupplier CredentialsSupplier // [init]
 
+	// AuthEnabled, AuthCredentials, AuthChallenge and AuthResponse are the upstream lirm/aeron-go authentication
+	// options. If CredentialsSupplier is nil and AuthEnabled is set, conclude uses a StaticCredentialsSupplier of
+	// AuthCredentials and AuthResponse, and a challenge that differs from a non-nil AuthChallenge fails the connect.
+	//
+	// Deprecated: use CredentialsSupplier.
+	AuthEnabled bool // [init]
+	// Deprecated: use CredentialsSupplier.
+	AuthCredentials []uint8 // [init]
+	// Deprecated: use CredentialsSupplier.
+	AuthChallenge []uint8 // [init]
+	// Deprecated: use CredentialsSupplier.
+	AuthResponse []uint8 // [init]
+
 	// ErrorHandler, if set, replaces Listeners.ErrorListener for the connected Archive. It is also invoked for errors
 	// raised while closing.
 	ErrorHandler func(error) // [init]
@@ -185,7 +198,11 @@ func (o *Options) conclude() error {
 		o.IdleStrategy = idlestrategy.NewDefaultBackoffIdleStrategy()
 	}
 	if o.CredentialsSupplier == nil {
-		o.CredentialsSupplier = NullCredentialsSupplier{}
+		if o.AuthEnabled {
+			o.CredentialsSupplier = StaticCredentialsSupplier{Credentials: o.AuthCredentials, ChallengeResponse: o.AuthResponse}
+		} else {
+			o.CredentialsSupplier = NullCredentialsSupplier{}
+		}
 	}
 	if o.Lock == nil {
 		o.Lock = &sync.Mutex{}
@@ -221,10 +238,10 @@ func (o *Options) applySessionID(nextSessionID func(streamID int32) (int32, erro
 	return nil
 }
 
-func (o *Options) applyDefaultParams(channel string) (*aeron.ChannelUri, error) {
+func (o *Options) applyDefaultParams(channel string) (aeron.ChannelUri, error) {
 	uri, err := aeron.ParseChannelUri(channel)
 	if err != nil {
-		return nil, err
+		return aeron.ChannelUri{}, err
 	}
 	if uri.Get(aeron.TermLengthParamName) == "" {
 		uri.Set(aeron.TermLengthParamName, strconv.Itoa(o.ControlTermBufferLength))
@@ -238,7 +255,7 @@ func (o *Options) applyDefaultParams(channel string) (*aeron.ChannelUri, error) 
 	return uri, nil
 }
 
-func isControlModeResponse(uri *aeron.ChannelUri) bool {
+func isControlModeResponse(uri aeron.ChannelUri) bool {
 	return uri.Get(aeron.MdcControlModeParamName) == controlModeResponse
 }
 

@@ -213,6 +213,10 @@ func (aeron *Aeron) Close() error {
 		})
 		aeron.context.inUse.Store(false)
 	})
+	if errors.Is(aeron.closeErr, ErrCloseFromCallback) {
+		// The first Close came from a conductor callback: wait for it to complete unless this one does too.
+		return aeron.conductor.Close()
+	}
 	return aeron.closeErr
 }
 
@@ -248,6 +252,24 @@ func (aeron *Aeron) AddSubscriptionWithHandlers(channel string, streamID int32,
 	return aeron.conductor.AddSubscriptionWithHandlers(channel, streamID, onAvailableImage, onUnavailableImage)
 }
 
+// AddSubscriptionDeprecated adds a subscription without blocking the caller. The returned channel receives the
+// subscription (or nil if the add failed, after the error was passed to the context's error handler) and is then
+// closed.
+//
+// Deprecated: use AddSubscription, or AsyncAddSubscription with GetSubscription.
+func (aeron *Aeron) AddSubscriptionDeprecated(channel string, streamID int32) chan *Subscription {
+	ch := make(chan *Subscription, 1)
+	go func() {
+		sub, err := aeron.AddSubscription(channel, streamID)
+		if err != nil {
+			aeron.conductor.reportError(err)
+		}
+		ch <- sub
+		close(ch)
+	}()
+	return ch
+}
+
 // AsyncAddSubscription sends ADD_SUBSCRIPTION without blocking; poll GetSubscription with the returned id.
 func (aeron *Aeron) AsyncAddSubscription(channel string, streamID int32) (int64, error) {
 	return aeron.conductor.AsyncAddSubscriptionWithHandlers(channel, streamID, aeron.context.availableImageHandler,
@@ -276,6 +298,24 @@ func (aeron *Aeron) AddPublication(channel string, streamID int32) (*Publication
 	return aeron.conductor.AddPublication(channel, streamID)
 }
 
+// AddPublicationDeprecated adds a concurrent publication without blocking the caller. The returned channel receives
+// the publication (or nil if the add failed, after the error was passed to the context's error handler) and is then
+// closed.
+//
+// Deprecated: use AddPublication, or AsyncAddPublication with GetPublication.
+func (aeron *Aeron) AddPublicationDeprecated(channel string, streamID int32) chan *Publication {
+	ch := make(chan *Publication, 1)
+	go func() {
+		pub, err := aeron.AddPublication(channel, streamID)
+		if err != nil {
+			aeron.conductor.reportError(err)
+		}
+		ch <- pub
+		close(ch)
+	}()
+	return ch
+}
+
 // AsyncAddPublication sends ADD_PUBLICATION without blocking; poll GetPublication with the returned id.
 func (aeron *Aeron) AsyncAddPublication(channel string, streamID int32) (int64, error) {
 	return aeron.conductor.AsyncAddPublication(channel, streamID)
@@ -289,6 +329,24 @@ func (aeron *Aeron) GetPublication(registrationID int64) (*Publication, error) {
 // AddExclusivePublication adds an exclusive publication, blocking until the driver confirms it.
 func (aeron *Aeron) AddExclusivePublication(channel string, streamID int32) (*ExclusivePublication, error) {
 	return aeron.conductor.AddExclusivePublication(channel, streamID)
+}
+
+// AddExclusivePublicationDeprecated adds an exclusive publication without blocking the caller. The returned channel
+// receives the publication (or nil if the add failed, after the error was passed to the context's error handler) and
+// is then closed.
+//
+// Deprecated: use AddExclusivePublication, or AsyncAddExclusivePublication with GetExclusivePublication.
+func (aeron *Aeron) AddExclusivePublicationDeprecated(channel string, streamID int32) chan *ExclusivePublication {
+	ch := make(chan *ExclusivePublication, 1)
+	go func() {
+		pub, err := aeron.AddExclusivePublication(channel, streamID)
+		if err != nil {
+			aeron.conductor.reportError(err)
+		}
+		ch <- pub
+		close(ch)
+	}()
+	return ch
 }
 
 // AsyncAddExclusivePublication sends ADD_EXCLUSIVE_PUBLICATION without blocking; poll GetExclusivePublication.

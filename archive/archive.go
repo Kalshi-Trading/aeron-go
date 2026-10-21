@@ -466,8 +466,15 @@ func (archive *Archive) StopRecordingBySubscriptionId(subscriptionID int64) erro
 // StopRecordingByPublication to stop recording a sessionId specific
 // recording that pertains to the given Publication
 //
-// Returns error on failure, nil on success
-func (archive *Archive) StopRecordingByPublication(publication aeron.Publisher) error {
+// Returns error on failure, nil on success. Takes the publication by value as upstream lirm/aeron-go did; use
+// StopRecordingByPublisher for a *Publication or *ExclusivePublication.
+func (archive *Archive) StopRecordingByPublication(publication aeron.Publication) error {
+	return archive.StopRecordingByPublisher(&publication)
+}
+
+// StopRecordingByPublisher stops recording the session specific recording of a publication (concurrent or
+// exclusive), equivalent to Java AeronArchive.stopRecording(Publication).
+func (archive *Archive) StopRecordingByPublisher(publication aeron.Publisher) error {
 	channel, err := AddSessionIdToChannel(publication.Channel(), publication.SessionID())
 	if err != nil {
 		return err
@@ -713,8 +720,15 @@ func (archive *Archive) GetRecordingPosition(recordingID int64) (int64, error) {
 // segments being asynchronously being deleted then you should await
 // completion via the RecordingSignal Delete
 //
-// Returns the count of deleted segment files (as Java truncateRecording does).
-func (archive *Archive) TruncateRecording(recordingID int64, position int64) (int64, error) {
+// Returns error on failure, nil on success. See TruncateRecordingWithCount for the deleted segment count.
+func (archive *Archive) TruncateRecording(recordingID int64, position int64) error {
+	_, err := archive.TruncateRecordingWithCount(recordingID, position)
+	return err
+}
+
+// TruncateRecordingWithCount is TruncateRecording returning the count of deleted segment files (as Java
+// truncateRecording does).
+func (archive *Archive) TruncateRecordingWithCount(recordingID int64, position int64) (int64, error) {
 	return archive.request(func(correlationID int64) error {
 		return archive.Proxy.TruncateRecordingRequest(correlationID, recordingID, position)
 	})
@@ -1042,8 +1056,15 @@ func (archive *Archive) StopReplication(replicationID int64) error {
 // Invalid and delete the corresponding segment files. The space in
 // the Catalog will be reclaimed upon compaction.
 //
-// Returns the count of deleted segment files (as Java purgeRecording does).
-func (archive *Archive) PurgeRecording(recordingID int64) (int64, error) {
+// Returns error on failure, nil on success. See PurgeRecordingWithCount for the deleted segment count.
+func (archive *Archive) PurgeRecording(recordingID int64) error {
+	_, err := archive.PurgeRecordingWithCount(recordingID)
+	return err
+}
+
+// PurgeRecordingWithCount is PurgeRecording returning the count of deleted segment files (as Java purgeRecording
+// does).
+func (archive *Archive) PurgeRecordingWithCount(recordingID int64) (int64, error) {
 	return archive.request(func(correlationID int64) error {
 		return archive.Proxy.PurgeRecordingRequest(correlationID, recordingID)
 	})

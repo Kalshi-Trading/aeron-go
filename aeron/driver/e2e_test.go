@@ -166,7 +166,7 @@ func TestE2EEveryCommand(t *testing.T) {
 		return a[0].(command.PublicationError).RegistrationID == pubID
 	})
 	pubErr := args[0].(command.PublicationError)
-	assert.Equal(t, command.ErrorCodeImageRejected, pubErr.ErrorCode)
+	assert.Equal(t, int32(command.ErrorCodeImageRejected), pubErr.ErrorCode)
 	assert.Equal(t, "go e2e reject", pubErr.ErrorMessage)
 	assert.Equal(t, streamID, pubErr.StreamID)
 	assert.Equal(t, pubSessionID, pubErr.SessionID)
@@ -261,16 +261,16 @@ func TestE2EEveryCommand(t *testing.T) {
 	badID, err := p.AddPublication("aeron:bogus?x=y", streamID)
 	require.NoError(t, err)
 	args = c.await(5*time.Second, "OnErrorResponse", corrIs(0, badID))
-	assert.Equal(t, command.ErrorCodeInvalidChannel, args[1])
+	assert.Equal(t, int32(command.ErrorCodeInvalidChannel), args[1])
 	t.Logf("ON_ERROR %v", args)
 	unknownID, err := p.RemoveSubscription(-12345)
 	require.NoError(t, err)
 	args = c.await(5*time.Second, "OnErrorResponse", corrIs(0, unknownID))
-	assert.Equal(t, command.ErrorCodeUnknownSubscription, args[1])
+	assert.Equal(t, int32(command.ErrorCodeUnknownSubscription), args[1])
 	unknownPub, err := p.RemovePublication(-12345, false)
 	require.NoError(t, err)
 	args = c.await(5*time.Second, "OnErrorResponse", corrIs(0, unknownPub))
-	assert.Equal(t, command.ErrorCodeUnknownPublication, args[1])
+	assert.Equal(t, int32(command.ErrorCodeUnknownPublication), args[1])
 
 	// The driver validates command lengths: a truncated ADD_COUNTER is rejected as MALFORMED_COMMAND.
 	short := atomic.MakeBuffer(make([]byte, 128))
@@ -364,7 +364,7 @@ func TestE2EAddressInUseIsErrorResponse(t *testing.T) {
 	require.NoError(t, err)
 	args := c.await(5*time.Second, "OnErrorResponse", corrIs(0, subID))
 	t.Logf("ON_ERROR %v", args)
-	assert.Equal(t, command.ErrorCodeGenericError, args[1])
+	assert.Equal(t, int32(command.ErrorCodeGenericError), args[1])
 	assert.Contains(t, args[2], "Address already in use")
 	assert.NotContains(t, c.listener.calls, "OnChannelEndpointError")
 }

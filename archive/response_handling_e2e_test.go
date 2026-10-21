@@ -284,7 +284,7 @@ func TestE2E_RecordingEventsAndSignals(t *testing.T) {
 	assert.EqualValues(t, aeron.NullValue, responsePoller.RelevantId(), "stopped recording has no active position")
 
 	// DELETE
-	_, err = arch.PurgeRecording(replicaId)
+	err = arch.PurgeRecording(replicaId)
 	require.NoError(t, err)
 	waitFor("DELETE signal", hasSignal(replicaId, codecs.RecordingSignal.DELETE))
 	t.Logf("recording %d signals: %v", recordingId, signalsFor(recordingId))

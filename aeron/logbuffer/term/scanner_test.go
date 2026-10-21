@@ -70,9 +70,9 @@ func TestScanForAvailability(t *testing.T) {
 
 func TestControlledPollActionString(t *testing.T) {
 	require.Equal(t, "ABORT", ControlledPollActionAbort.String())
-	require.Equal(t, "BREAK", ControlledPollActionBreak.String())
-	require.Equal(t, "COMMIT", ControlledPollActionCommit.String())
-	require.Equal(t, "CONTINUE", ControlledPollActionContinue.String())
+	require.Equal(t, "BREAK", ControlledPollAction(ControlledPollActionBreak).String())
+	require.Equal(t, "COMMIT", ControlledPollAction(ControlledPollActionCommit).String())
+	require.Equal(t, "CONTINUE", ControlledPollAction(ControlledPollActionContinue).String())
 	var a ControlledPollAction = ControlledPollActionBreak
-	require.Equal(t, ControlledPollActionBreak, a)
+	require.Equal(t, ControlledPollAction(ControlledPollActionBreak), a)
 }
