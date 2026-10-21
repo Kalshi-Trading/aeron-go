@@ -76,7 +76,6 @@ func (archive *Archive) Close() error {
 	if archive.State() == ArchiveStateClosed {
 		return nil
 	}
-	archive.state.Store(int32(ArchiveStateClosed))
 
 	var errs []error
 	if pub := archive.Proxy.Publication; pub != nil && pub.IsConnected() && archive.SessionID != aeron.NullValue {
@@ -84,6 +83,8 @@ func (archive *Archive) Close() error {
 			errs = append(errs, err)
 		}
 	}
+	// Set after the close session request, which is refused once the client is closed.
+	archive.state.Store(int32(ArchiveStateClosed))
 
 	if archive.Options.OwnsAeronClient {
 		if archive.aeron != nil {

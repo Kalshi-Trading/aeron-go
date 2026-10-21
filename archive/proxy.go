@@ -33,6 +33,9 @@ type Proxy struct {
 
 // Offer to our request publication with a retry to allow time for the image establishment, some back pressure etc
 func (proxy *Proxy) Offer(buffer *atomic.Buffer, offset int32, length int32, reservedValueSupplier term.ReservedValueSupplier) int64 {
+	if proxy.archive.IsClosed() {
+		return aeron.PublicationClosed
+	}
 	start := time.Now()
 	var ret int64
 	for time.Since(start) < proxy.archive.Options.Timeout {
@@ -54,6 +57,23 @@ func (proxy *Proxy) Offer(buffer *atomic.Buffer, offset int32, length int32, res
 
 }
 
+// offerError converts a failed Offer result into the ArchiveException Java ArchiveProxy raises (or, for a timeout,
+// the "failed to send request" exception raised by AeronArchive).
+func (proxy *Proxy) offerError(ret int64) error {
+	switch {
+	case ret == aeron.PublicationClosed && proxy.archive.IsClosed():
+		return NewArchiveException("client is closed", ErrorCodeGeneric, aeron.NullValue)
+	case ret == aeron.PublicationClosed:
+		return NewArchiveException("connection to the archive has been closed", ErrorCodeGeneric, aeron.NullValue)
+	case ret == aeron.MaxPositionExceeded:
+		return NewArchiveException(fmt.Sprintf("offer failed due to max position being reached: term-length=%d",
+			proxy.Publication.TermBufferLength()), ErrorCodeGeneric, aeron.NullValue)
+	default:
+		return NewArchiveException(fmt.Sprintf("failed to send archive request: offer result=%d", ret),
+			ErrorCodeGeneric, aeron.NullValue)
+	}
+}
+
 // From here we have all the functions that create a data packet and send it on the
 // publication. Responses will be processed on the control
 
@@ -66,7 +86,7 @@ func (proxy *Proxy) CloseSessionRequest() error {
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -82,7 +102,7 @@ func (proxy *Proxy) StartRecordingRequest(correlationID int64, stream int32, isL
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -97,7 +117,7 @@ func (proxy *Proxy) StopRecordingRequest(correlationID int64, stream int32, chan
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -113,7 +133,7 @@ func (proxy *Proxy) ReplayRequest(correlationID int64, recordingID int64, positi
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -128,7 +148,7 @@ func (proxy *Proxy) StopReplayRequest(correlationID int64, replaySessionID int64
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -144,7 +164,7 @@ func (proxy *Proxy) ListRecordingsRequest(correlationID int64, fromRecordingID i
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -161,7 +181,7 @@ func (proxy *Proxy) ListRecordingsForUriRequest(correlationID int64, fromRecordi
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -177,7 +197,7 @@ func (proxy *Proxy) ListRecordingRequest(correlationID int64, fromRecordingID in
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -193,7 +213,7 @@ func (proxy *Proxy) ExtendRecordingRequest(correlationID int64, recordingID int6
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -208,7 +228,7 @@ func (proxy *Proxy) RecordingPositionRequest(correlationID int64, recordingID in
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -223,7 +243,7 @@ func (proxy *Proxy) TruncateRecordingRequest(correlationID int64, recordingID in
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -238,7 +258,7 @@ func (proxy *Proxy) StopRecordingSubscriptionRequest(correlationID int64, subscr
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -253,7 +273,7 @@ func (proxy *Proxy) StopRecordingByIdentityRequest(correlationID int64, recordin
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -268,7 +288,7 @@ func (proxy *Proxy) StopPositionRequest(correlationID int64, recordingID int64) 
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -284,7 +304,7 @@ func (proxy *Proxy) FindLastMatchingRecordingRequest(correlationID int64, minRec
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -300,7 +320,7 @@ func (proxy *Proxy) ListRecordingSubscriptionsRequest(correlationID int64, pseud
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -316,7 +336,7 @@ func (proxy *Proxy) BoundedReplayRequest(correlationID int64, recordingID int64,
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -332,7 +352,7 @@ func (proxy *Proxy) StopAllReplaysRequest(correlationID int64, recordingID int64
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -348,7 +368,7 @@ func (proxy *Proxy) CatalogHeaderRequest(version int32, length int32, nextRecord
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -367,7 +387,7 @@ func (proxy *Proxy) ReplicateRequest(correlationID int64, srcRecordingID int64, 
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -382,7 +402,7 @@ func (proxy *Proxy) ReplicateRequest2(correlationID int64, srcRecordingID int64,
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -397,7 +417,7 @@ func (proxy *Proxy) StopReplicationRequest(correlationID int64, replicationID in
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -412,7 +432,7 @@ func (proxy *Proxy) StartPositionRequest(correlationID int64, recordingID int64)
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -427,7 +447,7 @@ func (proxy *Proxy) DetachSegmentsRequest(correlationID int64, recordingID int64
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -442,7 +462,7 @@ func (proxy *Proxy) DeleteDetachedSegmentsRequest(correlationID int64, recording
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -457,7 +477,7 @@ func (proxy *Proxy) PurgeSegmentsRequest(correlationID int64, recordingID int64,
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -472,7 +492,7 @@ func (proxy *Proxy) AttachSegmentsRequest(correlationID int64, recordingID int64
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -487,7 +507,7 @@ func (proxy *Proxy) MigrateSegmentsRequest(correlationID int64, srcRecordingID i
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -503,7 +523,7 @@ func (proxy *Proxy) AuthConnectRequest(correlationID int64, responseStream int32
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -518,7 +538,7 @@ func (proxy *Proxy) ChallengeResponse(correlationID int64, encodedCredentials []
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -533,7 +553,7 @@ func (proxy *Proxy) KeepAliveRequest(correlationID int64) error {
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -554,7 +574,7 @@ func (proxy *Proxy) TaggedReplicateRequest(correlationID int64, srcRecordingID i
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil
@@ -569,7 +589,7 @@ func (proxy *Proxy) PurgeRecordingRequest(correlationID int64, replaySessionID i
 	}
 
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 
 	return nil

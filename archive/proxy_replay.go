@@ -15,8 +15,6 @@
 package archive
 
 import (
-	"fmt"
-
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/archive/codecs"
 )
@@ -26,7 +24,7 @@ func (proxy *Proxy) offerPacket(bytes []byte, err error) error {
 		return err
 	}
 	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+		return proxy.offerError(ret)
 	}
 	return nil
 }
