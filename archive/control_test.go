@@ -211,6 +211,7 @@ func newTestControl(t *testing.T) (*Control, *aeron.MockImage) {
 	c.fragmentAssembler = aeron.NewControlledFragmentAssembler(
 		c.onFragment, aeron.DefaultFragmentAssemblyBufferLength,
 	)
+	c.errorFragmentHandler = c.errorResponseFragmentHandler
 	return c, image
 }
 

@@ -57,22 +57,6 @@ func (proxy *Proxy) Offer(buffer *atomic.Buffer, offset int32, length int32, res
 // From here we have all the functions that create a data packet and send it on the
 // publication. Responses will be processed on the control
 
-// ConnectRequest packet and offer
-func (proxy *Proxy) ConnectRequest(correlationID int64, responseStream int32, responseChannel string) error {
-
-	// Create a packet and send it
-	bytes, err := codecs.ConnectRequestPacket(proxy.marshaller, proxy.archive.Options.RangeChecking, correlationID, responseStream, responseChannel)
-	if err != nil {
-		return err
-	}
-
-	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
-	}
-
-	return nil
-}
-
 // CloseSessionRequest packet and offer
 func (proxy *Proxy) CloseSessionRequest() error {
 	// Create a packet and send it
@@ -509,11 +493,11 @@ func (proxy *Proxy) MigrateSegmentsRequest(correlationID int64, srcRecordingID i
 	return nil
 }
 
-// AuthConnectRequest packet and offer
-func (proxy *Proxy) AuthConnectRequest(correlationID int64, responseStream int32, responseChannel string, encodedCredentials []uint8) error {
+// AuthConnectRequest packet and offer. Normally sent by AsyncConnect.
+func (proxy *Proxy) AuthConnectRequest(correlationID int64, responseStream int32, responseChannel string, encodedCredentials []uint8, clientInfo string) error {
 
 	// Create a packet and send it
-	bytes, err := codecs.AuthConnectRequestPacket(proxy.marshaller, proxy.archive.Options.RangeChecking, correlationID, responseStream, responseChannel, encodedCredentials)
+	bytes, err := codecs.AuthConnectRequestPacket(proxy.marshaller, proxy.archive.Options.RangeChecking, correlationID, responseStream, responseChannel, encodedCredentials, clientInfo)
 	if err != nil {
 		return err
 	}

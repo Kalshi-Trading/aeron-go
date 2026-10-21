@@ -20,7 +20,7 @@ type sbeMessage interface {
 	SbeSchemaVersion() uint16
 }
 
-func encodeMessage(t *testing.T, msg sbeMessage) *atomic.Buffer {
+func encodeSbeMessage(t *testing.T, msg sbeMessage) *atomic.Buffer {
 	t.Helper()
 	m := codecs.NewSbeGoMarshaller()
 	buf := new(bytes.Buffer)
@@ -147,7 +147,7 @@ func newPollerTestArchive() (*Archive, *[]*codecs.RecordingSignalEvent, *[]error
 }
 
 func feed(t *testing.T, p *descriptorPoller, msg sbeMessage) term.ControlledPollAction {
-	b := encodeMessage(t, msg)
+	b := encodeSbeMessage(t, msg)
 	return p.onFragment(b, 0, b.Capacity(), nil)
 }
 

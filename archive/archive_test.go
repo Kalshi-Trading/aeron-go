@@ -100,7 +100,7 @@ func TestMain(m *testing.M) {
 
 	archive, err = NewArchive(options, context)
 	if err != nil || archive == nil {
-		log.Printf("archive-media-driver connection failed, skipping archive integration tests: %v", err)
+		log.Printf("archive-media-driver connection failed, skipping archive integration tests: %s", err)
 		os.Exit(m.Run())
 	}
 	haveArchive = true
@@ -116,10 +116,10 @@ func TestMain(m *testing.M) {
 	os.Exit(result)
 
 	// Test auth
-	options.AuthEnabled = true
-	options.AuthCredentials = []uint8(*TestConfig.AuthCredentials)
-	options.AuthChallenge = []uint8(*TestConfig.AuthChallenge)
-	options.AuthResponse = []uint8(*TestConfig.AuthResponse)
+	options.CredentialsSupplier = StaticCredentialsSupplier{
+		Credentials:       []uint8(*TestConfig.AuthCredentials),
+		ChallengeResponse: []uint8(*TestConfig.AuthResponse),
+	}
 
 	testCases[0].sampleStream += int32(r.Intn(1000))
 	testCases[0].replayStream += int32(r.Intn(1000))
