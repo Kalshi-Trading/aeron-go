@@ -718,6 +718,18 @@ func (m *PublicationErrorFrame) Length() int32 {
 	return pubErrErrorMessageOffset + sizeOfInt32 + m.getInt32(pubErrErrorMessageOffset)
 }
 
+// ValidateLength checks a received ON_PUBLICATION_ERROR of the given length holds the fixed fields and the message.
+func (m *PublicationErrorFrame) ValidateLength(length int32) error {
+	if length < pubErrErrorMessageOffset+sizeOfInt32 {
+		return malformed("publication error frame too short: length=%d", length)
+	}
+	if msgLength := m.getInt32(pubErrErrorMessageOffset); msgLength < 0 ||
+		msgLength > length-pubErrErrorMessageOffset-sizeOfInt32 {
+		return malformed("invalid publication error frame message length=%d for length=%d", msgLength, length)
+	}
+	return nil
+}
+
 // Value copies the frame into a PublicationError that is safe to retain after the callback returns.
 func (m *PublicationErrorFrame) Value() PublicationError {
 	addr, _ := m.SourceAddress()

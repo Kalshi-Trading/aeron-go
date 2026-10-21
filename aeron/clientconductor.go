@@ -1445,7 +1445,10 @@ func (cc *ClientConductor) OnChannelEndpointError(corrID int64, errorMessage str
 			cc.queueError(NewChannelEndpointError(statusIndicatorID, errorMessage))
 		}
 	}
-	cc.failCommand(corrID, NewRegistrationError(corrID, 4, errorMessage))
+	// corrID is a channel status indicator id here, so (as in Java) only an async command with that id is failed.
+	if _, ok := cc.asyncCommandIDs[corrID]; ok {
+		cc.failCommand(corrID, NewRegistrationError(corrID, int32(ErrorCodeChannelEndpointError), errorMessage))
+	}
 }
 
 func (cc *ClientConductor) OnAvailableCounter(corrID int64, counterID int32) {
