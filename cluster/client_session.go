@@ -9,31 +9,42 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package cluster
 
 import (
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
+	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/lirm/aeron-go/aeron/logbuffer/term"
 )
 
 const (
+	// ClientSessionMockedOffer is returned when offering to a session on a non-leader member (Java
+	// ClientSession.MOCKED_OFFER).
 	ClientSessionMockedOffer = 1
 )
 
+// ClientSession is a session from a client to the cluster as seen by a clustered service.
+// Mirrors io.aeron.cluster.service.ClientSession.
 type ClientSession interface {
 	Id() int64
 	ResponseStreamId() int32
 	ResponseChannel() string
 	EncodedPrincipal() []byte
+
+	// Close requests the session be closed via the consensus module. Duplicate requests are suppressed.
 	Close()
-	// TODO: the other close methods are not part of interface.
-	// I don't understand the closing bool implementation and why it is needed
-	// Leaving out for now unless it is really important
-	// IsClosing() bool
-	Offer(*atomic.Buffer, int32, int32, term.ReservedValueSupplier) int64
-	// TryClaim(...)
+
+	// IsClosing indicates that a request to close this session has been made.
+	IsClosing() bool
+
+	// Offer a message to the client's egress. Returns ClientSessionMockedOffer when not the leader.
+	Offer(buffer *atomic.Buffer, offset, length int32, reservedValueSupplier term.ReservedValueSupplier) int64
+
+	// TryClaim a range of the egress publication for zero copy publication. The length excludes the
+	// SessionMessageHeader, which occupies the first SessionMessageHeaderLength bytes of the claim payload.
+	// When not leader a scratch buffer is claimed and ClientSessionMockedOffer returned.
+	TryClaim(length int32, claim *logbuffer.Claim) int64
 }
 
 type containerClientSession struct {
@@ -43,6 +54,7 @@ type containerClientSession struct {
 	encodedPrincipal []byte
 	agent            *ClusteredServiceAgent
 	response         *aeron.Publication
+	isClosing        bool
 }
 
 func newContainerClientSession(
@@ -51,19 +63,14 @@ func newContainerClientSession(
 	responseChannel string,
 	encodedPrincipal []byte,
 	agent *ClusteredServiceAgent,
-) (*containerClientSession, error) {
-	pub, err := agent.aeronClient.AddPublication(responseChannel, responseStreamId)
-	if err != nil {
-		return nil, err
-	}
+) *containerClientSession {
 	return &containerClientSession{
 		id:               id,
 		responseStreamId: responseStreamId,
 		responseChannel:  responseChannel,
 		encodedPrincipal: encodedPrincipal,
 		agent:            agent,
-		response:         pub,
-	}, nil
+	}
 }
 
 func (s *containerClientSession) Id() int64 {
@@ -83,9 +90,21 @@ func (s *containerClientSession) EncodedPrincipal() []byte {
 }
 
 func (s *containerClientSession) Close() {
-	if _, ok := s.agent.getClientSession(s.id); ok {
-		s.agent.closeClientSession(s.id)
+	if s.agent.GetClientSession(s.id) != nil {
+		s.agent.CloseClientSession(s.id)
 	}
+}
+
+func (s *containerClientSession) IsClosing() bool {
+	return s.isClosing
+}
+
+func (s *containerClientSession) markClosing() {
+	s.isClosing = true
+}
+
+func (s *containerClientSession) resetClosing() {
+	s.isClosing = false
 }
 
 func (s *containerClientSession) Offer(
@@ -94,12 +113,31 @@ func (s *containerClientSession) Offer(
 	length int32,
 	reservedValueSupplier term.ReservedValueSupplier,
 ) int64 {
-	return s.agent.offerToSession(
-		s.id,
-		s.response,
-		buffer,
-		offset,
-		length,
-		reservedValueSupplier,
-	)
+	return s.agent.offerToSession(s.id, s.response, buffer, offset, length, reservedValueSupplier)
+}
+
+func (s *containerClientSession) TryClaim(length int32, claim *logbuffer.Claim) int64 {
+	return s.agent.tryClaimToSession(s.id, s.response, length, claim)
+}
+
+// connect lazily creates the egress publication. Errors are logged rather than failing the service as the client
+// may have gone away (Java: ContainerClientSession.connect).
+func (s *containerClientSession) connect(aeronClient *aeron.Aeron) {
+	if s.response != nil {
+		return
+	}
+	pub, err := aeronClient.AddPublication(s.responseChannel, s.responseStreamId)
+	if err != nil {
+		logger.Errorf("failed to connect session response publication - id=%d channel=%s: %v",
+			s.id, s.responseChannel, err)
+		return
+	}
+	s.response = pub
+}
+
+func (s *containerClientSession) disconnect() {
+	if s.response != nil {
+		closePublication(s.response)
+		s.response = nil
+	}
 }

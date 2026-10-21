@@ -12,11 +12,16 @@ protocol](http://github.com/real-logic/aeron/blob/master/aeron-cluster/src/main/
 is specified in xml using the [Simple Binary Encoding (SBE)](https://github.com/real-logic/simple-binary-encoding).
 
 ## Current State
-The implementation is functional and mostly feature complete, including support
-for snapshotting, timers, multiple services within the same cluster, sending messages
-back to cluster sessions, and service mark files. The [Cluster](cluster.go) interface
-lacks of the methods of its [Java equivalent](https://github.com/real-logic/aeron/blob/master/aeron-cluster/src/main/java/io/aeron/cluster/service/Cluster.java),
-but these would be trivial additions.
+Parity target: Java `io.aeron.cluster.service` 1.53.3 against cluster schema v17. Supported: snapshots (incl. standby
+snapshot flags), timers, multiple services, the full [Cluster](cluster.go) API (egress `Offer`/`TryClaim`, session
+lookup/enumeration/close, timers, time unit, role, idle strategy), `ServiceAck` with ackId/relevantId,
+`RequestServiceAck`, `ServiceTerminationPosition` ackRequired, `JoinLog` isStandby, lazy egress publications,
+semantic-major app version validation and a Java-compatible `ClusterMarkFile`.
+
+An end-to-end test against a Java 1.53.3 `ClusteredMediaDriver` lives in [e2e_test.go](e2e_test.go):
+
+    docker compose -f docker/cluster-service.compose.yml up -d --build cluster-node
+    AERON_E2E=1 go test ./cluster -run TestE2E -v
 
 ## Examples
 
@@ -29,5 +34,4 @@ of using the cluster client.
 # Backlog
  * godoc improvements
  * testing
- * cluster session close handling (avoid sending duplicate close requests to consensus module)
  * SBE encoding/decoding improvements

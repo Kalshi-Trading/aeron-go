@@ -5,89 +5,72 @@ import (
 
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/idlestrategy"
-	"github.com/lirm/aeron-go/cluster/codecs"
+	"github.com/lirm/aeron-go/aeron/logbuffer"
 )
 
 const (
-	scheduleTimerBlockLength = 16
-	cancelTimerBlockLength   = 8
+	scheduleTimerBlockLength       = 16
+	cancelTimerBlockLength         = 8
+	serviceAckBlockLength          = 36
+	closeSessionBlockLength        = 8
+	clusterMembersQueryBlockLength = 12
+	sendAttempts                   = 3
 )
 
-// Proxy class for encapsulating encoding and sending of control protocol messages to a cluster
+// consensusModuleProxy encodes messages from the service to the consensus module on the control channel.
+// Mirrors io.aeron.cluster.service.ConsensusModuleProxy for schema v17.
 type consensusModuleProxy struct {
-	marshaller    *codecs.SbeGoMarshaller // currently shared as we're not reentrant (but could be here)
-	idleStrategy  idlestrategy.Idler
-	rangeChecking bool
-	publication   *aeron.Publication
-	buffer        *atomic.Buffer
+	publication *aeron.Publication
+	buffer      *atomic.Buffer
 }
 
-func newConsensusModuleProxy(
-	options *Options,
-	publication *aeron.Publication,
-) *consensusModuleProxy {
+func newConsensusModuleProxy(publication *aeron.Publication) *consensusModuleProxy {
 	return &consensusModuleProxy{
-		marshaller:    codecs.NewSbeGoMarshaller(),
-		rangeChecking: options.RangeChecking,
-		publication:   publication,
-		buffer:        atomic.MakeBuffer(make([]byte, 500)),
+		publication: publication,
+		buffer:      atomic.MakeBuffer(make([]byte, 128)),
 	}
 }
 
-// From here we have all the functions that create a data packet and send it on the
-// publication. Responses will be processed on the control
-
-// ConnectRequest packet and send
-func (proxy *consensusModuleProxy) serviceAckRequest(
-	logPosition int64,
-	timestamp int64,
-	ackID int64,
-	relevantID int64,
-	serviceID int32,
-) {
-	// Create a packet and send it
-	bytes, err := codecs.ServiceAckRequestPacket(
-		proxy.marshaller,
-		proxy.rangeChecking,
-		logPosition,
-		timestamp,
-		ackID,
-		relevantID,
-		serviceID,
-	)
-	if err != nil {
-		panic(err)
-	}
-	proxy.send(bytes)
+func (proxy *consensusModuleProxy) ack(logPosition, timestamp, ackId, relevantId int64, serviceId int32) bool {
+	buf := proxy.initBuffer(serviceAckTemplateId, serviceAckBlockLength)
+	buf.PutInt64(SBEHeaderLength, logPosition)
+	buf.PutInt64(SBEHeaderLength+8, timestamp)
+	buf.PutInt64(SBEHeaderLength+16, ackId)
+	buf.PutInt64(SBEHeaderLength+24, relevantId)
+	buf.PutInt32(SBEHeaderLength+32, serviceId)
+	return proxy.send(buf, SBEHeaderLength+serviceAckBlockLength)
 }
 
-func (proxy *consensusModuleProxy) closeSessionRequest(
-	clusterSessionId int64,
-) {
-	// Create a packet and send it
-	bytes, err := codecs.CloseSessionRequestPacket(
-		proxy.marshaller,
-		proxy.rangeChecking,
-		clusterSessionId,
-	)
-	if err != nil {
-		panic(err)
-	}
-	proxy.send(bytes)
+func (proxy *consensusModuleProxy) closeSession(clusterSessionId int64) bool {
+	buf := proxy.initBuffer(closeSessionTemplateId, closeSessionBlockLength)
+	buf.PutInt64(SBEHeaderLength, clusterSessionId)
+	return proxy.send(buf, SBEHeaderLength+closeSessionBlockLength)
 }
 
 func (proxy *consensusModuleProxy) scheduleTimer(correlationId int64, deadline int64) bool {
 	buf := proxy.initBuffer(scheduleTimerTemplateId, scheduleTimerBlockLength)
 	buf.PutInt64(SBEHeaderLength, correlationId)
 	buf.PutInt64(SBEHeaderLength+8, deadline)
-	return proxy.offer(buf, 0, SBEHeaderLength+scheduleTimerBlockLength) >= 0
+	return proxy.send(buf, SBEHeaderLength+scheduleTimerBlockLength)
 }
 
 func (proxy *consensusModuleProxy) cancelTimer(correlationId int64) bool {
 	buf := proxy.initBuffer(cancelTimerTemplateId, cancelTimerBlockLength)
 	buf.PutInt64(SBEHeaderLength, correlationId)
-	return proxy.offer(buf, 0, SBEHeaderLength+cancelTimerBlockLength) >= 0
+	return proxy.send(buf, SBEHeaderLength+cancelTimerBlockLength)
+}
+
+// clusterMembersQuery requests the cluster membership; the response is delivered as egress to the requester
+// (ClusterMembersResponse/ClusterMembersExtendedResponse), matching ConsensusModuleProxy.clusterMembersQuery.
+func (proxy *consensusModuleProxy) clusterMembersQuery(correlationId int64, extended bool) bool {
+	buf := proxy.initBuffer(clusterMembersQueryTemplateId, clusterMembersQueryBlockLength)
+	buf.PutInt64(SBEHeaderLength, correlationId)
+	var ext int32
+	if extended {
+		ext = 1
+	}
+	buf.PutInt32(SBEHeaderLength+8, ext)
+	return proxy.send(buf, SBEHeaderLength+clusterMembersQueryBlockLength)
 }
 
 func (proxy *consensusModuleProxy) initBuffer(templateId uint16, blockLength uint16) *atomic.Buffer {
@@ -99,39 +82,45 @@ func (proxy *consensusModuleProxy) initBuffer(templateId uint16, blockLength uin
 	return buf
 }
 
-// send to our request publication
-func (proxy *consensusModuleProxy) send(payload []byte) {
-	buffer := atomic.MakeBuffer(payload)
-	for proxy.offer(buffer, 0, buffer.Capacity()) < 0 {
-		proxy.idleStrategy.Idle(0)
-	}
-}
-
-func (proxy *consensusModuleProxy) offer(buffer *atomic.Buffer, offset, length int32) int64 {
-	var result int64
-	for i := 0; i < 3; i++ {
-		result = proxy.publication.Offer(buffer, offset, length, nil)
-		if result >= 0 {
-			break
-		} else if result == aeron.NotConnected || result == aeron.PublicationClosed || result == aeron.MaxPositionExceeded {
-			panic(fmt.Sprintf("offer failed, result=%d", result))
+func (proxy *consensusModuleProxy) send(buffer *atomic.Buffer, length int32) bool {
+	for i := 0; i < sendAttempts; i++ {
+		result := proxy.publication.Offer(buffer, 0, length, nil)
+		if result > 0 {
+			return true
 		}
+		checkResult(result)
 	}
-	return result
+	return false
 }
 
-func (proxy *consensusModuleProxy) Offer2(
+// offer2 sends a service-originated session message (header + payload). Not retried, matching Java.
+func (proxy *consensusModuleProxy) offer2(
 	bufferOne *atomic.Buffer, offsetOne int32, lengthOne int32,
 	bufferTwo *atomic.Buffer, offsetTwo int32, lengthTwo int32,
 ) int64 {
-	var result int64
-	for i := 0; i < 3; i++ {
-		result = proxy.publication.Offer2(bufferOne, offsetOne, lengthOne, bufferTwo, offsetTwo, lengthTwo, nil)
-		if result >= 0 {
-			break
-		} else if result == aeron.NotConnected || result == aeron.PublicationClosed || result == aeron.MaxPositionExceeded {
-			panic(fmt.Sprintf("offer failed, result=%d", result))
-		}
+	return proxy.publication.Offer2(bufferOne, offsetOne, lengthOne, bufferTwo, offsetTwo, lengthTwo, nil)
+}
+
+func (proxy *consensusModuleProxy) tryClaim(length int32, claim *logbuffer.Claim) int64 {
+	return proxy.publication.TryClaim(length, claim)
+}
+
+// ClusterError is raised (via panic inside the agent, returned from StartAndRun) for unrecoverable cluster
+// protocol failures, analogous to io.aeron.cluster.client.ClusterException.
+type ClusterError struct {
+	Msg string
+}
+
+func (e *ClusterError) Error() string {
+	return "ClusterError: " + e.Msg
+}
+
+func newClusterError(format string, args ...interface{}) *ClusterError {
+	return &ClusterError{Msg: fmt.Sprintf(format, args...)}
+}
+
+func checkResult(result int64) {
+	if result == aeron.NotConnected || result == aeron.PublicationClosed || result == aeron.MaxPositionExceeded {
+		panic(newClusterError("unexpected publication state: %d", result))
 	}
-	return result
 }
