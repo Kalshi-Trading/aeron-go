@@ -15,9 +15,7 @@
 package archive
 
 import (
-	"bytes"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
@@ -182,6 +180,7 @@ type descriptorPoller struct {
 	recordingConsumer    RecordingDescriptorConsumer
 	subscriptionConsumer RecordingSubscriptionDescriptorConsumer
 	unknownTerminalCode  codecs.ControlResponseCodeEnum
+	decoder              responseDecoder
 }
 
 func (archive *Archive) listDescriptors(count int32, rc RecordingDescriptorConsumer, sc RecordingSubscriptionDescriptorConsumer, send func(correlationID int64) error) (int32, error) {
@@ -232,11 +231,15 @@ func (p *descriptorPoller) pollAll() (int32, error) {
 			deadline = time.Now().Add(p.archive.Options.Timeout)
 		}
 		if fragments == 0 {
-			if control.Subscription.IsClosed() || !control.Subscription.IsConnected() {
-				return initial - p.remaining, fmt.Errorf("response channel from archive is not connected")
+			if err := control.checkForDisconnect(); err != nil {
+				return initial - p.remaining, err
 			}
 			if time.Now().After(deadline) {
-				return initial - p.remaining, fmt.Errorf("timeout waiting for descriptors for correlationID %d", p.correlationID)
+				what := "awaiting recording descriptors"
+				if p.subscriptionConsumer != nil {
+					what = "awaiting subscription descriptors"
+				}
+				return initial - p.remaining, control.timeoutError(what, p.correlationID)
 			}
 			p.archive.Options.IdleStrategy.Idle(0)
 		}
@@ -248,29 +251,28 @@ func (p *descriptorPoller) onFragment(buffer *atomic.Buffer, offset int32, lengt
 		return term.ControlledPollActionAbort
 	}
 
-	buf := new(bytes.Buffer)
-	buffer.WriteBytes(buf, offset, length)
-	marshaller := codecs.NewSbeGoMarshaller()
-	var hdr codecs.SbeGoMessageHeader
-	if err := hdr.Decode(marshaller, buf); err != nil {
-		p.listenerError(fmt.Errorf("descriptor poller failed to decode message header: %w", err))
+	d := &p.decoder
+	if d.marshaller == nil {
+		*d = newResponseDecoder(p.archive.Options.RangeChecking)
+	}
+	if err := d.wrap(buffer, offset, length); err != nil {
+		p.listenerError(err)
 		return term.ControlledPollActionContinue
 	}
 	sessionID := p.archive.SessionID
-	rangeCheck := p.archive.Options.RangeChecking
 
-	switch hdr.TemplateId {
+	switch d.templateId() {
 	case codecIds.controlResponse:
 		resp := new(codecs.ControlResponse)
-		if err := resp.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
-			p.listenerError(fmt.Errorf("descriptor poller failed to decode control response: %w", err))
+		if err := d.decode(resp); err != nil {
+			p.listenerError(err)
 			return term.ControlledPollActionContinue
 		}
 		if resp.ControlSessionId != sessionID {
 			return term.ControlledPollActionContinue
 		}
 		if resp.Code == codecs.ControlResponseCode.ERROR {
-			err := fmt.Errorf("response for correlationID %d (relevantId %d) failed %s", resp.CorrelationId, resp.RelevantId, resp.ErrorMessage)
+			err := newArchiveResponseException(string(resp.ErrorMessage), resp.RelevantId, resp.CorrelationId)
 			if resp.CorrelationId == p.correlationID {
 				p.archive.Control.Results.ControlResponse = resp
 				p.err = err
@@ -287,8 +289,8 @@ func (p *descriptorPoller) onFragment(buffer *atomic.Buffer, offset int32, lengt
 			return term.ControlledPollActionContinue
 		}
 		rd := new(codecs.RecordingDescriptor)
-		if err := rd.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
-			p.listenerError(fmt.Errorf("descriptor poller failed to decode recording descriptor: %w", err))
+		if err := d.decode(rd); err != nil {
+			p.listenerError(err)
 			return term.ControlledPollActionContinue
 		}
 		if rd.ControlSessionId == sessionID && rd.CorrelationId == p.correlationID {
@@ -301,8 +303,8 @@ func (p *descriptorPoller) onFragment(buffer *atomic.Buffer, offset int32, lengt
 			return term.ControlledPollActionContinue
 		}
 		rsd := new(codecs.RecordingSubscriptionDescriptor)
-		if err := rsd.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
-			p.listenerError(fmt.Errorf("descriptor poller failed to decode recording subscription descriptor: %w", err))
+		if err := d.decode(rsd); err != nil {
+			p.listenerError(err)
 			return term.ControlledPollActionContinue
 		}
 		if rsd.ControlSessionId == sessionID && rsd.CorrelationId == p.correlationID {
@@ -312,8 +314,8 @@ func (p *descriptorPoller) onFragment(buffer *atomic.Buffer, offset int32, lengt
 
 	case codecIds.recordingSignalEvent:
 		rse := new(codecs.RecordingSignalEvent)
-		if err := rse.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
-			p.listenerError(fmt.Errorf("descriptor poller failed to decode recording signal: %w", err))
+		if err := d.decode(rse); err != nil {
+			p.listenerError(err)
 			return term.ControlledPollActionContinue
 		}
 		dispatchRecordingSignal(p.archive, rse)
