@@ -155,7 +155,7 @@ func (aeron *Aeron) AddSubscriptionWithHandlers(channel string, streamID int32,
 		if subscription != nil || err != nil {
 			return subscription, err
 		}
-		aeron.context.idleStrategy.Idle(0)
+		awaitingIdleStrategy.Idle(0)
 	}
 }
 
@@ -180,7 +180,7 @@ func (aeron *Aeron) AddSubscriptionDeprecated(channel string, streamID int32) ch
 				close(ch)
 				return
 			}
-			aeron.context.idleStrategy.Idle(0)
+			awaitingIdleStrategy.Idle(0)
 		}
 	}()
 	return ch
@@ -230,7 +230,7 @@ func (aeron *Aeron) AddPublicationDeprecated(channel string, streamID int32) cha
 				close(ch)
 				return
 			}
-			aeron.context.idleStrategy.Idle(0)
+			awaitingIdleStrategy.Idle(0)
 		}
 	}()
 
@@ -249,7 +249,7 @@ func (aeron *Aeron) AddPublication(channel string, streamID int32) (*Publication
 		if publication != nil || err != nil {
 			return publication, err
 		}
-		aeron.context.idleStrategy.Idle(0)
+		awaitingIdleStrategy.Idle(0)
 	}
 }
 
@@ -277,7 +277,7 @@ func (aeron *Aeron) AddExclusivePublication(channel string, streamID int32) (*Pu
 		if publication != nil || err != nil {
 			return publication, err
 		}
-		aeron.context.idleStrategy.Idle(0)
+		awaitingIdleStrategy.Idle(0)
 	}
 }
 
@@ -304,7 +304,7 @@ func (aeron *Aeron) AddExclusivePublicationDeprecated(channel string, streamID i
 				close(ch)
 				return
 			}
-			aeron.context.idleStrategy.Idle(0)
+			awaitingIdleStrategy.Idle(0)
 		}
 	}()
 

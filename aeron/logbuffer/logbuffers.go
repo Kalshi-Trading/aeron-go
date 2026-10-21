@@ -50,13 +50,13 @@ func Wrap(fileName string) *LogBuffers {
 		}
 
 		buffers.mmapFiles = []*memmap.File{mmap}
-		basePtr := uintptr(mmap.GetMemoryPtr())
+		basePtr := mmap.GetMemoryPtr()
 		for i := 0; i < PartitionCount; i++ {
-			ptr := unsafe.Pointer(basePtr + uintptr(int64(i)*int64(termLength)))
+			ptr := unsafe.Add(basePtr, int64(i)*int64(termLength))
 			buffers.buffers[i].Wrap(ptr, int32(termLength))
 		}
 
-		ptr := unsafe.Pointer(basePtr + uintptr(logLength-int64(LogMetaDataLength)))
+		ptr := unsafe.Add(basePtr, logLength-int64(LogMetaDataLength))
 		buffers.buffers[LogMetaDataSectionIndex].Wrap(ptr, LogMetaDataLength)
 
 		buffers.meta.Wrap(&buffers.buffers[LogMetaDataSectionIndex], 0)

@@ -31,8 +31,7 @@ func NewTestingLogbuffer() (*LogBuffers, error) {
 	if err != nil {
 		return nil, err
 	}
-	basePtr := uintptr(mmap.GetMemoryPtr())
-	ptr := unsafe.Pointer(basePtr + uintptr(int64(logLength-LogMetaDataLength)))
+	ptr := unsafe.Add(mmap.GetMemoryPtr(), int64(logLength-LogMetaDataLength))
 	buf := atomic.MakeBuffer(ptr, LogMetaDataLength)
 
 	var meta LogBufferMetaData
