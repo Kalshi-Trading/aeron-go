@@ -1,7 +1,6 @@
 package mixedmatrix
 
 import (
-	"errors"
 	"fmt"
 	"math/rand"
 	"os/exec"
@@ -215,12 +214,7 @@ func TestDriverFreezeBeyondTimeout(t *testing.T) {
 	require.Error(t, addErr)
 	require.Less(t, time.Since(start), driverTimeout+3*time.Second, "AddPublication against a frozen driver")
 	awaitTrue(t, "Go client to close on driver timeout", driverTimeout+5*time.Second, cl.IsClosed)
-	var dte *aeron.DriverTimeoutError
-	found := false
-	for _, e := range cl.Errors() {
-		found = found || errors.As(e, &dte)
-	}
-	require.True(t, found, "DriverTimeoutError via ErrorHandler, got %v", cl.Errors())
+	requireDriverTimeout(t, cl, addErr)
 	loop.Stop()
 	require.Error(t, loop.err, "offer after driver timeout")
 	require.Contains(t, loop.err.Error(), strconv.Itoa(int(aeron.PublicationClosed)))

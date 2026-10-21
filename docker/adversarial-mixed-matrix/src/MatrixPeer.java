@@ -45,6 +45,7 @@ public final class MatrixPeer
     private static final Map<String, String> ARGS = new HashMap<>();
     private static final List<String> DESTS = new ArrayList<>();
     private static final AtomicBoolean CLOSE = new AtomicBoolean();
+    private static final AtomicBoolean REPORTED = new AtomicBoolean();
     private static final Map<Long, ImageState> IMAGES = new ConcurrentHashMap<>();
 
     public static void main(final String[] args)
@@ -86,7 +87,11 @@ public final class MatrixPeer
         final Aeron.Context ctx = new Aeron.Context()
             .aeronDirectoryName(ARGS.getOrDefault("dir", "/dev/shm/aeron-adv-mixed-matrix"))
             .driverTimeoutMs(Long.parseLong(ARGS.getOrDefault("driverTimeoutMs", "3000")))
-            .errorHandler(t -> emit("clientError", "message", String.valueOf(t)))
+            .errorHandler(t ->
+            {
+                emit("clientError", "message", String.valueOf(t));
+                REPORTED.set(true);
+            })
             .availableImageHandler(MatrixPeer::onAvailable)
             .unavailableImageHandler(MatrixPeer::onUnavailable);
         try (Aeron aeron = Aeron.connect(ctx))
@@ -102,6 +107,12 @@ public final class MatrixPeer
         }
         catch (final Throwable t)
         {
+            // the conductor force-closes resources before calling the error handler; let it report the cause
+            final long deadline = System.nanoTime() + 1_000_000_000L;
+            while (!REPORTED.get() && System.nanoTime() < deadline)
+            {
+                LockSupport.parkNanos(10_000_000L);
+            }
             emit("terminated", "error", t.getClass().getSimpleName() + ": " + t.getMessage());
             System.exit(3);
         }

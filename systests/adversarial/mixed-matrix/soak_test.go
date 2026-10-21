@@ -1,14 +1,12 @@
 package mixedmatrix
 
 import (
-	"errors"
 	"math/rand"
 	"os"
 	"strconv"
 	"testing"
 	"time"
 
-	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/systests/adversarial/mixed-matrix/internal/mm"
 	"github.com/stretchr/testify/require"
 )
@@ -39,12 +37,7 @@ func driverCrash(t *testing.T, rnd *rand.Rand, port int, stream int32) map[int32
 	awaitTrue(t, "traffic before the crash", 20*time.Second, func() bool { return anchor.Tracker.Messages() > 200 })
 	driverSignal(t, "KILL")
 	awaitTrue(t, "client to close after the driver crash", driverTimeout+5*time.Second, cl.IsClosed)
-	var dte *aeron.DriverTimeoutError
-	found := false
-	for _, e := range cl.Errors() {
-		found = found || errors.As(e, &dte)
-	}
-	require.True(t, found, "DriverTimeoutError via ErrorHandler, got %v", cl.Errors())
+	requireDriverTimeout(t, cl)
 	for _, p := range peers {
 		requireTerminatedWith(t, p, "drivertimeout", driverTimeout+10*time.Second)
 	}

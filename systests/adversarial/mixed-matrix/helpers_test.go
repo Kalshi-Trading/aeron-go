@@ -29,6 +29,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -504,4 +505,27 @@ func requireTerminatedWith(t *testing.T, p *peer, want string, timeout time.Dura
 	}
 	t.Fatalf("%s terminated (%s) without reporting %q to its error handler; errors: %v", p.name, ev.Str("error"),
 		want, msgs)
+}
+
+// requireDriverTimeout asserts that the client surfaced a DriverTimeoutError, either through a returned error (as
+// Java throws it from a call that was waiting on the driver) or through its ErrorHandler. The conductor
+// force-closes resources before it hands the error to the handler, so the handler is given a moment.
+func requireDriverTimeout(t *testing.T, cl *client, returned ...error) {
+	t.Helper()
+	var dte *aeron.DriverTimeoutError
+	for _, e := range returned {
+		if errors.As(e, &dte) {
+			return
+		}
+	}
+	for deadline := time.Now().Add(time.Second); ; time.Sleep(10 * time.Millisecond) {
+		for _, e := range cl.Errors() {
+			if errors.As(e, &dte) {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no DriverTimeoutError returned (%v) or via ErrorHandler (%v)", returned, cl.Errors())
+		}
+	}
 }

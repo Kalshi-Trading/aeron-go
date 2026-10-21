@@ -55,7 +55,10 @@ func main() {
 	timeoutMs, _ := strconv.Atoi(get("driverTimeoutMs", "3000"))
 	ctx := aeron.NewContext().AeronDir(get("dir", "/dev/shm/aeron-adv-mixed-matrix")).
 		MediaDriverTimeout(time.Duration(timeoutMs) * time.Millisecond).
-		ErrorHandler(func(err error) { out.Emit("clientError", "message", fmt.Sprintf("%T: %v", err, err)) })
+		ErrorHandler(func(err error) {
+			out.Emit("clientError", "message", fmt.Sprintf("%T: %v", err, err))
+			reported.Store(true)
+		})
 	a, err := aeron.Connect(ctx)
 	if err != nil {
 		fail(err)
@@ -74,7 +77,16 @@ func main() {
 	}
 }
 
+// reported is set once the client's ErrorHandler has run.
+var reported atomic.Bool
+
+// fail reports err and exits. Like Java's ClientConductor, the Go conductor force-closes its resources before it
+// hands the terminal error to the ErrorHandler, so an offer can see CLOSED a moment before the error is reported.
+// Give the handler a moment so that the parent sees the cause.
 func fail(err error) {
+	for deadline := time.Now().Add(time.Second); !reported.Load() && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
 	out.Emit("terminated", "error", fmt.Sprintf("%T: %v", errors.Unwrap(err), err))
 	os.Exit(3)
 }
