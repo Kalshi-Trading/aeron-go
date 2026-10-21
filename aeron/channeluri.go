@@ -113,11 +113,11 @@ func NewChannelUri(prefix string, media string) (*ChannelUri, error) {
 
 // ParseChannelUri parses a string which contains an Aeron URI.
 func ParseChannelUri(uriStr string) (*ChannelUri, error) {
-	length := len(uriStr)
-	if length > MaxUriLength {
+	if uriLength := utf16Length(uriStr); uriLength > MaxUriLength {
 		return nil, fmt.Errorf("URI length (%d) exceeds max supported length (%d): %s",
-			length, MaxUriLength, uriStr[:MaxUriLength])
+			uriLength, MaxUriLength, utf16Prefix(uriStr, MaxUriLength))
 	}
+	length := len(uriStr)
 
 	uri := &ChannelUri{params: make(map[string]string)}
 	position := 0
@@ -139,11 +139,8 @@ func ParseChannelUri(uriStr string) (*ChannelUri, error) {
 		case parseStateMedia:
 			switch c {
 			case '?':
-				// Stricter than Java, which only validates media when there is no query.
+				// As in Java, media is only validated when there is no query.
 				uri.media = sb.String()
-				if err := validateMedia(uri.media); err != nil {
-					return nil, err
-				}
 				sb.Reset()
 				state = parseStateParamsKey
 			case ':', '|', '=':
@@ -188,6 +185,34 @@ func ParseChannelUri(uriStr string) (*ChannelUri, error) {
 		return nil, fmt.Errorf("no more input found, state=PARAMS_KEY in %s", uriStr)
 	}
 	return uri, nil
+}
+
+// utf16Length returns the length of s in UTF-16 code units, matching Java's String.length().
+func utf16Length(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16RuneLength(r)
+	}
+	return n
+}
+
+func utf16RuneLength(r rune) int {
+	if r >= 0x10000 {
+		return 2
+	}
+	return 1
+}
+
+// utf16Prefix returns the longest prefix of s that is at most maxLength UTF-16 code units, without splitting a rune.
+func utf16Prefix(s string, maxLength int) string {
+	n := 0
+	for i, r := range s {
+		n += utf16RuneLength(r)
+		if n > maxLength {
+			return s[:i]
+		}
+	}
+	return s
 }
 
 // MustParseChannelUri is like ParseChannelUri but panics on error.
