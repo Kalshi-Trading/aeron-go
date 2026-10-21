@@ -298,7 +298,7 @@ func (o msgOpts) javaArgs() []string {
 	return args
 }
 
-func awaitConnected(pub *aeron.Publication, timeout time.Duration) error {
+func awaitConnected(pub aeron.Publisher, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for !pub.IsConnected() {
 		if time.Now().After(deadline) {
@@ -321,7 +321,7 @@ func awaitSubConnected(sub *aeron.Subscription, timeout time.Duration) error {
 }
 
 // goPublish offers (or claims) messages [0, count) and returns the publication position afterwards.
-func goPublish(pub *aeron.Publication, o msgOpts) (int64, error) {
+func goPublish(pub aeron.Publisher, o msgOpts) (int64, error) {
 	buf := aatomic.MakeBuffer(make([]byte, o.sizes.Max()))
 	var claim logbuffer.Claim
 	deadline := time.Now().Add(o.timeoutOrDefault())

@@ -82,7 +82,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	}
 }
 
-func (e *e2eEnv) addPublication(channel string) *aeron.Publication {
+func (e *e2eEnv) addPublication(channel string) *aeron.ExclusivePublication {
 	pub, err := e.aeron.AddExclusivePublication(channel, e.streamID)
 	if err != nil {
 		e.t.Fatalf("add publication: %v", err)
@@ -143,7 +143,7 @@ func encodeMessage(seq int64) []byte {
 	return msg
 }
 
-func offer(t *testing.T, pub *aeron.Publication, msg []byte) {
+func offer(t *testing.T, pub *aeron.ExclusivePublication, msg []byte) {
 	buf := aeronatomic.MakeBuffer(msg, len(msg))
 	deadline := time.Now().Add(10 * time.Second)
 	for pub.Offer(buf, 0, int32(len(msg)), nil) < 0 {
@@ -242,7 +242,7 @@ func runReplayLiveAndRestart(t *testing.T, replayChannel string, controlled bool
 	recordingID := recording.RecordingId
 
 	var seq int64
-	publish := func(p *aeron.Publication, n int) {
+	publish := func(p *aeron.ExclusivePublication, n int) {
 		for i := 0; i < n; i++ {
 			offer(t, p, encodeMessage(seq))
 			seq++

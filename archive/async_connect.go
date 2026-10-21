@@ -120,7 +120,7 @@ type AsyncConnect struct {
 	subscriptionRegID int64
 	publicationRegID  int64
 	subscription      *aeron.Subscription
-	publication       *aeron.Publication
+	publication       *aeron.ExclusivePublication
 
 	correlationID                   int64
 	controlSessionID                int64

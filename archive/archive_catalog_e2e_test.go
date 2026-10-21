@@ -77,7 +77,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 type e2eRecording struct {
 	recordingID    int64
 	subscriptionID int64
-	pub            *aeron.Publication
+	pub            *aeron.ExclusivePublication
 }
 
 // startRecording starts a local recording of channel/stream and an exclusive publication on it.
