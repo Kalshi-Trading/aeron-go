@@ -18,11 +18,16 @@ limitations under the License.
 package aeron
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
+	syncatomic "sync/atomic"
 	"time"
 
+	"github.com/lirm/aeron-go/aeron/errorlog"
 	"github.com/lirm/aeron-go/aeron/idlestrategy"
 )
 
@@ -39,11 +44,18 @@ type CloseHandler func()
 // See https://github.com/aeron-io/aeron/wiki/Configuration-Options#aeron-client-options.
 //
 // Defaults are taken from the environment in NewContext (AERON_DIR, AERON_DRIVER_TIMEOUT, AERON_CLIENT_NAME,
-// AERON_CLIENT_IDLE_SLEEP_DURATION, AERON_CLIENT_RESOURCE_LINGER_DURATION, AERON_CLIENT_CLOSE_LINGER_DURATION and
-// AERON_CLIENT_PRE_TOUCH_MAPPED_MEMORY). Conclude validates the configuration and is called by Connect.
+// AERON_CLIENT_IDLE_SLEEP_DURATION, AERON_CLIENT_RESOURCE_LINGER_DURATION, AERON_CLIENT_CLOSE_LINGER_DURATION,
+// AERON_CLIENT_PRE_TOUCH_MAPPED_MEMORY and AERON_ENABLE_EXPERIMENTAL_FEATURES). Conclude validates the configuration
+// and is called by Connect.
+//
+// A Context may be used by only one open Aeron client at a time, since Connect records connection state (ClientID,
+// InterServiceTimeout, FilePageSize) in it. Unlike Java it may be reused once that client is closed.
 type Context struct {
-	aeronDir      string
-	mediaDriverTo time.Duration
+	aeronDir       string
+	aeronDirectory string
+	mediaDriverTo  time.Duration
+
+	enableExperimentalFeatures bool
 
 	clientName               string
 	clientID                 int64
@@ -74,7 +86,8 @@ type Context struct {
 	idleStrategy         idlestrategy.Idler
 	awaitingIdleStrategy idlestrategy.Idler
 
-	concluded bool
+	concluded syncatomic.Bool
+	inUse     syncatomic.Bool
 }
 
 // NewContext creates and initializes new Context for Aeron
@@ -85,6 +98,7 @@ func NewContext() *Context {
 	ctx.clientName = os.Getenv(ClientNameEnv)
 	ctx.clientID = NullValue
 	ctx.preTouchMappedMemory = envBool(PreTouchMappedMemoryEnv, false)
+	ctx.enableExperimentalFeatures = envBool(EnableExperimentalFeaturesEnv, false)
 
 	ctx.errorHandler = func(err error) { logger.Error(err) }
 
@@ -108,9 +122,17 @@ func NewContext() *Context {
 // Connect and need not be called directly. Settings read from the CnC file (InterServiceTimeout, FilePageSize) and the
 // ClientID are only available once connected.
 func (ctx *Context) Conclude() error {
-	if ctx.concluded {
+	if !ctx.concluded.CompareAndSwap(false, true) {
 		return errors.New("context already concluded")
 	}
+	if err := ctx.conclude(); err != nil {
+		ctx.concluded.Store(false)
+		return err
+	}
+	return nil
+}
+
+func (ctx *Context) conclude() error {
 	if ctx.aeronDir == "" {
 		return errors.New("aeron directory name must not be empty")
 	}
@@ -132,6 +154,7 @@ func (ctx *Context) Conclude() error {
 	if ctx.resourceLingerTo < 0 || ctx.closeLingerDuration < 0 {
 		return errors.New("linger durations must not be negative")
 	}
+	ctx.aeronDirectory = canonicalPath(ctx.aeronDir)
 	if ctx.idleStrategy == nil {
 		ctx.idleStrategy = idlestrategy.Sleeping{SleepFor: ctx.idleSleepDuration}
 	}
@@ -147,13 +170,87 @@ func (ctx *Context) Conclude() error {
 	if ctx.publicationErrorFrameHandler == nil {
 		ctx.publicationErrorFrameHandler = func(*PublicationErrorFrame) {}
 	}
-	ctx.concluded = true
 	return nil
+}
+
+// canonicalPath is the absolute path with symlinks resolved where it exists (File.getCanonicalFile).
+func canonicalPath(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return filepath.Clean(dir)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return abs
 }
 
 // IsConcluded returns true once Conclude has succeeded.
 func (ctx *Context) IsConcluded() bool {
-	return ctx.concluded
+	return ctx.concluded.Load()
+}
+
+// AeronDirectory returns the canonical (absolute, symlink-resolved) Aeron directory. Empty until concluded
+// (CommonContext.aeronDirectory).
+func (ctx *Context) AeronDirectory() string {
+	return ctx.aeronDirectory
+}
+
+// EnableExperimentalFeatures sets whether experimental features are enabled (CommonContext.enableExperimentalFeatures).
+func (ctx *Context) EnableExperimentalFeatures(enable bool) *Context {
+	ctx.enableExperimentalFeatures = enable
+	return ctx
+}
+
+// GetEnableExperimentalFeatures returns whether experimental features are enabled.
+func (ctx *Context) GetEnableExperimentalFeatures() bool {
+	return ctx.enableExperimentalFeatures
+}
+
+// DeleteAeronDirectory deletes the Aeron directory and its contents (CommonContext.deleteAeronDirectory).
+func (ctx *Context) DeleteAeronDirectory() error {
+	dir := ctx.aeronDirectory
+	if dir == "" {
+		dir = ctx.aeronDir
+	}
+	if dir == "" {
+		return errors.New("aeron directory name must not be empty")
+	}
+	return os.RemoveAll(dir)
+}
+
+// SaveErrorLog writes the driver's distinct error log from this context's CnC file to w, returning the number of
+// distinct errors observed (CommonContext.saveErrorLog). It returns 0 if no CnC file exists.
+func (ctx *Context) SaveErrorLog(w io.Writer) (int, error) {
+	return SaveErrorLog(ctx.aeronDir, w)
+}
+
+// SaveErrorLog writes the distinct error log from the CnC file in aeronDir to w, returning the number of distinct
+// errors observed. It returns 0 if no CnC file exists.
+func SaveErrorLog(aeronDir string, w io.Writer) (int, error) {
+	cncFile := CncFileName(aeronDir)
+	if !cncFileUsable(cncFile) {
+		return 0, nil
+	}
+	m, err := mapCncFile(cncFile, false)
+	if err != nil || m == nil {
+		return 0, err
+	}
+	defer m.Close()
+	return errorlog.PrintErrorLog(m.meta.ErrorBuf.Get(), w), nil
+}
+
+// GenerateRandomDirName returns the default Aeron directory name (ignoring AERON_DIR) with a random UUID suffix, for
+// use with embedded drivers (CommonContext.generateRandomDirName).
+func GenerateRandomDirName() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%s-%s-%x-%x-%x-%x-%x", defaultAeronDirBase(), userName(), b[0:4], b[4:6], b[6:8], b[8:10],
+		b[10:])
 }
 
 // ErrorHandler sets the error handler callback
@@ -460,10 +557,10 @@ func (ctx *Context) GetUnavailableCounterHandler() UnavailableCounterHandler {
 
 // String returns a description of the configuration.
 func (ctx *Context) String() string {
-	return fmt.Sprintf("Context{aeronDir=%s, clientName=%q, clientId=%d, driverTimeout=%v, keepAliveInterval=%v, "+
+	return fmt.Sprintf("Context{aeronDir=%s, enableExperimentalFeatures=%t, clientName=%q, clientId=%d, driverTimeout=%v, keepAliveInterval=%v, "+
 		"interServiceTimeout=%v, idleSleepDuration=%v, resourceLingerDuration=%v, closeLingerDuration=%v, "+
 		"publicationConnectionTimeout=%v, preTouchMappedMemory=%t, useConductorAgentInvoker=%t, filePageSize=%d}",
-		ctx.aeronDir, ctx.clientName, ctx.clientID, ctx.mediaDriverTo, ctx.keepAliveInterval, ctx.interServiceTo,
+		ctx.aeronDir, ctx.enableExperimentalFeatures, ctx.clientName, ctx.clientID, ctx.mediaDriverTo, ctx.keepAliveInterval, ctx.interServiceTo,
 		ctx.idleSleepDuration, ctx.resourceLingerTo, ctx.closeLingerDuration, ctx.publicationConnectionTo,
 		ctx.preTouchMappedMemory, ctx.useConductorAgentInvoker, ctx.filePageSize)
 }
