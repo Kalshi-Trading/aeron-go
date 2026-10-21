@@ -133,7 +133,7 @@ func run() bool {
 			streamState = "live"
 		}
 		fmt.Printf("Message to %s stream %d from session %d of length %d at position %d <<%s>>\n", streamState,
-			header.StreamId(), header.SessionId(), length, header.Position(), string(buffer.GetBytesArray(offset, length)))
+			header.StreamID(), header.SessionID(), length, header.Position(), string(buffer.GetBytesArray(offset, length)))
 		received++
 	}
 

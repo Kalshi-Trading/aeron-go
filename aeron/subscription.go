@@ -138,8 +138,8 @@ func (sub *Subscription) ChannelStatus() int {
 	}
 }
 
-// ChannelStatusId returns the counter ID used to represent the channel status of this Subscription.
-func (sub *Subscription) ChannelStatusId() int32 {
+// ChannelStatusID returns the counter ID used to represent the channel status of this Subscription.
+func (sub *Subscription) ChannelStatusID() int32 {
 	return sub.channelStatusID
 }
 

@@ -34,6 +34,7 @@ import (
 	"github.com/lirm/aeron-go/aeron/logging"
 	"github.com/lirm/aeron-go/archive"
 	"github.com/lirm/aeron-go/archive/examples"
+	"github.com/lirm/aeron-go/archive/status"
 )
 
 var (
@@ -182,8 +183,8 @@ func awaitRecordingCounter(arch *archive.Archive, sessionID int32, timeout time.
 	reader := arch.Aeron().CounterReader()
 	deadline := time.Now().Add(timeout)
 	for {
-		if counterID := archive.FindCounterIdBySession(reader, sessionID); counterID != counters.NullCounterId {
-			return counterID, archive.GetRecordingId(reader, counterID), nil
+		if counterID := status.FindCounterIdBySession(reader, sessionID, status.NullValue); counterID != counters.NullCounterId {
+			return counterID, status.GetRecordingId(reader, counterID), nil
 		}
 		if _, err := arch.PollForErrorResponse(); err != nil {
 			return 0, 0, err
@@ -200,7 +201,7 @@ func awaitRecordingPosition(arch *archive.Archive, counterID int32, recordingID,
 	reader := arch.Aeron().CounterReader()
 	deadline := time.Now().Add(timeout)
 	for reader.GetCounterValue(counterID) < position {
-		if !archive.IsRecordingActive(reader, counterID, recordingID) {
+		if !status.IsActive(reader, counterID, recordingID) {
 			return fmt.Errorf("recording has stopped unexpectedly: %d", recordingID)
 		}
 		if time.Now().After(deadline) {

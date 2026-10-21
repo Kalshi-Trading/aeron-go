@@ -129,10 +129,10 @@ func TestImagePollAndHeader(t *testing.T) {
 		context                                    interface{}
 	}
 	handler := func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
-		require.Equal(t, imgTestSessionID, header.SessionId())
-		require.Equal(t, imgTestStreamID, header.StreamId())
-		require.Equal(t, imgTestInitialTermID, header.TermId())
-		require.Equal(t, imgTestInitialTermID, header.InitialTermId())
+		require.Equal(t, imgTestSessionID, header.SessionID())
+		require.Equal(t, imgTestStreamID, header.StreamID())
+		require.Equal(t, imgTestInitialTermID, header.TermID())
+		require.Equal(t, imgTestInitialTermID, header.InitialTermID())
 		require.Equal(t, logbuffer.DataFrameHeader.TypeData, header.Type())
 		require.Equal(t, length+logbuffer.DataFrameHeader.Length, header.FrameLength())
 		headers = append(headers, struct {

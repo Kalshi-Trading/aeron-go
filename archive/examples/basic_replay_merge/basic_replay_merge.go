@@ -109,7 +109,7 @@ func main() {
 			streamState = "live"
 		}
 		fmt.Printf("Message to %s stream %d from session %d (%d@%d) <<%s>>\n", streamState, streamID,
-			header.SessionId(), length, offset, string(buffer.GetBytesArray(offset, length)))
+			header.SessionID(), length, offset, string(buffer.GetBytesArray(offset, length)))
 		received++
 	}, aeron.DefaultFragmentAssemblyBufferLength)
 

@@ -115,10 +115,6 @@ func (recv *Receiver) Length() int32 {
 	return recv.buffer.GetInt32(rb.LengthOffset(recv.recordOffset)) - rb.RecordDescriptor.HeaderLength
 }
 
-func (recv *Receiver) typeID() int32 { return recv.TypeID() }
-func (recv *Receiver) offset() int32 { return recv.Offset() }
-func (recv *Receiver) length() int32 { return recv.Length() }
-
 // Validate reports whether the message received by the last ReceiveNext is still valid, i.e. it has not
 // been overwritten by the transmitter. Call it after reading the message.
 func (recv *Receiver) Validate() bool {
@@ -160,5 +156,3 @@ func (recv *Receiver) ReceiveNext() bool {
 	recv.recordOffset = recordOffset
 	return true
 }
-
-func (recv *Receiver) receiveNext() bool { return recv.ReceiveNext() }

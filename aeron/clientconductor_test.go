@@ -263,7 +263,7 @@ func TestBlockingAddSubscription(t *testing.T) {
 	sub, err := tc.AddSubscription(Channel, StreamId1)
 	require.NoError(t, err)
 	require.Equal(t, int64(1001), sub.RegistrationID())
-	require.Equal(t, int32(7), sub.ChannelStatusId())
+	require.Equal(t, int32(7), sub.ChannelStatusID())
 	require.False(t, tc.HasActiveCommands())
 }
 
@@ -402,17 +402,17 @@ func TestCounterLifecycle(t *testing.T) {
 	tc.flush()
 	counter, err := tc.GetCounter(firstID)
 	require.NoError(t, err)
-	require.Equal(t, CounterId, counter.Id())
-	require.Equal(t, []int64{counter.RegistrationId()}, availableH.ids)
+	require.Equal(t, CounterId, counter.ID())
+	require.Equal(t, []int64{counter.RegistrationID()}, availableH.ids)
 
-	got, err := tc.GetCounter(counter.RegistrationId())
+	got, err := tc.GetCounter(counter.RegistrationID())
 	require.NoError(t, err)
 	require.Same(t, counter, got)
 
-	tc.OnUnavailableCounter(counter.RegistrationId(), CounterId)
+	tc.OnUnavailableCounter(counter.RegistrationID(), CounterId)
 	tc.flush()
 	require.True(t, counter.IsClosed())
-	require.Equal(t, []int64{counter.RegistrationId()}, unavailableH.ids)
+	require.Equal(t, []int64{counter.RegistrationID()}, unavailableH.ids)
 
 	require.True(t, tc.RemoveUnavailableCounterHandler(unavailableH), "remove by value must match")
 	require.False(t, tc.RemoveUnavailableCounterHandler(unavailableH))
@@ -433,7 +433,7 @@ func TestStaticCounterIsNotRemoved(t *testing.T) {
 	tc.OnStaticCounter(corrID, CounterId)
 	counter, err := tc.GetCounter(corrID)
 	require.NoError(t, err)
-	require.Equal(t, CounterId, counter.Id())
+	require.Equal(t, CounterId, counter.ID())
 	require.NoError(t, counter.Close())
 	require.Equal(t, 0, tc.proxy.called("RemoveCounter"))
 }
@@ -467,13 +467,13 @@ func TestPublicationErrorFrameRouted(t *testing.T) {
 func TestChannelEndpointErrorReported(t *testing.T) {
 	tc := newTestConductor(t)
 	sub := addReadySubscription(t, tc, nil, nil)
-	tc.OnChannelEndpointError(int64(sub.ChannelStatusId()), "address in use")
+	tc.OnChannelEndpointError(int64(sub.ChannelStatusID()), "address in use")
 	tc.flush()
 	errs := tc.errors()
 	require.Len(t, errs, 1)
 	var epErr *ChannelEndpointError
 	require.True(t, errors.As(errs[0], &epErr))
-	require.Equal(t, sub.ChannelStatusId(), epErr.StatusIndicatorID)
+	require.Equal(t, sub.ChannelStatusID(), epErr.StatusIndicatorID)
 }
 
 func TestDriverTimeoutTerminatesAndForceCloses(t *testing.T) {
@@ -613,4 +613,36 @@ func TestChannelEndpointErrorDoesNotFailActiveCommand(t *testing.T) {
 	tc.flush()
 	_, stillPending := tc.asyncCommandIDs[78]
 	require.False(t, stillPending, "async command with that id is failed, as Java does")
+}
+
+func TestAsyncRemovePendingRegistrationsSendsRemove(t *testing.T) {
+	tc := newTestConductor(t)
+	pubID, err := tc.AsyncAddPublication(Channel, StreamId1)
+	require.NoError(t, err)
+	exID, err := tc.AsyncAddExclusivePublication(Channel, StreamId1)
+	require.NoError(t, err)
+	subID, err := tc.AsyncAddSubscription(Channel, StreamId1)
+	require.NoError(t, err)
+
+	require.NoError(t, tc.AsyncRemovePublication(pubID))
+	require.NoError(t, tc.AsyncRemovePublication(exID))
+	require.NoError(t, tc.AsyncRemoveSubscription(subID))
+	require.Equal(t, 2, tc.proxy.called("RemovePublication"))
+	require.Equal(t, 1, tc.proxy.called("RemoveSubscription"))
+	require.False(t, tc.IsCommandActive(pubID))
+	require.False(t, tc.IsCommandActive(subID))
+
+	// Late driver responses for the abandoned registrations are ignored.
+	tc.OnNewPublication(StreamId1, SessionId1, 1, 2, "unused", pubID, pubID)
+	tc.OnSubscriptionReady(subID, 3)
+	_, err = tc.GetPublication(pubID)
+	require.ErrorIs(t, err, ErrUnknownRegistration)
+	_, err = tc.GetSubscription(subID)
+	require.ErrorIs(t, err, ErrUnknownRegistration)
+
+	// A second remove is a no-op.
+	require.NoError(t, tc.AsyncRemovePublication(pubID))
+	require.NoError(t, tc.AsyncRemoveSubscription(subID))
+	require.Equal(t, 2, tc.proxy.called("RemovePublication"))
+	require.Equal(t, 1, tc.proxy.called("RemoveSubscription"))
 }

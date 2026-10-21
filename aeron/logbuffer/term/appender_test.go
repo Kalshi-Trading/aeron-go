@@ -55,9 +55,9 @@ func requireDataHeader(t *testing.T, term *atomic.Buffer, offset, frameLength in
 	require.Equal(t, flags, logbuffer.GetFlags(term, offset), "flags")
 	require.Equal(t, typ, logbuffer.FrameType(term, offset), "type")
 	require.Equal(t, offset, logbuffer.GetFrameTermOffset(term, offset), "term offset")
-	require.Equal(t, apSessionID, logbuffer.GetSessionId(term, offset), "session id")
-	require.Equal(t, apStreamID, logbuffer.GetStreamId(term, offset), "stream id")
-	require.Equal(t, apTermID, logbuffer.GetTermId(term, offset), "term id")
+	require.Equal(t, apSessionID, logbuffer.GetFrameSessionID(term, offset), "session id")
+	require.Equal(t, apStreamID, logbuffer.GetFrameStreamID(term, offset), "stream id")
+	require.Equal(t, apTermID, logbuffer.GetFrameTermID(term, offset), "term id")
 }
 
 func payload(n int32) *atomic.Buffer {

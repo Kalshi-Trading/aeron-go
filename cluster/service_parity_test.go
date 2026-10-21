@@ -63,7 +63,7 @@ func encodeSbe(t *testing.T, templateId, blockLength uint16, encode func(*codecs
 	b.PutUInt16(4, ClusterSchemaId)
 	b.PutUInt16(6, ClusterSchemaVersion)
 	raw := body.Bytes()
-	b.PutBytesArray(SBEHeaderLength, &raw, 0, int32(len(raw)))
+	b.PutBytesSlice(SBEHeaderLength, raw)
 	return b.GetBytesArray(0, b.Capacity())
 }
 
@@ -84,7 +84,7 @@ func (w *termWriter) frame(payload []byte, flags uint8) (*atomic.Buffer, int32, 
 	w.term.PutUInt8(frameOffset+logbuffer.DataFrameHeader.FlagsFieldOffset, flags)
 	dataOffset := frameOffset + logbuffer.DataFrameHeader.Length
 	if len(payload) > 0 {
-		w.term.PutBytesArray(dataOffset, &payload, 0, int32(len(payload)))
+		w.term.PutBytesSlice(dataOffset, payload)
 	}
 	w.offset += util.AlignInt32(frameLength, logbuffer.FrameAlignment)
 	hdr := &logbuffer.Header{}

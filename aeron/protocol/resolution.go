@@ -101,7 +101,7 @@ func (f *ResolutionEntryFlyweight) SetAddress(address []byte) error {
 	if int32(len(address)) != length {
 		return fmt.Errorf("invalid address length: %d", len(address))
 	}
-	f.buf.PutBytesArray(f.offset+AddressFieldOffset, &address, 0, length)
+	f.buf.PutBytesSlice(f.offset+AddressFieldOffset, address)
 	return nil
 }
 
@@ -134,7 +134,7 @@ func (f *ResolutionEntryFlyweight) SetName(name []byte) error {
 	}
 	f.buf.PutUInt16(f.offset+nameOffset, uint16(len(name)))
 	if len(name) > 0 {
-		f.buf.PutBytesArray(f.offset+nameOffset+2, &name, 0, int32(len(name)))
+		f.buf.PutBytesSlice(f.offset+nameOffset+2, name)
 	}
 	return nil
 }

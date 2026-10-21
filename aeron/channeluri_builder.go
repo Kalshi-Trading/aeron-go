@@ -288,14 +288,14 @@ func (b *ChannelUriStringBuilder) ChannelAndEntityTags(channelTag int64, entityT
 // GetTags returns the tags param.
 func (b *ChannelUriStringBuilder) GetTags() string { return strValue(b.tags) }
 
-// IsSessionIdTagged sets whether the session id is rendered as a tag reference ("tag:<id>").
-func (b *ChannelUriStringBuilder) IsSessionIdTagged(isSessionIdTagged bool) *ChannelUriStringBuilder {
+// IsSessionIDTagged sets whether the session id is rendered as a tag reference ("tag:<id>").
+func (b *ChannelUriStringBuilder) IsSessionIDTagged(isSessionIdTagged bool) *ChannelUriStringBuilder {
 	b.isSessionIdTagged = isSessionIdTagged
 	return b
 }
 
-// GetIsSessionIdTagged returns whether the session id is tagged.
-func (b *ChannelUriStringBuilder) GetIsSessionIdTagged() bool { return b.isSessionIdTagged }
+// GetIsSessionIDTagged returns whether the session id is tagged.
+func (b *ChannelUriStringBuilder) GetIsSessionIDTagged() bool { return b.isSessionIdTagged }
 
 // Alias sets the alias param.
 func (b *ChannelUriStringBuilder) Alias(alias string) *ChannelUriStringBuilder {
@@ -408,23 +408,23 @@ func (b *ChannelUriStringBuilder) TermLength(termLength int32) *ChannelUriString
 // GetTermLength returns the term length and whether it is set.
 func (b *ChannelUriStringBuilder) GetTermLength() (int32, bool) { return getOpt(b.termLength) }
 
-// InitialTermId sets the init-term-id param.
-func (b *ChannelUriStringBuilder) InitialTermId(initialTermId int32) *ChannelUriStringBuilder {
+// InitialTermID sets the init-term-id param.
+func (b *ChannelUriStringBuilder) InitialTermID(initialTermId int32) *ChannelUriStringBuilder {
 	b.initialTermId = cubPtr(initialTermId)
 	return b
 }
 
-// GetInitialTermId returns init-term-id and whether it is set.
-func (b *ChannelUriStringBuilder) GetInitialTermId() (int32, bool) { return getOpt(b.initialTermId) }
+// GetInitialTermID returns init-term-id and whether it is set.
+func (b *ChannelUriStringBuilder) GetInitialTermID() (int32, bool) { return getOpt(b.initialTermId) }
 
-// TermId sets the term-id param.
-func (b *ChannelUriStringBuilder) TermId(termId int32) *ChannelUriStringBuilder {
+// TermID sets the term-id param.
+func (b *ChannelUriStringBuilder) TermID(termId int32) *ChannelUriStringBuilder {
 	b.termId = cubPtr(termId)
 	return b
 }
 
-// GetTermId returns term-id and whether it is set.
-func (b *ChannelUriStringBuilder) GetTermId() (int32, bool) { return getOpt(b.termId) }
+// GetTermID returns term-id and whether it is set.
+func (b *ChannelUriStringBuilder) GetTermID() (int32, bool) { return getOpt(b.termId) }
 
 // TermOffset sets the term-offset param (0-1g, multiple of 32).
 func (b *ChannelUriStringBuilder) TermOffset(termOffset int32) *ChannelUriStringBuilder {
@@ -441,22 +441,22 @@ func (b *ChannelUriStringBuilder) TermOffset(termOffset int32) *ChannelUriString
 // GetTermOffset returns term-offset and whether it is set.
 func (b *ChannelUriStringBuilder) GetTermOffset() (int32, bool) { return getOpt(b.termOffset) }
 
-// SessionId sets an explicit (untagged) session id.
-func (b *ChannelUriStringBuilder) SessionId(sessionId int32) *ChannelUriStringBuilder {
+// SessionID sets an explicit (untagged) session id.
+func (b *ChannelUriStringBuilder) SessionID(sessionId int32) *ChannelUriStringBuilder {
 	b.isSessionIdTagged = false
 	b.sessionId = cubPtr(int64(sessionId))
 	return b
 }
 
-// TaggedSessionId sets the session id to a tag reference, rendered as "session-id=tag:<tag>".
-func (b *ChannelUriStringBuilder) TaggedSessionId(tag int64) *ChannelUriStringBuilder {
+// TaggedSessionID sets the session id to a tag reference, rendered as "session-id=tag:<tag>".
+func (b *ChannelUriStringBuilder) TaggedSessionID(tag int64) *ChannelUriStringBuilder {
 	b.isSessionIdTagged = true
 	b.sessionId = cubPtr(tag)
 	return b
 }
 
-// GetSessionId returns the session id (or tag if tagged) and whether it is set.
-func (b *ChannelUriStringBuilder) GetSessionId() (int64, bool) { return getOpt(b.sessionId) }
+// GetSessionID returns the session id (or tag if tagged) and whether it is set.
+func (b *ChannelUriStringBuilder) GetSessionID() (int64, bool) { return getOpt(b.sessionId) }
 
 // Linger sets the linger timeout.
 func (b *ChannelUriStringBuilder) Linger(linger time.Duration) *ChannelUriStringBuilder {
@@ -651,14 +651,14 @@ func (b *ChannelUriStringBuilder) ResponseEndpoint(responseEndpoint string) *Cha
 // GetResponseEndpoint returns response-endpoint.
 func (b *ChannelUriStringBuilder) GetResponseEndpoint() string { return strValue(b.responseEndpoint) }
 
-// ResponseCorrelationId sets response-correlation-id to a correlation id (>= -1), typically the registration id of
+// ResponseCorrelationID sets response-correlation-id to a correlation id (>= -1), typically the registration id of
 // the subscription the response publication should respond to.
-func (b *ChannelUriStringBuilder) ResponseCorrelationId(correlationId int64) *ChannelUriStringBuilder {
-	return b.ResponseCorrelationIdString(strconv.FormatInt(correlationId, 10))
+func (b *ChannelUriStringBuilder) ResponseCorrelationID(correlationId int64) *ChannelUriStringBuilder {
+	return b.ResponseCorrelationIDString(strconv.FormatInt(correlationId, 10))
 }
 
-// ResponseCorrelationIdString sets response-correlation-id from a string: a number >= -1 or "prototype".
-func (b *ChannelUriStringBuilder) ResponseCorrelationIdString(correlationId string) *ChannelUriStringBuilder {
+// ResponseCorrelationIDString sets response-correlation-id from a string: a number >= -1 or "prototype".
+func (b *ChannelUriStringBuilder) ResponseCorrelationIDString(correlationId string) *ChannelUriStringBuilder {
 	if correlationId != PrototypeCorrelationId {
 		v, err := strconv.ParseInt(correlationId, 10, 64)
 		if err != nil || v < -1 {
@@ -671,7 +671,7 @@ func (b *ChannelUriStringBuilder) ResponseCorrelationIdString(correlationId stri
 }
 
 // GetResponseCorrelationId returns response-correlation-id.
-func (b *ChannelUriStringBuilder) GetResponseCorrelationId() string {
+func (b *ChannelUriStringBuilder) GetResponseCorrelationID() string {
 	return strValue(b.responseCorrelationId)
 }
 
@@ -723,14 +723,14 @@ func (b *ChannelUriStringBuilder) MaxResend(maxResend int32) *ChannelUriStringBu
 // GetMaxResend returns max-resend and whether it is set.
 func (b *ChannelUriStringBuilder) GetMaxResend() (int32, bool) { return getOpt(b.maxResend) }
 
-// StreamId sets stream-id (used e.g. by archive replay/recording channels).
-func (b *ChannelUriStringBuilder) StreamId(streamId int32) *ChannelUriStringBuilder {
+// StreamID sets stream-id (used e.g. by archive replay/recording channels).
+func (b *ChannelUriStringBuilder) StreamID(streamId int32) *ChannelUriStringBuilder {
 	b.streamId = cubPtr(streamId)
 	return b
 }
 
-// GetStreamId returns stream-id and whether it is set.
-func (b *ChannelUriStringBuilder) GetStreamId() (int32, bool) { return getOpt(b.streamId) }
+// GetStreamID returns stream-id and whether it is set.
+func (b *ChannelUriStringBuilder) GetStreamID() (int32, bool) { return getOpt(b.streamId) }
 
 // PublicationWindowLength sets pub-wnd.
 func (b *ChannelUriStringBuilder) PublicationWindowLength(length int32) *ChannelUriStringBuilder {
@@ -784,7 +784,7 @@ func (b *ChannelUriStringBuilder) SetParam(name string, value string) *ChannelUr
 	case ResponseEndpointParamName:
 		return b.ResponseEndpoint(value)
 	case ResponseCorrelationIdParamName:
-		return b.ResponseCorrelationIdString(value)
+		return b.ResponseCorrelationIDString(value)
 	case ReliableStreamParamName:
 		return b.Reliable(parseBool(value))
 	case SparseParamName:
@@ -831,13 +831,13 @@ func (b *ChannelUriStringBuilder) SetParam(name string, value string) *ChannelUr
 		}
 		switch name {
 		case InitialTermIdParamName:
-			return b.InitialTermId(int32(v))
+			return b.InitialTermID(int32(v))
 		case TermIdParamName:
-			return b.TermId(int32(v))
+			return b.TermID(int32(v))
 		case TermOffsetParamName:
 			return b.TermOffset(int32(v))
 		case StreamIdParamName:
-			return b.StreamId(int32(v))
+			return b.StreamID(int32(v))
 		case MaxResendParamName:
 			return b.MaxResend(int32(v))
 		default:
@@ -849,13 +849,13 @@ func (b *ChannelUriStringBuilder) SetParam(name string, value string) *ChannelUr
 			if err != nil {
 				return b.failf("'session-id' tag must be a valid long: %w", err)
 			}
-			return b.TaggedSessionId(tag)
+			return b.TaggedSessionID(tag)
 		}
 		v, err := strconv.ParseInt(value, 10, 32)
 		if err != nil {
 			return b.failf("'session-id' must be a valid integer: %w", err)
 		}
-		return b.SessionId(int32(v))
+		return b.SessionID(int32(v))
 	case GroupTagParamName:
 		v, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {

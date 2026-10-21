@@ -88,7 +88,7 @@ func (l *DistinctErrorLog) Record(err error) bool {
 	length := EncodedErrorOffset + int32(len(encoded))
 	if len(encoded) > 0 {
 		b := []byte(encoded)
-		l.buffer.PutBytesArray(offset+EncodedErrorOffset, &b, 0, int32(len(b)))
+		l.buffer.PutBytesSlice(offset+EncodedErrorOffset, b)
 	}
 	l.buffer.PutInt64(offset+FirstObservationTimestampOffset, now)
 	l.buffer.PutInt64Ordered(offset+LastObservationTimestampOffset, now)

@@ -73,20 +73,20 @@ func NewCounterFromReader(reader *counters.Reader, counterId int32) (*Counter, e
 	return &Counter{
 		AtomicCounter:  atomicCounter,
 		correlationId:  NullValue,
-		registrationId: reader.GetCounterRegistrationId(counterId),
+		registrationId: reader.GetCounterRegistrationID(counterId),
 		clientOwned:    true,
 		counterId:      counterId,
 	}, nil
 }
 
-// RegistrationId returns the registration id of the counter: the correlation id of the add command for client owned
+// RegistrationID returns the registration id of the counter: the correlation id of the add command for client owned
 // counters, or the user supplied registration id for static counters.
-func (c *Counter) RegistrationId() int64 {
+func (c *Counter) RegistrationID() int64 {
 	return c.registrationId
 }
 
-// CorrelationId returns the correlation id of the command which added the counter.
-func (c *Counter) CorrelationId() int64 {
+// CorrelationID returns the correlation id of the command which added the counter.
+func (c *Counter) CorrelationID() int64 {
 	return c.correlationId
 }
 
@@ -95,7 +95,7 @@ func (c *Counter) IsClientOwned() bool {
 	return c.clientOwned
 }
 
-func (c *Counter) Id() int32 {
+func (c *Counter) ID() int32 {
 	return c.counterId
 }
 
@@ -121,10 +121,6 @@ func (c *Counter) Close() error {
 		}
 	}
 	return nil
-}
-
-func (c *Counter) internalClose() {
-	c.isClosed.Set(true)
 }
 
 func (c *Counter) String() string {

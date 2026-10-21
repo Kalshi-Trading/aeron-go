@@ -103,7 +103,7 @@ func (cmf *ClusterMarkFile) EncodeStrings(aeronDirectory, controlChannel, ingres
 		}
 		cmf.buffer.PutInt32(offset, int32(len(b)))
 		if len(b) > 0 {
-			cmf.buffer.PutBytesArray(offset+4, &b, 0, int32(len(b)))
+			cmf.buffer.PutBytesSlice(offset+4, b)
 		}
 		offset += 4 + int32(len(b))
 	}

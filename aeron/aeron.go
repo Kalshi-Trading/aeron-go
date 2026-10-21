@@ -81,8 +81,6 @@ type Aeron struct {
 
 var logger = logging.MustGetLogger("aeron")
 
-const awaitingDriverSleep = 16 * time.Millisecond
-
 // Connect is the factory method used to create a new instance of Aeron based on Context settings. Like Java's
 // Aeron.connect it waits up to the media driver timeout for the CnC file to appear and the driver to heartbeat,
 // returning a *DriverTimeoutError otherwise.
@@ -250,22 +248,6 @@ func (aeron *Aeron) AddSubscriptionWithHandlers(channel string, streamID int32,
 	return aeron.conductor.AddSubscriptionWithHandlers(channel, streamID, onAvailableImage, onUnavailableImage)
 }
 
-// AddSubscriptionDeprecated adds a subscription and returns a channel delivering it (nil on error).
-//
-// Deprecated: use AddSubscription, which reports errors.
-func (aeron *Aeron) AddSubscriptionDeprecated(channel string, streamID int32) chan *Subscription {
-	ch := make(chan *Subscription, 1)
-	go func() {
-		sub, err := aeron.AddSubscription(channel, streamID)
-		if err != nil {
-			aeron.conductor.reportError(err)
-		}
-		ch <- sub
-		close(ch)
-	}()
-	return ch
-}
-
 // AsyncAddSubscription sends ADD_SUBSCRIPTION without blocking; poll GetSubscription with the returned id.
 func (aeron *Aeron) AsyncAddSubscription(channel string, streamID int32) (int64, error) {
 	return aeron.conductor.AsyncAddSubscriptionWithHandlers(channel, streamID, aeron.context.availableImageHandler,
@@ -294,13 +276,6 @@ func (aeron *Aeron) AddPublication(channel string, streamID int32) (*Publication
 	return aeron.conductor.AddPublication(channel, streamID)
 }
 
-// AddPublicationDeprecated adds a publication and returns a channel delivering it (nil on error).
-//
-// Deprecated: use AddPublication, which reports errors.
-func (aeron *Aeron) AddPublicationDeprecated(channel string, streamID int32) chan *Publication {
-	return deprecatedPublication(aeron, func() (*Publication, error) { return aeron.AddPublication(channel, streamID) })
-}
-
 // AsyncAddPublication sends ADD_PUBLICATION without blocking; poll GetPublication with the returned id.
 func (aeron *Aeron) AsyncAddPublication(channel string, streamID int32) (int64, error) {
 	return aeron.conductor.AsyncAddPublication(channel, streamID)
@@ -314,28 +289,6 @@ func (aeron *Aeron) GetPublication(registrationID int64) (*Publication, error) {
 // AddExclusivePublication adds an exclusive publication, blocking until the driver confirms it.
 func (aeron *Aeron) AddExclusivePublication(channel string, streamID int32) (*ExclusivePublication, error) {
 	return aeron.conductor.AddExclusivePublication(channel, streamID)
-}
-
-// AddExclusivePublicationDeprecated adds an exclusive publication and returns a channel delivering it (nil on error).
-//
-// Deprecated: use AddExclusivePublication, which reports errors.
-func (aeron *Aeron) AddExclusivePublicationDeprecated(channel string, streamID int32) chan *ExclusivePublication {
-	return deprecatedPublication(aeron, func() (*ExclusivePublication, error) {
-		return aeron.AddExclusivePublication(channel, streamID)
-	})
-}
-
-func deprecatedPublication[T any](aeron *Aeron, add func() (*T, error)) chan *T {
-	ch := make(chan *T, 1)
-	go func() {
-		pub, err := add()
-		if err != nil {
-			aeron.conductor.reportError(err)
-		}
-		ch <- pub
-		close(ch)
-	}()
-	return ch
 }
 
 // AsyncAddExclusivePublication sends ADD_EXCLUSIVE_PUBLICATION without blocking; poll GetExclusivePublication.
@@ -439,9 +392,9 @@ func (aeron *Aeron) AddAvailableCounterHandler(handler AvailableCounterHandler) 
 	return aeron.conductor.AddAvailableCounterHandler(handler)
 }
 
-// RemoveAvailableCounterHandlerById removes an available counter handler by id.
-func (aeron *Aeron) RemoveAvailableCounterHandlerById(registrationId int64) bool {
-	return aeron.conductor.RemoveAvailableCounterHandlerById(registrationId)
+// RemoveAvailableCounterHandlerByID removes an available counter handler by id.
+func (aeron *Aeron) RemoveAvailableCounterHandlerByID(registrationId int64) bool {
+	return aeron.conductor.RemoveAvailableCounterHandlerByID(registrationId)
 }
 
 // RemoveAvailableCounterHandler removes an available counter handler by value.
@@ -454,9 +407,9 @@ func (aeron *Aeron) AddUnavailableCounterHandler(handler UnavailableCounterHandl
 	return aeron.conductor.AddUnavailableCounterHandler(handler)
 }
 
-// RemoveUnavailableCounterHandlerById removes an unavailable counter handler by id.
-func (aeron *Aeron) RemoveUnavailableCounterHandlerById(registrationId int64) bool {
-	return aeron.conductor.RemoveUnavailableCounterHandlerById(registrationId)
+// RemoveUnavailableCounterHandlerByID removes an unavailable counter handler by id.
+func (aeron *Aeron) RemoveUnavailableCounterHandlerByID(registrationId int64) bool {
+	return aeron.conductor.RemoveUnavailableCounterHandlerByID(registrationId)
 }
 
 // RemoveUnavailableCounterHandler removes an unavailable counter handler by value.

@@ -499,8 +499,8 @@ func (uri *ChannelUri) ReplaceEndpointWildcardPort(resolvedEndpoint string) erro
 	return nil
 }
 
-// AddSessionId adds (or replaces) the session-id param on a channel string.
-func AddSessionId(channel string, sessionId int32) (string, error) {
+// AddSessionID adds (or replaces) the session-id param on a channel string.
+func AddSessionID(channel string, sessionId int32) (string, error) {
 	uri, err := ParseChannelUri(channel)
 	if err != nil {
 		return "", err

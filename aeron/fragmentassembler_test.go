@@ -54,7 +54,7 @@ func capture(buffer *atomic.Buffer, offset, length int32, header *logbuffer.Head
 	return delivered{
 		data: buffer.GetBytesArray(offset, length), offset: offset, length: length, buffer: buffer, header: header,
 		flags: header.Flags(), frameLength: header.FrameLength(), termOffset: header.TermOffset(),
-		sessionID: header.SessionId(), reserved: header.ReservedValue(), position: header.Position(),
+		sessionID: header.SessionID(), reserved: header.ReservedValue(), position: header.Position(),
 		fragmentedLen: header.FragmentedFrameLength(), context: header.Context(), headerBufferAt: header.Offset(),
 	}
 }

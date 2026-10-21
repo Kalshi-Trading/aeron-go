@@ -66,20 +66,20 @@ func TestCountersE2EValidationAndWrapExisting(t *testing.T) {
 	labelBuf := atomic.MakeBuffer([]byte(label))
 	owned, err := client.AddCounter(9202, buf, 0, counters.MaxKeyLength, labelBuf, 0, labelBuf.Capacity())
 	require.NoError(t, err)
-	k, err := reader.GetKeyPartInt64(owned.Id(), 0)
+	k, err := reader.GetKeyPartInt64(owned.ID(), 0)
 	require.NoError(t, err)
 	assert.EqualValues(t, 0x0102030405060708, k)
 
-	view, err := aeron.NewCounterFromReader(reader, owned.Id())
+	view, err := aeron.NewCounterFromReader(reader, owned.ID())
 	require.NoError(t, err)
-	assert.Equal(t, owned.RegistrationId(), view.RegistrationId())
-	assert.EqualValues(t, aeron.NullValue, view.CorrelationId())
+	assert.Equal(t, owned.RegistrationID(), view.RegistrationID())
+	assert.EqualValues(t, aeron.NullValue, view.CorrelationID())
 	view.Set(31)
 	assert.EqualValues(t, 31, owned.Get())
 	require.NoError(t, view.Close())
-	assert.Equal(t, counters.RecordAllocated, reader.GetCounterState(owned.Id()), "view close must not free")
+	assert.Equal(t, counters.RecordAllocated, reader.GetCounterState(owned.ID()), "view close must not free")
 
-	id := owned.Id()
+	id := owned.ID()
 	require.NoError(t, owned.Close())
 	waitFor(t, 5*time.Second, "owned counter to be freed", func() bool {
 		return reader.GetCounterState(id) != counters.RecordAllocated || reader.GetCounterLabel(id) != label

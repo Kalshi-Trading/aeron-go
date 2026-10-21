@@ -19,11 +19,11 @@ func writeEntry(buf *atomic.Buffer, offset int32, e Entry) int32 {
 	buf.PutInt32(offset+StreamIDOffset, e.StreamID)
 	ch := []byte(e.Channel)
 	buf.PutInt32(offset+ChannelOffset, int32(len(ch)))
-	buf.PutBytesArray(offset+ChannelOffset+4, &ch, 0, int32(len(ch)))
+	buf.PutBytesSlice(offset+ChannelOffset+4, ch)
 	srcOff := offset + ChannelOffset + util.AlignInt32(4+int32(len(ch)), 4)
 	src := []byte(e.Source)
 	buf.PutInt32(srcOff, int32(len(src)))
-	buf.PutBytesArray(srcOff+4, &src, 0, int32(len(src)))
+	buf.PutBytesSlice(srcOff+4, src)
 	buf.PutInt64Ordered(offset+ObservationCountOffset, e.ObservationCount)
 	return util.AlignInt32(srcOff+4+int32(len(src))-offset, EntryAlignment)
 }

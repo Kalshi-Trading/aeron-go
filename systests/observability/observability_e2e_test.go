@@ -193,7 +193,7 @@ func TestLocalSocketAddressesAndLossReport(t *testing.T) {
 		addrs = sub.LocalSocketAddresses()
 		return len(addrs) > 0
 	})
-	direct := status.FindAddresses(a.CounterReader(), int64(sub.ChannelStatus()), sub.ChannelStatusId())
+	direct := status.FindAddresses(a.CounterReader(), int64(sub.ChannelStatus()), sub.ChannelStatusID())
 	t.Logf("subscription bound to %v (status=%s, via status pkg %v), resolved channel %s", addrs,
 		status.String(int64(sub.ChannelStatus())), direct, sub.TryResolveChannelEndpointPort())
 	if len(direct) != 1 || direct[0] != addrs[0] || strings.HasSuffix(addrs[0], ":0") {

@@ -327,7 +327,7 @@ func (f *ErrorFlyweight) SetErrorMessage(msg string) {
 	length := int32(len(b))
 	f.putInt32(ErrErrorStringFieldOffset, length)
 	if length > 0 {
-		f.buf.PutBytesArray(f.offset+ErrErrorStringFieldOffset+4, &b, 0, length)
+		f.buf.PutBytesSlice(f.offset+ErrErrorStringFieldOffset+4, b[:length])
 	}
 	f.SetFrameLength(ErrHeaderLength + length)
 }

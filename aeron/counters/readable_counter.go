@@ -33,7 +33,7 @@ type ReadableCounter struct {
 }
 
 func NewReadableRegisteredCounter(reader *Reader, registrationId int64, counterId int32) (*ReadableCounter, error) {
-	if err := reader.ValidateCounterId(counterId); err != nil {
+	if err := reader.ValidateCounterID(counterId); err != nil {
 		return nil, err
 	}
 	if state := reader.GetCounterState(counterId); state != RecordAllocated {

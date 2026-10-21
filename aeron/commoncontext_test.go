@@ -274,7 +274,7 @@ func TestAppendToCounterLabel(t *testing.T) {
 	buf.PutInt32(rec, ctr.RecordAllocated)
 	label := []byte("client-heartbeat: 5")
 	buf.PutInt32(rec+ctr.LabelOffset, int32(len(label)))
-	buf.PutBytesArray(rec+ctr.LabelOffset+4, &label, 0, int32(len(label)))
+	buf.PutBytesSlice(rec+ctr.LabelOffset+4, label)
 
 	n, err := appendToCounterLabel(buf, 1, heartbeatLabelSuffix("my-client"))
 	require.NoError(t, err)

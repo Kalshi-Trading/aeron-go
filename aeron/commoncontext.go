@@ -341,7 +341,7 @@ func writeTerminateDriver(toDriver *rb.ManyToOne, clientID int64, token []byte) 
 	buf.PutInt64(8, NullValue)
 	buf.PutInt32(16, int32(len(token)))
 	if len(token) > 0 {
-		buf.PutBytesArray(20, &token, 0, int32(len(token)))
+		buf.PutBytesSlice(20, token)
 	}
 	return toDriver.Write(terminateDriverMsgTypeID, buf, 0, int32(length))
 }

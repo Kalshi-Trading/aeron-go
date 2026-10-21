@@ -122,7 +122,7 @@ func (suite *BufferClaimMessageTestSuite) TestShouldTransferReservedValue() {
 
 	fragmentHandler := func(_ *atomic.Buffer, _ int32, length int32, header *logbuffer.Header) {
 		suite.Assert().EqualValues(messageLength, length)
-		suite.Assert().EqualValues(reservedValue, header.GetReservedValue())
+		suite.Assert().EqualValues(reservedValue, header.ReservedValue())
 	}
 
 	for 1 != subscription.Poll(fragmentHandler, fragmentCountLimit) {

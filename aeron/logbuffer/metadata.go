@@ -265,7 +265,7 @@ func (m *LogBufferMetaData) SetUntetheredLingerTimeoutNs(v int64) {
 	for i := 0; i < 8; i++ {
 		b[i] = byte(uint64(v) >> (8 * i))
 	}
-	m.buf.PutBytesArray(m.offset+LogUntetheredLingerTimeoutNsOffset, &b, 0, 8)
+	m.buf.PutBytesSlice(m.offset+LogUntetheredLingerTimeoutNsOffset, b[:8])
 }
 
 func (m *LogBufferMetaData) Group() bool          { return m.b(LogGroupOffset) }
