@@ -232,6 +232,9 @@ type ClientConductor struct {
 	clientName             string
 	preTouchMappedMemory   bool
 	subscriberErrorHandler func(error)
+
+	awaitingIdleStrategy idlestrategy.Idler
+	driverAgentInvoker   AgentInvoker
 }
 
 // Init is the primary initialization method for ClientConductor
@@ -500,6 +503,18 @@ func (cc *ClientConductor) awaitResponse(correlationID int64) error {
 				"no response from MediaDriver within %v (correlationId=%d)",
 				time.Duration(cc.driverTimeoutNs), correlationID))
 		}
+		cc.awaitIdle()
+	}
+}
+
+// awaitIdle runs the embedded driver's agent invoker, if any, otherwise idles with the awaiting idle strategy.
+func (cc *ClientConductor) awaitIdle() {
+	switch {
+	case cc.driverAgentInvoker != nil:
+		cc.driverAgentInvoker.Invoke()
+	case cc.awaitingIdleStrategy != nil:
+		cc.awaitingIdleStrategy.Idle(0)
+	default:
 		time.Sleep(awaitingIdleSleep)
 	}
 }

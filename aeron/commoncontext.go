@@ -20,6 +20,7 @@ package aeron
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -55,6 +56,7 @@ const (
 	PreTouchMappedMemoryPropName       = "aeron.pre.touch.mapped.memory"
 	PreTouchMappedMemoryEnv            = "AERON_CLIENT_PRE_TOUCH_MAPPED_MEMORY"
 	EnableExperimentalFeaturesPropName = "aeron.enable.experimental.features"
+	EnableExperimentalFeaturesEnv      = "AERON_ENABLE_EXPERIMENTAL_FEATURES"
 )
 
 // Client defaults, matching io.aeron.CommonContext and io.aeron.Aeron.Configuration.
@@ -241,7 +243,15 @@ func awaitCncFile(cncFile string, driverTimeout time.Duration) (*cncMapping, err
 		}
 		m, err := mapCncFile(cncFile, true)
 		if err != nil {
-			return nil, err
+			// As Java ignores NoSuchFileException/AccessDeniedException: the driver may be (re)creating the file.
+			if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, os.ErrPermission) {
+				return nil, err
+			}
+			if time.Now().After(deadline) {
+				return nil, fmt.Errorf("%w: cannot open CnC file: %s: %v", ErrDriverTimeout, cncFile, err)
+			}
+			time.Sleep(DefaultIdleSleepDuration)
+			continue
 		}
 		if m == nil {
 			if time.Now().After(deadline) {
@@ -355,7 +365,15 @@ func parseDurationConfig(value string) (time.Duration, error) {
 	if err != nil || n < 0 {
 		return 0, fmt.Errorf("invalid duration %q", value)
 	}
-	return time.Duration(n) * mult, nil
+	return saturatingDuration(n, mult), nil
+}
+
+// saturatingDuration returns n*unit, saturating at math.MaxInt64 like Java's TimeUnit.toNanos.
+func saturatingDuration(n int64, unit time.Duration) time.Duration {
+	if n > math.MaxInt64/int64(unit) {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(n) * unit
 }
 
 func envDuration(name string, def time.Duration) time.Duration {
@@ -371,7 +389,7 @@ func envDuration(name string, def time.Duration) time.Duration {
 func envMillis(name string, def time.Duration) time.Duration {
 	if s, ok := os.LookupEnv(name); ok && s != "" {
 		if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil && n >= 0 {
-			return time.Duration(n) * time.Millisecond
+			return saturatingDuration(n, time.Millisecond)
 		}
 		logger.Warningf("ignoring invalid %s=%q", name, s)
 	}

@@ -172,14 +172,3 @@ func (aeron *Aeron) ConductorAgentInvoker() *ConductorAgentInvoker {
 func (aeron *Aeron) Context() *Context {
 	return aeron.context
 }
-
-// awaitIdle is called while a blocking call awaits a driver response. With the conductor agent invoker it performs a
-// duty cycle so responses are processed on the caller's goroutine.
-func (aeron *Aeron) awaitIdle() {
-	if aeron.invoker != nil {
-		if aeron.invoker.Invoke() > 0 {
-			return
-		}
-	}
-	aeron.context.awaitingIdleStrategy.Idle(0)
-}

@@ -17,6 +17,7 @@ package archive
 import (
 	"fmt"
 
+	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/archive/codecs"
 )
@@ -25,10 +26,27 @@ func (proxy *Proxy) offerPacket(bytes []byte, err error) error {
 	if err != nil {
 		return err
 	}
-	if ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil); ret < 0 {
-		return fmt.Errorf("Offer failed: %d", ret)
+	if proxy.archive.State() == ArchiveStateClosed {
+		return NewArchiveException("client is closed", ErrorCodeGeneric, NullValue)
 	}
-	return nil
+	return proxy.offerBytes(bytes)
+}
+
+// offerBytes offers an encoded request regardless of the client state, used to send CloseSession during Close.
+func (proxy *Proxy) offerBytes(bytes []byte) error {
+	ret := proxy.Offer(atomic.MakeBuffer(bytes, len(bytes)), 0, int32(len(bytes)), nil)
+	switch {
+	case ret >= 0:
+		return nil
+	case ret == aeron.PublicationClosed:
+		return NewArchiveException("connection to the archive has been closed", ErrorCodeGeneric, NullValue)
+	case ret == aeron.NotConnected:
+		return NewArchiveException("connection to the archive is no longer available", ErrorCodeGeneric, NullValue)
+	case ret == aeron.MaxPositionExceeded:
+		return NewArchiveException("offer failed due to max position being reached", ErrorCodeGeneric, NullValue)
+	default:
+		return NewArchiveException(fmt.Sprintf("failed to send archive request: %d", ret), ErrorCodeGeneric, NullValue)
+	}
 }
 
 // ReplayRequestWithParams sends a ReplayRequest, or a BoundedReplayRequest if params.BoundingLimitCounterID
