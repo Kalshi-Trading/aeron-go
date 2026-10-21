@@ -94,10 +94,11 @@ func TestStalledDriverBlockingCommandsTimeOut(t *testing.T) {
 			var opErr error
 			elapsed := within(t, stallTimeout+5*time.Second, op.name, func() {
 				// The command under test takes the conductor lock first; the concurrent callers queue behind it.
+				// Add before spawning: an Add from zero racing with Wait is a WaitGroup misuse (flagged by -race).
+				wg.Add(4)
 				go func() {
 					time.Sleep(50 * time.Millisecond)
 					for i := 0; i < 4; i++ {
-						wg.Add(1)
 						go func() {
 							defer wg.Done()
 							_, err := c.AddPublication("aeron:ipc", nextStream())
