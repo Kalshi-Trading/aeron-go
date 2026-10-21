@@ -2,6 +2,7 @@ package client
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/lirm/aeron-go/aeron"
@@ -293,4 +294,37 @@ func TestEncodeConnectRequest(t *testing.T) {
 	assert.Equal(t, ProtocolSemanticVersion, decoded.Version)
 	assert.Equal(t, "cred", string(decoded.EncodedCredentials))
 	assert.Equal(t, "name=x", string(decoded.ClientInfo))
+}
+
+type headerImage struct {
+	aeron.Image
+	sessionID int32
+}
+
+func (i *headerImage) SessionID() int32 { return i.sessionID }
+
+func TestImageForHeaderUsesHeaderContext(t *testing.T) {
+	img := &headerImage{sessionID: 7}
+	var header logbuffer.Header
+	header.SetContext(img)
+	require.Same(t, img, imageForHeader(nil, &header))
+	header.SetContext(nil)
+	require.Nil(t, imageForHeader(nil, &header))
+	require.Nil(t, imageForHeader(nil, nil))
+}
+
+func TestIsResourceTemporarilyUnavailable(t *testing.T) {
+	require.True(t, isResourceTemporarilyUnavailable(fmt.Errorf("wrapped: %w",
+		aeron.NewRegistrationError(1, int32(aeron.ErrorCodeResourceTemporarilyUnavailable), "busy"))))
+	require.False(t, isResourceTemporarilyUnavailable(aeron.NewRegistrationError(1, 1, "invalid channel")))
+	require.False(t, isResourceTemporarilyUnavailable(errors.New("other")))
+	require.False(t, isResourceTemporarilyUnavailable(nil))
+}
+
+func TestConcludeTwiceReturnsErrConcurrentConclude(t *testing.T) {
+	ctx := NewContext()
+	require.ErrorIs(t, ctx.Conclude(), ErrConfiguration)
+	require.ErrorIs(t, ctx.Conclude(), ErrConcurrentConclude)
+	_, err := NewAsyncConnect(ctx)
+	require.ErrorIs(t, err, ErrConcurrentConclude)
 }

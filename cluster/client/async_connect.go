@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -86,7 +87,7 @@ func Connect(ctx *Context) (*AeronCluster, error) {
 		}
 		if state != async.State() {
 			state = async.State()
-			ctx.idle(1)
+			ctx.resetIdle()
 		} else {
 			ctx.idle(0)
 		}
@@ -96,7 +97,9 @@ func Connect(ctx *Context) (*AeronCluster, error) {
 // NewAsyncConnect concludes the context and begins an asynchronous connect.
 func NewAsyncConnect(ctx *Context) (*AsyncConnect, error) {
 	if err := ctx.Conclude(); err != nil {
-		_ = ctx.Close()
+		if !errors.Is(err, ErrConcurrentConclude) {
+			_ = ctx.Close()
+		}
 		return nil, err
 	}
 	members, err := parseMemberIngress(ctx, ctx.IngressEndpoints)
@@ -131,15 +134,19 @@ func (c *AsyncConnect) Close() {
 		return
 	}
 	if c.ingressPublication != nil {
-		_ = c.ingressPublication.Close()
+		if err := c.ingressPublication.Close(); err != nil {
+			c.ctx.ErrorHandler(err)
+		}
 	} else if c.ingressRegistrationId != nullValue {
-		closePendingPublication(c.ctx, c.ingressRegistrationId)
+		asyncRemovePublication(c.ctx, c.ingressRegistrationId)
 	}
 	if c.egressSubscription != nil {
-		_ = c.egressSubscription.Close()
+		if err := c.egressSubscription.Close(); err != nil {
+			c.ctx.ErrorHandler(err)
+		}
 	} else if c.egressRegistrationId != nullValue && c.ctx.Aeron != nil && !c.ctx.Aeron.IsClosed() {
-		if sub, err := c.ctx.Aeron.GetSubscription(c.egressRegistrationId); err == nil && sub != nil {
-			_ = sub.Close()
+		if err := c.ctx.Aeron.AsyncRemoveSubscription(c.egressRegistrationId); err != nil {
+			c.ctx.ErrorHandler(err)
 		}
 	}
 	closeAllMembers(c.memberByIdMap)
@@ -204,6 +211,9 @@ func (c *AsyncConnect) createEgressSubscription() error {
 	sub, err := c.ctx.Aeron.GetSubscription(c.egressRegistrationId)
 	if err != nil {
 		c.egressRegistrationId = nullValue
+		if isResourceTemporarilyUnavailable(err) {
+			return nil
+		}
 		return err
 	}
 	if sub != nil {
@@ -231,11 +241,13 @@ func (c *AsyncConnect) createIngressPublications() error {
 		pub, err := getIngressPublication(c.ctx, c.ingressRegistrationId)
 		if err != nil {
 			c.ingressRegistrationId = nullValue
+			if isResourceTemporarilyUnavailable(err) {
+				return nil
+			}
 			return err
 		}
 		c.ingressPublication = pub
-	}
-	if c.ingressPublication != nil {
+	} else {
 		c.ingressRegistrationId = nullValue
 		c.state = AsyncConnectAwaitPublicationConnected
 	}

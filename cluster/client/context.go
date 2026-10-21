@@ -49,6 +49,9 @@ var (
 	ErrAuthenticationRejected = errors.New("cluster authentication rejected")
 	// ErrTimeout is wrapped by connect and new leader publication timeouts.
 	ErrTimeout = errors.New("cluster client timeout")
+	// ErrConcurrentConclude is returned when a Context is concluded more than once (Java
+	// ConcurrentConcludeException). The context, and any Aeron client it owns, is left untouched.
+	ErrConcurrentConclude = errors.New("cluster client context already concluded")
 )
 
 // Context holds the configuration for an AeronCluster client, mirroring io.aeron.cluster.client.AeronCluster.Context.
@@ -113,7 +116,7 @@ func (ctx *Context) IsConcluded() bool {
 // Conclude validates the configuration, applies defaults and connects an Aeron client if one was not supplied.
 func (ctx *Context) Conclude() error {
 	if ctx.isConcluded {
-		return fmt.Errorf("%w: context already concluded", ErrConfiguration)
+		return ErrConcurrentConclude
 	}
 	ctx.isConcluded = true
 
@@ -162,7 +165,11 @@ func (ctx *Context) Conclude() error {
 		ctx.ControlledEgressListener = missingControlledEgressListener{}
 	}
 	if ctx.Aeron == nil {
-		aeronCtx := aeron.NewContext().ErrorHandler(ctx.ErrorHandler)
+		clientName := ctx.ClientName
+		if clientName == "" {
+			clientName = "cluster-client"
+		}
+		aeronCtx := aeron.NewContext().ErrorHandler(ctx.ErrorHandler).ClientName(clientName)
 		if ctx.AeronDirectoryName != "" {
 			aeronCtx.AeronDir(ctx.AeronDirectoryName)
 		}
@@ -200,6 +207,12 @@ func (ctx *Context) runAgentInvokers() int {
 
 func (ctx *Context) idle(workCount int) {
 	ctx.IdleStrategy.Idle(workCount)
+}
+
+func (ctx *Context) resetIdle() {
+	if r, ok := ctx.IdleStrategy.(interface{ Reset() }); ok {
+		r.Reset()
+	}
 }
 
 // CredentialsSupplier mirrors io.aeron.security.CredentialsSupplier.
