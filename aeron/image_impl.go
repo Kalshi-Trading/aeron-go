@@ -105,6 +105,13 @@ func (image *image) Poll(handler term.FragmentHandler, fragmentLimit int) int {
 	header := &image.header
 	header.Wrap(termBuffer.Ptr(), capacity)
 
+	completed := false
+	defer func() {
+		if !completed {
+			image.advanceAfterPanic(position, position+int64(offset-initialOffset))
+		}
+	}()
+
 	fragmentsRead := 0
 	for fragmentsRead < fragmentLimit && offset < capacity && !image.isClosed.Get() {
 		length := logbuffer.GetFrameLength(termBuffer, offset)
@@ -123,6 +130,7 @@ func (image *image) Poll(handler term.FragmentHandler, fragmentLimit int) int {
 		handler(termBuffer, frameOffset+logbuffer.DataFrameHeader.Length, length-logbuffer.DataFrameHeader.Length, header)
 	}
 
+	completed = true
 	newPosition := position + int64(offset-initialOffset)
 	if newPosition > position && !image.isClosed.Get() {
 		image.subscriberPosition.setRelease(newPosition)
@@ -142,6 +150,9 @@ func (image *image) BoundedPoll(handler term.FragmentHandler, limitPosition int6
 	}
 
 	initialPosition := image.subscriberPosition.get()
+	if initialPosition >= limitPosition {
+		return 0
+	}
 	initialOffset := int32(initialPosition) & image.termLengthMask
 	offset := initialOffset
 	termBuffer := image.activeTermBuffer(initialPosition)
@@ -149,6 +160,13 @@ func (image *image) BoundedPoll(handler term.FragmentHandler, limitPosition int6
 	limitOffset := boundedLimitOffset(capacity, limitPosition, initialPosition, initialOffset)
 	header := &image.header
 	header.Wrap(termBuffer.Ptr(), capacity)
+
+	completed := false
+	defer func() {
+		if !completed {
+			image.advanceAfterPanic(initialPosition, initialPosition+int64(offset-initialOffset))
+		}
+	}()
 
 	fragmentsRead := 0
 	for fragmentsRead < fragmentLimit && offset < limitOffset && !image.isClosed.Get() {
@@ -168,6 +186,7 @@ func (image *image) BoundedPoll(handler term.FragmentHandler, limitPosition int6
 		handler(termBuffer, frameOffset+logbuffer.DataFrameHeader.Length, length-logbuffer.DataFrameHeader.Length, header)
 	}
 
+	completed = true
 	resultingPosition := initialPosition + int64(offset-initialOffset)
 	if resultingPosition > initialPosition && !image.isClosed.Get() {
 		image.subscriberPosition.setRelease(resultingPosition)
@@ -204,6 +223,9 @@ func (image *image) BoundedControlledPoll(
 		return 0
 	}
 	initialPosition := image.subscriberPosition.get()
+	if initialPosition >= limitPosition {
+		return 0
+	}
 	initialOffset := int32(initialPosition) & image.termLengthMask
 	termBuffer := image.activeTermBuffer(initialPosition)
 	limitOffset := boundedLimitOffset(termBuffer.Capacity(), limitPosition, initialPosition, initialOffset)
@@ -222,6 +244,13 @@ func (image *image) controlledPoll(
 	offset := initialOffset
 	header := &image.header
 	header.Wrap(termBuffer.Ptr(), termBuffer.Capacity())
+
+	completed := false
+	defer func() {
+		if !completed {
+			image.advanceAfterPanic(initialPosition, initialPosition+int64(offset-initialOffset))
+		}
+	}()
 
 	fragmentsRead := 0
 	for fragmentsRead < fragmentLimit && offset < limitOffset && !image.isClosed.Get() {
@@ -259,11 +288,21 @@ func (image *image) controlledPoll(
 		}
 	}
 
+	completed = true
 	resultingPosition := initialPosition + int64(offset-initialOffset)
 	if resultingPosition > initialPosition && !image.isClosed.Get() {
 		image.subscriberPosition.setRelease(resultingPosition)
 	}
 	return fragmentsRead
+}
+
+// advanceAfterPanic mirrors the finally block of Java's Image poll methods: when a handler panics, the position is
+// still advanced past the fragments consumed, including the one that panicked, and the panic propagates (Java with
+// RethrowingErrorHandler as the subscriber error handler, as used by the archive and cluster).
+func (image *image) advanceAfterPanic(initialPosition int64, resultingPosition int64) {
+	if resultingPosition > initialPosition && !image.isClosed.Get() {
+		image.subscriberPosition.setRelease(resultingPosition)
+	}
 }
 
 // ControlledPeek peeks for new messages from initialPosition up to limitPosition without moving the subscriber
@@ -349,11 +388,9 @@ func (image *image) BlockPoll(handler term.BlockHandler, blockLengthLimit int32)
 	length := resultingOffset - offset
 
 	if resultingOffset > offset {
+		defer image.advanceAfterPanic(position, position+int64(length))
 		termID := termBuffer.GetInt32(offset + logbuffer.DataFrameHeader.TermIDFieldOffset)
 		handler(termBuffer, offset, length, image.sessionID, termID)
-		if !image.isClosed.Get() {
-			image.subscriberPosition.setRelease(position + int64(length))
-		}
 	}
 	return length
 }
@@ -380,10 +417,8 @@ func (image *image) RawPoll(handler term.RawBlockHandler, blockLengthLimit int32
 	if resultingOffset > termOffset {
 		fileOffset := int64(capacity)*int64(activeIndex) + int64(termOffset)
 		termID := termBuffer.GetInt32(termOffset + logbuffer.DataFrameHeader.TermIDFieldOffset)
+		defer image.advanceAfterPanic(position, position+int64(length))
 		handler(image.logFileName, fileOffset, termBuffer, termOffset, length, image.sessionID, termID)
-		if !image.isClosed.Get() {
-			image.subscriberPosition.setRelease(position + int64(length))
-		}
 	}
 	return length
 }
@@ -434,7 +469,7 @@ func (image *image) IsEndOfStream() bool {
 	if image.isClosed.Get() {
 		return image.isEos
 	}
-	return image.subscriberPosition.get() >= image.logBuffers.Meta().EndOfStreamPosOff.Get()
+	return image.subscriberPosition.get() >= image.endOfStreamPositionVolatile()
 }
 
 // EndOfStreamPosition returns the position the stream reached when the publisher closed, or math.MaxInt64 when the
@@ -443,7 +478,12 @@ func (image *image) EndOfStreamPosition() int64 {
 	if image.isClosed.Get() {
 		return image.eosPosition
 	}
-	return image.logBuffers.Meta().EndOfStreamPosOff.Get()
+	return image.endOfStreamPositionVolatile()
+}
+
+func (image *image) endOfStreamPositionVolatile() int64 {
+	return image.logBuffers.Buffer(logbuffer.LogMetaDataSectionIndex).GetInt64Volatile(
+		logbuffer.LogEndOfStreamPositionOffset)
 }
 
 // IsPublicationRevoked returns true if the publication was revoked by the publisher (Aeron 1.48+).
@@ -546,10 +586,24 @@ func (image *image) markClosed() {
 		return
 	}
 	image.finalPosition = image.subscriberPosition.getVolatile()
-	image.eosPosition = image.logBuffers.Meta().EndOfStreamPosOff.Get()
+	image.eosPosition = image.endOfStreamPositionVolatile()
 	image.isEos = image.finalPosition >= image.eosPosition
 	image.isRevoked = image.readRevoked()
 	image.isClosed.Set(true)
+}
+
+// String returns a description of the image, as Java's Image.toString.
+func (image *image) String() string {
+	regID := image.subscriptionRegistrationID
+	if image.subscription != nil {
+		regID = image.subscription.registrationID
+	}
+	return fmt.Sprintf("Image{correlationId=%d, sessionId=%d, isClosed=%t, isEos=%t, initialTermId=%d, termLength=%d, "+
+		"joinPosition=%d, position=%d, endOfStreamPosition=%d, activeTransportCount=%d, sourceIdentity='%s', "+
+		"subscriptionRegistrationId=%d}",
+		image.correlationID, image.sessionID, image.IsClosed(), image.IsEndOfStream(), image.InitialTermID(),
+		image.TermBufferLength(), image.joinPosition, image.Position(), image.EndOfStreamPosition(),
+		image.ActiveTransportCount(), image.sourceIdentity, regID)
 }
 
 //go:norace

@@ -38,6 +38,9 @@ func (cc *ClientConductor) rejectImage(imageCorrelationID int64, position int64,
 		return err
 	}
 
-	_, err := rejecter.RejectImage(imageCorrelationID, position, reason)
-	return err
+	correlationID, err := rejecter.RejectImage(imageCorrelationID, position, reason)
+	if err != nil {
+		return err
+	}
+	return cc.awaitResponse(correlationID)
 }

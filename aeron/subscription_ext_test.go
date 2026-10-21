@@ -80,7 +80,9 @@ func TestSubscriptionRejectImage(t *testing.T) {
 	spy := NewSubscription(cc, "aeron-spy:aeron:udp?endpoint=localhost:20121", 6, 1001, -1, nil, nil)
 	require.ErrorIs(t, spy.RejectImage(99, 4096, "bad"), ErrSpyRejectImage)
 
-	cc.On("releaseSubscription", int64(5), mock.Anything).Return(nil).Once()
+	cc.On("releaseSubscription", sub).Run(func(args mock.Arguments) {
+		args.Get(0).(*Subscription).isClosed.Set(true)
+	}).Return(nil).Once()
 	require.NoError(t, sub.Close())
 	require.Error(t, sub.RejectImage(99, 4096, "bad"))
 }
