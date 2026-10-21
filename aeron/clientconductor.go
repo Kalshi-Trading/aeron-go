@@ -19,11 +19,14 @@ limitations under the License.
 package aeron
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"runtime"
+	"strconv"
 	"sync"
+	syncatomic "sync/atomic"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
@@ -221,9 +224,12 @@ type ClientConductor struct {
 	// inRunCallbacks is set while user callbacks run on the conductor goroutine, so Close called from one of them
 	// does not wait for the goroutine it is running on.
 	inRunCallbacks atomic.Bool
-	exitMu         sync.Mutex
-	exited         bool
-	afterExit      func()
+	// conductorGoroutine is the id of the goroutine running the duty cycle, so only Close called from a callback on it
+	// (and not from another goroutine while a callback happens to run) is treated as a close from a callback.
+	conductorGoroutine syncatomic.Int64
+	exitMu             sync.Mutex
+	exited             bool
+	afterExit          func()
 
 	timeOfLastKeepaliveNs   int64
 	timeOfLastServiceNs     int64
@@ -298,6 +304,7 @@ func (cc *ClientConductor) Start(idleStrategy idlestrategy.Idler) {
 func (cc *ClientConductor) run(idleStrategy idlestrategy.Idler) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	cc.conductorGoroutine.Store(goroutineID())
 	defer close(cc.doneCh)
 	defer cc.runExited()
 	defer cc.onClose()
@@ -378,7 +385,7 @@ func (cc *ClientConductor) Close() error {
 		cc.onClose()
 		return nil
 	}
-	if cc.inRunCallbacks.Get() {
+	if cc.inRunCallbacks.Get() && goroutineID() == cc.conductorGoroutine.Load() {
 		return ErrCloseFromCallback
 	}
 	select {
@@ -522,7 +529,7 @@ func (cc *ClientConductor) receiveDriverEvents() (n int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if rErr, ok := r.(error); ok && errors.Is(rErr, broadcast.ErrUnableToKeepUp) {
-				err = cc.terminate(fmt.Errorf("driver events adapter is invalid: %w", rErr))
+				err = cc.terminate(WrapAeronError(CategoryError, "Driver events adapter is invalid", rErr))
 				return
 			}
 			err = fmt.Errorf("failed to process driver event: %v", r)
@@ -774,7 +781,7 @@ func (cc *ClientConductor) asyncAdd(send func() (int64, error)) (int64, error) {
 	defer cc.unlock()
 	corrID, err := send()
 	if err != nil {
-		return 0, err
+		return 0, commandWriteError(err)
 	}
 	cc.asyncCommandIDs[corrID] = cc.nanoClock()
 	return corrID, nil
@@ -792,7 +799,7 @@ func (cc *ClientConductor) sendAddPublication(kind resourceKind, channel string,
 		corrID, err = cc.driverProxy.AddPublication(channel, streamID)
 	}
 	if err != nil {
-		return 0, err
+		return 0, commandWriteError(err)
 	}
 	cc.resources[corrID] = &conductorResource{kind: kind, channel: channel, streamID: streamID,
 		timeOfRegistrationNs: cc.nanoClock()}
@@ -928,7 +935,7 @@ func (cc *ClientConductor) AsyncRemovePublication(registrationID int64) error {
 func (cc *ClientConductor) sendTrackedRemove(send func() (int64, error)) error {
 	corrID, err := send()
 	if err != nil {
-		return err
+		return commandWriteError(err)
 	}
 	cc.asyncCommandIDs[corrID] = cc.nanoClock()
 	return nil
@@ -1001,7 +1008,7 @@ func (cc *ClientConductor) sendAddSubscription(channel string, streamID int32,
 	}
 	corrID, err := cc.driverProxy.AddSubscription(channel, streamID)
 	if err != nil {
-		return 0, err
+		return 0, commandWriteError(err)
 	}
 	sub := NewSubscription(cc, channel, corrID, streamID, ChannelStatusNoIdAllocated, onAvailableImage,
 		onUnavailableImage)
@@ -1167,7 +1174,7 @@ func (cc *ClientConductor) syncCommand(send func() (int64, error)) (int64, error
 	}
 	corrID, err := send()
 	if err != nil {
-		return 0, err
+		return 0, commandWriteError(err)
 	}
 	return corrID, cc.awaitResponse(corrID)
 }
@@ -1292,10 +1299,39 @@ func (cc *ClientConductor) sendAddCounter(kind resourceKind, send func() (int64,
 	}
 	corrID, err := send()
 	if err != nil {
-		return 0, err
+		return 0, commandWriteError(err)
 	}
 	cc.resources[corrID] = &conductorResource{kind: kind, timeOfRegistrationNs: cc.nanoClock()}
 	return corrID, nil
+}
+
+// addCounterSync sends an add counter command and blocks in awaitResponse until the driver responds (Java
+// ClientConductor.addCounter/addStaticCounter), so a stalled or lost driver surfaces as a DriverTimeoutError.
+func (cc *ClientConductor) addCounterSync(kind resourceKind, send func() (int64, error)) (*Counter, error) {
+	cc.adminLock.Lock()
+	defer cc.unlock()
+	corrID, err := cc.sendAddCounter(kind, send)
+	if err != nil {
+		return nil, err
+	}
+	if err := cc.awaitResponse(corrID); err != nil {
+		delete(cc.resources, corrID)
+		return nil, err
+	}
+	res := cc.resources[corrID]
+	if res == nil || res.counter == nil {
+		return nil, fmt.Errorf("counter %d not available after response", corrID)
+	}
+	return res.counter, nil
+}
+
+// commandWriteError types a failure to write a command to the driver (e.g. a full to-driver ring buffer) as the
+// AeronException Java DriverProxy throws; errors that are already Aeron errors are returned unchanged.
+func commandWriteError(err error) error {
+	if _, ok := CategoryOf(err); ok || errors.Is(err, ErrClientClosed) {
+		return err
+	}
+	return WrapAeronError(CategoryError, "", err)
 }
 
 // GetCounter polls for a counter added with AddCounter*/AddStaticCounter*: (nil, nil) while the driver has not
@@ -1352,7 +1388,7 @@ func (cc *ClientConductor) releaseCounterLocked(registrationID int64, counterID 
 	delete(cc.resources, registrationID)
 	corrID, err := cc.driverProxy.RemoveCounter(registrationID)
 	if err != nil {
-		return err
+		return commandWriteError(err)
 	}
 	cc.asyncCommandIDs[corrID] = cc.nanoClock()
 	return nil
@@ -1389,7 +1425,7 @@ func (cc *ClientConductor) NextSessionID(streamID int32) (int32, error) {
 	}
 	corrID, err := cc.driverProxy.NextAvailableSessionID(streamID)
 	if err != nil {
-		return 0, err
+		return 0, commandWriteError(err)
 	}
 	if err := cc.awaitResponse(corrID); err != nil {
 		return 0, err
@@ -1781,4 +1817,16 @@ func (cc *ClientConductor) OnUnavailableImage(corrID int64, subscriptionRegistra
 // CounterReader returns the counters reader for the driver's CnC counters.
 func (cc *ClientConductor) CounterReader() *ctr.Reader {
 	return cc.counterReader
+}
+
+// goroutineID returns the runtime id of the calling goroutine, parsed from its stack header "goroutine N [...".
+func goroutineID() int64 {
+	var buf [32]byte
+	b := buf[:runtime.Stack(buf[:], false)]
+	b = bytes.TrimPrefix(b, []byte("goroutine "))
+	if i := bytes.IndexByte(b, ' '); i > 0 {
+		b = b[:i]
+	}
+	id, _ := strconv.ParseInt(string(b), 10, 64)
+	return id
 }

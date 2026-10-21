@@ -294,7 +294,7 @@ func TestSendFailureIsReturned(t *testing.T) {
 	tc := newTestConductor(t)
 	tc.proxy.sendErr = errors.New("ring buffer full")
 	_, err := tc.AsyncAddPublication(Channel, StreamId1)
-	require.EqualError(t, err, "ring buffer full")
+	require.EqualError(t, err, "ERROR - ring buffer full")
 	require.Empty(t, tc.resources)
 }
 

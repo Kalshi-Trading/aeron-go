@@ -74,5 +74,5 @@ func TestCloseFromAvailableImageHandler(t *testing.T) {
 	}
 	awaitTrue(t, "client closed", a.IsClosed)
 	awaitTrue(t, "subscription closed", sub.IsClosed)
-	require.ErrorIs(t, a.Close(), aeron.ErrCloseFromCallback, "Close is idempotent")
+	require.NoError(t, a.Close(), "like Java, a later Close waits for the async close and succeeds")
 }
