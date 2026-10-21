@@ -43,8 +43,7 @@ func (proxy *Proxy) offerBytes(bytes []byte) error {
 	case ret == aeron.NotConnected:
 		return NewArchiveException("connection to the archive is no longer available", ErrorCodeGeneric, NullValue)
 	case ret == aeron.MaxPositionExceeded:
-		return NewArchiveException(fmt.Sprintf("offer failed due to max position being reached: term-length=%d",
-			proxy.Publication.TermBufferLength()), ErrorCodeGeneric, NullValue)
+		return NewArchiveException("offer failed due to max position being reached", ErrorCodeGeneric, NullValue)
 	default:
 		return NewArchiveException(fmt.Sprintf("failed to send archive request: %d", ret), ErrorCodeGeneric, NullValue)
 	}
