@@ -101,7 +101,7 @@ func TestMain(m *testing.M) {
 	archive, err = NewArchive(options, context)
 	if err != nil || archive == nil {
 		log.Printf("archive-media-driver connection failed, skipping all archive_tests:%s", err.Error())
-		return
+		os.Exit(m.Run()) // unit tests that don't need an archive still run
 	}
 	haveArchive = true
 
