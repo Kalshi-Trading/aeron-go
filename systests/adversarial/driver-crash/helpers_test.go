@@ -51,6 +51,8 @@ const (
 	clientLiveness = 2 * time.Second
 	imageLiveness  = 2 * time.Second
 	unblockTimeout = 3 * time.Second
+	// publicationLinger is the Java driver's default aeron.publication.linger.timeout.
+	publicationLinger = 5 * time.Second
 
 	// driverTimeout is the Go clients' media driver timeout (Context.MediaDriverTimeout).
 	driverTimeout = 2 * time.Second

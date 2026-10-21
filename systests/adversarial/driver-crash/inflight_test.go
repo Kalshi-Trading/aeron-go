@@ -27,43 +27,45 @@ func TestDriverDeathDuringAdds(t *testing.T) {
 			base := snapshot(t)
 			a, o := connect(t)
 
-			var calls, failures atomic.Int64
+			var calls, failures, timeoutsReturned atomic.Int64
 			var mu sync.Mutex
 			var unexpected []error
 			var slowest time.Duration
 			stop := make(chan struct{})
 			var wg sync.WaitGroup
-			adders := []func(i int) error{
-				func(i int) error {
-					p, err := a.AddPublication("aeron:udp?endpoint="+udp(20+i%4), int32(9020+i%4))
-					if err == nil {
-						err = p.Close()
-					}
-					return err
-				},
-				func(i int) error {
-					p, err := a.AddExclusivePublication("aeron:ipc", int32(9024+i%4))
-					if err == nil {
-						err = p.Close()
-					}
-					return err
-				},
-				func(i int) error {
-					s, err := a.AddSubscription("aeron:udp?endpoint="+udp(24+i%4), int32(9028+i%4))
-					if err == nil {
-						err = s.Close()
-					}
-					return err
-				},
-				func(i int) error {
-					c, err := a.AddCounterByLabel(1001, fmt.Sprint("adv-", i))
-					if err == nil {
-						err = c.Close()
-					}
-					return err
-				},
+			adders := func(c *aeron.Aeron) []func(i int) error {
+				return []func(i int) error{
+					func(i int) error {
+						p, err := c.AddPublication("aeron:udp?endpoint="+udp(20+i%4), int32(9020+i%4))
+						if err == nil {
+							err = p.Close()
+						}
+						return err
+					},
+					func(i int) error {
+						p, err := c.AddExclusivePublication("aeron:ipc", int32(9024+i%4))
+						if err == nil {
+							err = p.Close()
+						}
+						return err
+					},
+					func(i int) error {
+						s, err := c.AddSubscription("aeron:udp?endpoint="+udp(24+i%4), int32(9028+i%4))
+						if err == nil {
+							err = s.Close()
+						}
+						return err
+					},
+					func(i int) error {
+						c, err := c.AddCounterByLabel(1001, fmt.Sprint("adv-", i))
+						if err == nil {
+							err = c.Close()
+						}
+						return err
+					},
+				}
 			}
-			for g, add := range adders {
+			for g, add := range adders(a) {
 				g, add := g, add
 				wg.Add(1)
 				go func() {
@@ -85,7 +87,9 @@ func TestDriverDeathDuringAdds(t *testing.T) {
 						if err != nil {
 							failures.Add(1)
 							var dt *aeron.DriverTimeoutError
-							if !errors.As(err, &dt) && !errors.Is(err, aeron.ErrClientClosed) {
+							if errors.As(err, &dt) {
+								timeoutsReturned.Add(1)
+							} else if !errors.Is(err, aeron.ErrClientClosed) {
 								unexpected = append(unexpected, fmt.Errorf("adder %d: %w", g, err))
 							}
 						}
@@ -115,8 +119,13 @@ func TestDriverDeathDuringAdds(t *testing.T) {
 			require.Positive(t, failures.Load())
 			var dt *aeron.DriverTimeoutError
 			require.True(t, errors.As(a.TerminalError(), &dt), "%v", a.TerminalError())
-			require.NotEmpty(t, o.errors())
-			require.Equal(t, "DriverTimeout", classify(o.errors()[0]))
+			// Java ClientConductor.service rethrows a timeout detected inside a client API call to that caller only;
+			// the error handler sees it only when the conductor thread detects it first. Either way it surfaces once.
+			for _, err := range o.errors() {
+				require.Equal(t, "DriverTimeout", classify(err), "%v", err)
+			}
+			require.Positive(t, int64(len(o.errors()))+timeoutsReturned.Load(), "the driver timeout was never reported")
+			t.Logf("timeout returned to %d callers, error handler calls %d", timeoutsReturned.Load(), len(o.errors()))
 			requireClientCallsFailFast(t, a)
 			within(t, "Close", 5*time.Second, func() { require.NoError(t, a.Close()) })
 			require.Zero(t, mappedFiles(t))
@@ -128,7 +137,7 @@ func TestDriverDeathDuringAdds(t *testing.T) {
 				restartDriver(t, plain)
 			}
 			b, o2 := connect(t)
-			for i, add := range adders {
+			for i, add := range adders(b) {
 				require.NoError(t, add(100+i), "adder %d after %s", i, fault)
 			}
 			f := startFlow(t, b, specs(5)[0])
@@ -156,7 +165,7 @@ func TestDriverDeathDuringBackPressure(t *testing.T) {
 		{name: "concurrent-udp", pubChannel: "aeron:udp?endpoint=" + udp(40) + "|term-length=64k", stream: 9050,
 			mode: offer, size: 1024},
 		{name: "exclusive-ipc-offerblock", pubChannel: "aeron:ipc?term-length=64k", stream: 9051, exclusive: true,
-			mode: offerBlock, size: 1024},
+			mode: offerBlock, size: 992},
 		{name: "exclusive-udp-tryclaim", pubChannel: "aeron:udp?endpoint=" + udp(41) + "|term-length=64k",
 			stream: 9052, exclusive: true, mode: tryClaim, size: 1024},
 	} {
@@ -223,10 +232,16 @@ func TestGoClientSIGKILLDuringAdds(t *testing.T) {
 		})
 		p.signal(syscall.SIGKILL)
 		require.True(t, p.exited(5*time.Second))
-		awaitTrue(t, "driver releases the dead client's resources", clientLiveness+slack, func() bool {
-			return heartbeatCount(reader, client) == 0 && countCounters(reader, pubLimitTypeID, "9055") == 0 &&
-				countCounters(reader, subPosTypeID, "9055") == 0
+		// Java driver: the client goes after the liveness timeout, its network publications after the
+		// publication linger timeout (default 5s) on top of that.
+		awaitTrue(t, "driver releases the dead client's heartbeat", clientLiveness+slack, func() bool {
+			return heartbeatCount(reader, client) == 0
 		})
+		awaitTrue(t, "driver releases the dead client's publications and subscriptions",
+			publicationLinger+slack, func() bool {
+				return countCounters(reader, pubLimitTypeID, "9055") == 0 &&
+					countCounters(reader, subPosTypeID, "9055") == 0
+			})
 	}
 	require.Empty(t, o.errors())
 	// The same stream is usable afterwards.

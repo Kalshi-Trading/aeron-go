@@ -20,7 +20,9 @@ type sendMode int
 const (
 	offer sendMode = iota
 	tryClaim
-	offerBlock // ExclusivePublication.OfferBlock of one pre-framed message
+	// offerBlock is ExclusivePublication.OfferBlock of one pre-framed message. Like Java, a block must fit in the rest
+	// of the term, so sizes are chosen to make the aligned frame a power of two.
+	offerBlock
 )
 
 // flowSpec describes one publisher -> subscriber pair of a given kind.
@@ -51,7 +53,7 @@ func specs(base int) []flowSpec {
 		{name: "exclusive-mdc-dynamic-offerblock",
 			pubChannel: "aeron:udp?control=" + udp(base*10+3) + "|control-mode=dynamic",
 			subChannel: "aeron:udp?endpoint=" + udp(base*10+4) + "|control=" + udp(base*10+3) + "|control-mode=dynamic",
-			stream:     s + 3, exclusive: true, mode: offerBlock, size: 512},
+			stream:     s + 3, exclusive: true, mode: offerBlock, size: 480},
 		{name: "concurrent-multicast-controlled", pubChannel: "aeron:udp?endpoint=224.20.30.39:" +
 			udp(base*10 + 5)[len("localhost:"):] + "|interface=localhost", stream: s + 4, mode: offer, size: 64,
 			controlled: true},
@@ -251,17 +253,22 @@ func (f *flow) requireIntact(t *testing.T) {
 func align(n int32) int32 { return (n + 31) &^ 31 }
 
 // frameBlock writes msg as one complete, pre-framed DATA frame at offset 0 of frameBuf for OfferBlock, with the
-// header fields OfferBlock requires (session, stream, term offset and term id of the current position).
+// header fields OfferBlock requires (session, stream, term offset and term id of the current position). As in Java,
+// a publication that has exactly filled its term rotates inside OfferBlock, so the block is framed for the next term.
 func frameBlock(frameBuf *aatomic.Buffer, pub *aeron.ExclusivePublication, msg []byte) {
 	frameLen := logbuffer.DataFrameHeader.Length + int32(len(msg))
+	termOffset, termID := pub.TermOffset(), pub.TermID()
+	if termOffset >= pub.TermBufferLength() {
+		termOffset, termID = 0, termID+1
+	}
 	frameBuf.PutInt32(logbuffer.DataFrameHeader.FrameLengthFieldOffset, frameLen)
 	frameBuf.PutInt8(logbuffer.DataFrameHeader.VersionFieldOffset, logbuffer.DataFrameHeader.CurrentVersion)
 	frameBuf.PutUInt8(logbuffer.DataFrameHeader.FlagsFieldOffset, logbuffer.DataFrameHeader.BeginAndEndFlags)
 	frameBuf.PutUInt16(logbuffer.DataFrameHeader.TypeFieldOffset, logbuffer.DataFrameHeader.TypeData)
-	frameBuf.PutInt32(logbuffer.DataFrameHeader.TermOffsetFieldOffset, pub.TermOffset())
+	frameBuf.PutInt32(logbuffer.DataFrameHeader.TermOffsetFieldOffset, termOffset)
 	frameBuf.PutInt32(logbuffer.DataFrameHeader.SessionIDFieldOffset, pub.SessionID())
 	frameBuf.PutInt32(logbuffer.DataFrameHeader.StreamIDFieldOffset, pub.StreamID())
-	frameBuf.PutInt32(logbuffer.DataFrameHeader.TermIDFieldOffset, pub.TermID())
+	frameBuf.PutInt32(logbuffer.DataFrameHeader.TermIDFieldOffset, termID)
 	frameBuf.PutBytesArray(logbuffer.DataFrameHeader.Length, &msg, 0, int32(len(msg)))
 	if pad := frameBuf.Capacity() - frameLen; pad > 0 {
 		frameBuf.SetMemory(frameLen, pad, 0)
