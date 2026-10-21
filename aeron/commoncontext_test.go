@@ -17,6 +17,7 @@ package aeron
 import (
 	"encoding/binary"
 	"errors"
+	"github.com/lirm/aeron-go/aeron/command"
 	"net"
 	"os"
 	"path/filepath"
@@ -238,23 +239,23 @@ func TestRequestDriverTermination(t *testing.T) {
 }
 
 func TestDecodePublicationErrorFrame(t *testing.T) {
-	msg := []byte("rejected")
-	length := pubErrErrorMessageOffset + 4 + len(msg)
+	length := 256
 	raw := make([]byte, length)
 	buf := atomic.MakeBuffer(unsafe.Pointer(&raw[0]), length)
-	buf.PutInt64(pubErrRegistrationIDOffset, 11)
-	buf.PutInt64(pubErrDestinationRegIDOffset, 12)
-	buf.PutInt32(pubErrSessionIDOffset, 13)
-	buf.PutInt32(pubErrStreamIDOffset, 14)
-	buf.PutInt64(pubErrReceiverIDOffset, 15)
-	buf.PutInt64(pubErrGroupTagOffset, 16)
-	buf.PutUInt16(pubErrAddressTypeOffset, uint16(pubErrAddressTypeIPv4))
-	buf.PutUInt16(pubErrAddressPortOffset, 4040)
-	ip := []byte{127, 0, 0, 1}
-	buf.PutBytesArray(pubErrAddressOffset, &ip, 0, 4)
-	buf.PutInt32(pubErrErrorCodeOffset, 17)
-	buf.PutInt32(pubErrErrorMessageOffset, int32(len(msg)))
-	buf.PutBytesArray(pubErrErrorMessageOffset+4, &msg, 0, int32(len(msg)))
+	var fly command.PublicationErrorFrame
+	fly.Wrap(buf, 0)
+	fly.SetRegistrationID(11)
+	fly.SetDestinationRegistrationID(12)
+	fly.SetSessionID(13)
+	fly.SetStreamID(14)
+	fly.SetReceiverID(15)
+	fly.SetGroupTag(16)
+	if err := fly.SetSourceAddress(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 4040}); err != nil {
+		t.Fatal(err)
+	}
+	fly.SetErrorCode(17)
+	fly.SetErrorMessage("rejected")
+	length = int(fly.Length())
 
 	var f PublicationErrorFrame
 	require.NoError(t, decodePublicationErrorFrame(buf, 0, int32(length), &f))
