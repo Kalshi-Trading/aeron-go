@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
+	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/idlestrategy"
 	"github.com/lirm/aeron-go/aeron/logging"
 	"github.com/lirm/aeron-go/archive/codecs"
@@ -546,8 +547,54 @@ func TestStartStopReplay(t *testing.T) {
 		t.FailNow()
 	}
 
-	// That should give us a recordingID
-	recordingID := recordings[len(recordings)-1].RecordingId
+	// Pick this publication's recording: the catalog persists empty recordings from earlier runs.
+	recordingID := int64(-1)
+	for deadline := time.Now().Add(5 * time.Second); recordingID < 0 && time.Now().Before(deadline); {
+		recordings, err = archive.ListRecordingsForUri(0, 100, "aeron", testCases[0].sampleStream)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range recordings {
+			if r.SessionId == publication.SessionID() {
+				recordingID = r.RecordingId
+			}
+		}
+		if recordingID < 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if recordingID < 0 {
+		t.Fatalf("no recording for publication session %d", publication.SessionID())
+	}
+
+	// Java rejects a replay whose start position is not below the recorded position, so record some data first.
+	// The archive's recording subscription is a spy, so a network subscriber is needed for the publication to connect.
+	sub, err := archive.AddSubscription(testCases[0].sampleChannel, testCases[0].sampleStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	msg := []byte("start-stop-replay")
+	buf := atomic.MakeBuffer(msg)
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if publication.Offer(buf, 0, int32(len(msg)), nil) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("offer timed out")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		pos, err := archive.GetRecordingPosition(recordingID)
+		if err == nil && pos > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("recording %d never advanced: pos=%d err=%v", recordingID, pos, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	replayID, err := archive.StartReplay(recordingID, 0, RecordingLengthNull, testCases[0].replayChannel, testCases[0].replayStream)
 	if err != nil {
