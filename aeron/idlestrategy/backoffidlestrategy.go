@@ -32,7 +32,7 @@ func NewBackoffIdleStrategy(maxSpins, maxYields, minParkPeriodNs, maxParkPeriodN
 const DefaultMaxSpins = 10
 
 // DefaultMaxYields is the default number of times the strategy will yield without work before going to next state.
-const DefaultMaxYields = 5
+const DefaultMaxYields = 20
 
 // DefaultMinParkNs is the default interval the strategy will park the thread on entering the park state.
 const DefaultMinParkNs = 1000
