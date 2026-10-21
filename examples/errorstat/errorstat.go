@@ -22,29 +22,21 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"time"
+	"os"
 
+	"github.com/lirm/aeron-go/aeron/cnc"
+	"github.com/lirm/aeron-go/aeron/errorlog"
 	"github.com/lirm/aeron-go/examples"
-	"github.com/lirm/aeron-go/examples/internal/cnc"
 )
-
-const dateFormat = "2006-01-02 15:04:05.000-0700"
 
 func main() {
 	flag.Parse()
-	file, err := cnc.Open(*examples.ExamplesConfig.AeronPrefix)
+	dir := *examples.ExamplesConfig.AeronPrefix
+	file, err := cnc.Open(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer file.Close()
-	fmt.Println("Command `n Control file " + cnc.FileName(*examples.ExamplesConfig.AeronPrefix))
-
-	count := cnc.ReadErrors(file.Meta.ErrorBuf.Get(), 0, func(o cnc.ErrorObservation) {
-		fmt.Println()
-		fmt.Printf("%d observations from %s to %s for:\n", o.ObservationCount,
-			time.UnixMilli(o.FirstObservationMs).Format(dateFormat), time.UnixMilli(o.LastObservationMs).Format(dateFormat))
-		fmt.Println(o.EncodedError)
-	})
-	fmt.Println()
-	fmt.Printf("%d distinct errors observed.\n", count)
+	fmt.Println("Command `n Control file " + cnc.Path(dir))
+	errorlog.PrintErrorLog(file.ErrorLogBuffer(), os.Stdout)
 }

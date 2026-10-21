@@ -22,33 +22,29 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"time"
+	"os"
 
+	"github.com/lirm/aeron-go/aeron/lossreport"
 	"github.com/lirm/aeron-go/examples"
-	"github.com/lirm/aeron-go/examples/internal/cnc"
 )
-
-const dateFormat = "2006-01-02 15:04:05.000-0700"
 
 var lossFile = flag.String("lossfile", "", "loss report file (default <aeron dir>/loss-report.dat)")
 
 func main() {
 	flag.Parse()
-	path := *lossFile
-	if path == "" {
-		path = *examples.ExamplesConfig.AeronPrefix
+	var report *lossreport.Report
+	var err error
+	if *lossFile != "" {
+		report, err = lossreport.MapFile(*lossFile)
+	} else {
+		report, err = lossreport.Open(*examples.ExamplesConfig.AeronPrefix)
 	}
-	report, err := cnc.OpenLossReport(path)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer report.Close()
 
-	fmt.Println(cnc.LossReportCSVHeader)
-	count := cnc.ReadLossReport(report.Buffer, func(e cnc.LossEntry) {
-		fmt.Printf("%d,%d,%s,%s,%d,%d,%s,%s\n", e.ObservationCount, e.TotalBytesLost,
-			time.UnixMilli(e.FirstObservationMs).Format(dateFormat), time.UnixMilli(e.LastObservationMs).Format(dateFormat),
-			e.SessionID, e.StreamID, e.Channel, e.Source)
-	})
+	fmt.Println(lossreport.CSVHeader)
+	count := report.Read(lossreport.CSVEntryConsumer(os.Stdout))
 	fmt.Printf("%d loss entries\n", count)
 }

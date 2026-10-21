@@ -6,67 +6,12 @@ import (
 	"testing"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/util"
 )
 
 func putString(buf *atomic.Buffer, offset int32, s string) {
 	b := []byte(s)
 	buf.PutInt32(offset, int32(len(b)))
 	buf.PutBytesArray(offset+4, &b, 0, int32(len(b)))
-}
-
-func TestReadErrors(t *testing.T) {
-	buf := atomic.MakeBuffer(make([]byte, 1024))
-	offset := int32(0)
-	for i, msg := range []string{"java.lang.IllegalStateException: one", "two"} {
-		b := []byte(msg)
-		length := errorEncodedErrorOffset + int32(len(b))
-		buf.PutInt32(offset+errorObservationCountOffset, int32(i+1))
-		buf.PutInt64(offset+errorLastObservationOffset, int64(2000+i))
-		buf.PutInt64(offset+errorFirstObservationOffset, int64(1000+i))
-		buf.PutBytesArray(offset+errorEncodedErrorOffset, &b, 0, int32(len(b)))
-		buf.PutInt32(offset+errorLengthOffset, length)
-		offset += util.AlignInt32(length, errorRecordAlignment)
-	}
-	var got []ErrorObservation
-	if n := ReadErrors(buf, 0, func(o ErrorObservation) { got = append(got, o) }); n != 2 {
-		t.Fatalf("got %d errors", n)
-	}
-	if got[0].EncodedError != "java.lang.IllegalStateException: one" || got[1].ObservationCount != 2 ||
-		got[1].FirstObservationMs != 1001 || got[1].LastObservationMs != 2001 {
-		t.Fatalf("unexpected %+v", got)
-	}
-	if n := ReadErrors(buf, 2001, func(ErrorObservation) {}); n != 1 {
-		t.Fatalf("since filter: got %d", n)
-	}
-	if n := ReadErrors(atomic.MakeBuffer(make([]byte, 64)), 0, func(ErrorObservation) {}); n != 0 {
-		t.Fatalf("empty: got %d", n)
-	}
-}
-
-func TestReadLossReport(t *testing.T) {
-	buf := atomic.MakeBuffer(make([]byte, 4096))
-	offset := int32(0)
-	for i, ch := range []string{"aeron:udp?endpoint=localhost:20121", "aeron:udp?endpoint=x:1"} {
-		buf.PutInt64(offset+lossTotalBytesLostOffset, int64(100*(i+1)))
-		buf.PutInt64(offset+lossFirstObservationOffset, 10)
-		buf.PutInt64(offset+lossLastObservationOffset, 20)
-		buf.PutInt32(offset+lossSessionIDOffset, int32(7+i))
-		buf.PutInt32(offset+lossStreamIDOffset, 1001)
-		putString(buf, offset+lossChannelOffset, ch)
-		src := offset + lossChannelOffset + util.AlignInt32(4+int32(len(ch)), 4)
-		putString(buf, src, "127.0.0.1:5555")
-		buf.PutInt64(offset+lossObservationCountOffset, int64(i+3))
-		offset += util.AlignInt32(src+4+14-offset, lossEntryAlignment)
-	}
-	var got []LossEntry
-	if n := ReadLossReport(buf, func(e LossEntry) { got = append(got, e) }); n != 2 {
-		t.Fatalf("got %d entries", n)
-	}
-	want := LossEntry{4, 200, 10, 20, 8, 1001, "aeron:udp?endpoint=x:1", "127.0.0.1:5555"}
-	if got[1] != want || got[0].Channel != "aeron:udp?endpoint=localhost:20121" {
-		t.Fatalf("unexpected %+v", got)
-	}
 }
 
 func TestFilter(t *testing.T) {
