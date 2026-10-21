@@ -165,7 +165,7 @@ func TestStallVersusJava(t *testing.T) {
 			require.Equal(t, javaPeer.outcome(), goPeer.outcome(), "Go must react like Java")
 
 			a, _ := connect(t)
-			f := startFlow(t, a, specs(3+i)[0])
+			f := startFlow(t, a, specs(3 + i)[0])
 			f.awaitProgress(t, 500, 10*time.Second)
 			f.stop()
 			f.requireIntact(t)

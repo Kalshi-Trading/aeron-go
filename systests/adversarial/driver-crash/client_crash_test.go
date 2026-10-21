@@ -46,6 +46,10 @@ func TestClientProcessSIGKILL(t *testing.T) {
 				channel = "aeron:udp?endpoint=" + udp(60+i)
 			}
 			args := map[string]string{"role": sc.role, "channel": channel, "stream": itoa(stream)}
+			if sc.role == "pub" {
+				// Its own log (session), so its image can go away while the survivor's publication stays.
+				args["exclusive"] = "true"
+			}
 			start := func() *peer {
 				if sc.lang == "go" {
 					return startGoPeer(t, goArgs(args)...)
@@ -59,6 +63,25 @@ func TestClientProcessSIGKILL(t *testing.T) {
 			pub, err := a.AddPublication(channel, int32(stream))
 			require.NoError(t, err)
 
+			// The survivor publishes its own sequence before, during and after the fault (filtered by session); with an
+			// uncommitted claim ahead of it in the shared log it is blocked until the driver unblocks the claim.
+			checker := e2e.NewSequenceChecker(0)
+			handler := checker.Handler()
+			own := func(b *aatomic.Buffer, off, length int32, h *logbuffer.Header) {
+				if h.SessionID() == pub.SessionID() {
+					handler(b, off, length, h)
+				}
+			}
+			msg := make([]byte, 64)
+			buf := aatomic.MakeBuffer(msg)
+			seq := int64(0)
+			pump := func() {
+				e2e.EncodeMessage(msg, seq)
+				if pub.Offer(buf, 0, 64, nil) > 0 {
+					seq++
+				}
+				sub.Poll(own, 64)
+			}
 			p := start()
 			ready := p.await("ready", 30*time.Second)
 			peerClient := ready.int("clientId")
@@ -67,6 +90,7 @@ func TestClientProcessSIGKILL(t *testing.T) {
 				p.await("claimed", 10*time.Second)
 			} else {
 				awaitTrue(t, "peer traffic", 10*time.Second, func() bool {
+					pump()
 					e := p.last("progress")
 					return e != nil && (e.int("sent") > 100 || e.int("received") > 100)
 				})
@@ -79,29 +103,14 @@ func TestClientProcessSIGKILL(t *testing.T) {
 			require.True(t, p.exited(10*time.Second), "peer did not die")
 			killed := time.Now()
 
-			// The survivor keeps publishing its own sequence through the fault; with an uncommitted claim ahead of it
-			// in the shared log it is blocked until the driver unblocks the claim.
-			checker := e2e.NewSequenceChecker(0)
-			handler := checker.Handler()
-			own := func(b *aatomic.Buffer, off, length int32, h *logbuffer.Header) {
-				if h.SessionID() == pub.SessionID() {
-					handler(b, off, length, h)
-				}
-			}
-			msg := make([]byte, 64)
-			buf := aatomic.MakeBuffer(msg)
-			seq := int64(0)
 			deadline := time.Now().Add(clientLiveness + unblockTimeout + 3*slack)
-			for time.Now().Before(deadline) && (checker.Next < 2000 || heartbeatCount(reader, peerClient) != 0) {
-				e2e.EncodeMessage(msg, seq)
-				if pub.Offer(buf, 0, 64, nil) > 0 {
-					seq++
-				}
-				sub.Poll(own, 64)
+			from := checker.Next
+			for time.Now().Before(deadline) && (checker.Next < from+2000 || heartbeatCount(reader, peerClient) != 0) {
+				pump()
 				time.Sleep(50 * time.Microsecond)
 			}
 			require.NoError(t, checker.Err(), checker.String())
-			require.GreaterOrEqual(t, checker.Next, int64(2000), "survivor traffic stalled after the peer died: %s", checker)
+			require.GreaterOrEqual(t, checker.Next, from+2000, "survivor traffic stalled after the peer died: %s", checker)
 			require.Zero(t, heartbeatCount(reader, peerClient), "dead client's heartbeat counter not removed")
 			t.Logf("dead client removed within %v", time.Since(killed))
 			awaitTrue(t, "client liveness timeout counted", 5*time.Second, func() bool {
@@ -123,6 +132,7 @@ func TestClientProcessSIGKILL(t *testing.T) {
 				p2 := start()
 				p2.await("ready", 30*time.Second)
 				awaitTrue(t, "replacement peer traffic", 10*time.Second, func() bool {
+					pump()
 					e := p2.last("progress")
 					return e != nil && (e.int("sent") > 100 || e.int("received") > 100)
 				})

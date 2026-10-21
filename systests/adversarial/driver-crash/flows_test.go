@@ -53,7 +53,7 @@ func specs(base int) []flowSpec {
 			subChannel: "aeron:udp?endpoint=" + udp(base*10+4) + "|control=" + udp(base*10+3) + "|control-mode=dynamic",
 			stream:     s + 3, exclusive: true, mode: offerBlock, size: 512},
 		{name: "concurrent-multicast-controlled", pubChannel: "aeron:udp?endpoint=224.20.30.39:" +
-			udp(base*10+5)[len("localhost:"):] + "|interface=localhost", stream: s + 4, mode: offer, size: 64,
+			udp(base*10 + 5)[len("localhost:"):] + "|interface=localhost", stream: s + 4, mode: offer, size: 64,
 			controlled: true},
 		{name: "exclusive-udp-multidestination-sub", pubChannel: "aeron:udp?endpoint=" + udp(base*10+6),
 			subChannel: "aeron:udp?control-mode=manual", dests: []string{"aeron:udp?endpoint=" + udp(base*10+6)},
@@ -73,12 +73,14 @@ type flow struct {
 	results  chan int64 // the publisher's last non-positive results, after the client terminated
 	lastRes  atomic.Int64
 	stopCh   chan struct{}
+	subStop  chan struct{}
+	pubDone  chan struct{}
 	wg       sync.WaitGroup
 }
 
 func startFlow(t *testing.T, a *aeron.Aeron, spec flowSpec) *flow {
 	t.Helper()
-	f := &flow{spec: spec, stopCh: make(chan struct{})}
+	f := &flow{spec: spec, stopCh: make(chan struct{}), subStop: make(chan struct{}), pubDone: make(chan struct{})}
 	subChannel := spec.subChannel
 	if subChannel == "" {
 		subChannel = spec.pubChannel
@@ -118,6 +120,7 @@ func startFlow(t *testing.T, a *aeron.Aeron, spec flowSpec) *flow {
 
 func (f *flow) publish() {
 	defer f.wg.Done()
+	defer close(f.pubDone)
 	msg := make([]byte, f.spec.size)
 	buf := aatomic.MakeBuffer(msg)
 	var claim logbuffer.Claim
@@ -182,6 +185,8 @@ func (f *flow) consume(sub *aeron.Subscription, c *e2e.SequenceChecker) {
 		select {
 		case <-f.stopCh:
 			return
+		case <-f.subStop:
+			return
 		default:
 		}
 		if n, _ := poll(handler, 64); n == 0 {
@@ -209,6 +214,20 @@ func (f *flow) awaitExit(t *testing.T, timeout time.Duration) {
 	case <-done:
 	case <-time.After(timeout):
 		t.Fatalf("%s: publisher/subscriber goroutines did not stop %v after the client terminated", f.spec.name, timeout)
+	}
+}
+
+// stopSubscribers stops polling (the subscriptions stay open), so the publisher becomes back pressured.
+func (f *flow) stopSubscribers() { close(f.subStop) }
+
+// awaitPublisherExit waits for the publisher goroutine to stop by itself (its publication returned CLOSED).
+func (f *flow) awaitPublisherExit(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	select {
+	case <-f.pubDone:
+	case <-time.After(timeout):
+		t.Fatalf("%s: publisher still spinning %v after the driver died (last result %d)", f.spec.name, timeout,
+			f.lastRes.Load())
 	}
 }
 
