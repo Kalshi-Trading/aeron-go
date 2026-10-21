@@ -18,7 +18,7 @@ RACE_FLAGS      ?= -race
 
 E2E_CHECKERS    := go-subscriber go-recorder go-publisher go-replayer go-mdc-publisher go-replay-merge
 
-.PHONY: all build vet test race jar docker-mirror e2e e2e-up e2e-test e2e-down e2e-docker e2e-bin e2e-chaos e2e-adversarial
+.PHONY: all build vet test race jar docker-mirror e2e e2e-up e2e-test e2e-down e2e-docker e2e-bin e2e-chaos adversarial-images e2e-adversarial
 
 all: build vet test
 
@@ -109,7 +109,12 @@ e2e-chaos: jar
 
 # Adversarial crash/fault suites (systests/adversarial/<area>); each test brings up and tears down its own
 # docker/adversarial-<area>.compose.yml stack (project adv-<area>, AERON_DIR /dev/shm/aeron-adv-<area>).
-e2e-adversarial: jar
+# Builds every image the adversarial suites run (some, e.g. the netem and Java peer tools, are only in non-default
+# compose profiles and are never built by the tests' own `docker compose up`).
+adversarial-images:
+	for f in docker/adversarial-*.compose.yml; do docker compose -f $$f --profile '*' build || exit 1; done
+
+e2e-adversarial: jar adversarial-images
 	AERON_E2E=1 AERON_ADVERSARIAL=1 AERON_JAR=$(AERON_JAR_PATH) $(GO) test -count=1 -p 1 -timeout 90m -v ./systests/adversarial/...
 
 # The Go clients in containers (docker compose --profile e2e), failing if any checker fails.

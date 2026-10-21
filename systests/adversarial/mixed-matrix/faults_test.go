@@ -215,6 +215,11 @@ func TestDriverFreezeBeyondTimeout(t *testing.T) {
 	require.Less(t, time.Since(start), driverTimeout+3*time.Second, "AddPublication against a frozen driver")
 	awaitTrue(t, "Go client to close on driver timeout", driverTimeout+5*time.Second, cl.IsClosed)
 	requireDriverTimeout(t, cl, addErr)
+	// the loop exits by itself on its first offer after the close; Stop alone could end it before that offer
+	select {
+	case <-loop.done:
+	case <-time.After(5 * time.Second):
+	}
 	loop.Stop()
 	require.Error(t, loop.err, "offer after driver timeout")
 	require.Contains(t, loop.err.Error(), strconv.Itoa(int(aeron.PublicationClosed)))

@@ -60,7 +60,7 @@ func TestPublisherKillAtEachState(t *testing.T) {
 			require.Zero(t, num(res, "gaps"), "java %v", res)
 			require.Zero(t, num(res, "duplicates"), "java %v", res)
 			javaOut = outcome{merged: res["merged"] == true, failed: num(res, "failures") > 0, next: num(res, "next")}
-			require.Equal(t, rec, num(res, "lastPosition"), "java delivered up to the recording stop position")
+			requireDeliveredToStop(t, rec, num(res, "lastPosition"), "java %v", res)
 		})
 		t.Run(state.String()+"/go", func(t *testing.T) {
 			e, pub := childPubEnv(t, base, stream, "excl", "-rate", "4000", "-sizes", "64,1500,64,300")
@@ -97,7 +97,7 @@ func TestPublisherKillAtEachState(t *testing.T) {
 			require.Zero(t, r.Gaps, "%s", r.Checker)
 			require.Zero(t, r.Duplicates, "%s", r.Checker)
 			require.Zero(t, r.Corrupt, "%s", r.Checker)
-			require.Equal(t, stopPos, r.LastPosition, "go delivered up to the recording stop position: %s", r.Checker)
+			requireDeliveredToStop(t, stopPos, r.LastPosition, "go %s", r.Checker)
 			goOut = outcome{merged: r.Merged, failed: len(r.Failures) > 0, next: r.Next}
 			for _, err := range r.Failures {
 				require.ErrorIs(t, err, replaymerge.ErrNoProgress)
@@ -144,4 +144,18 @@ func waitStopped(e *env, timeout time.Duration) (int64, error) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// requireDeliveredToStop checks the last delivered fragment ends at the recording stop position. A publisher killed
+// just after padding out a term (its next message did not fit) leaves the recording ending in that padding frame,
+// which neither Java nor Go delivers to the handler, so the last fragment may end up to one max frame short of a term
+// boundary stop position.
+func requireDeliveredToStop(t *testing.T, stop, last int64, msgAndArgs ...interface{}) {
+	t.Helper()
+	const termLength, maxFrame = 1 << 20, 1536
+	if last != stop && stop%termLength == 0 && last < stop && stop-last < maxFrame {
+		t.Logf("recording ends in %d bytes of term padding after the last fragment at %d", stop-last, last)
+		return
+	}
+	require.Equal(t, stop, last, msgAndArgs...)
 }

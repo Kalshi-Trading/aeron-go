@@ -41,7 +41,7 @@ func pubKillCases() []pubKillCase {
 			pubDest: []string{"aeron:udp?endpoint=localhost:27105"}},
 		{name: "mdc-dynamic", pubChan: "aeron:udp?control=localhost:27106|control-mode=dynamic|alias=advk-mdc-dyn",
 			subChan: "aeron:udp?endpoint=localhost:27107|control=localhost:27106|control-mode=dynamic",
-			stream: 9108, kind: "exclusive", size: 64},
+			stream:  9108, kind: "exclusive", size: 64},
 		{name: "mds-subscription", pubChan: "aeron:udp?endpoint=localhost:27108|alias=advk-mds",
 			subChan: "aeron:udp?control-mode=manual", stream: 9109, kind: "tryclaim", size: 64,
 			subDest: []string{"aeron:udp?endpoint=localhost:27108"}},

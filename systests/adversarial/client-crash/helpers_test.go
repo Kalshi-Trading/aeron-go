@@ -33,8 +33,8 @@ import (
 
 	"github.com/lirm/aeron-go/aeron"
 	ab "github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/lirm/aeron-go/aeron/counters"
+	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/lirm/aeron-go/archive"
 	"github.com/lirm/aeron-go/e2e"
 	"github.com/stretchr/testify/require"
