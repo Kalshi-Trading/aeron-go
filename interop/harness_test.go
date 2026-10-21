@@ -272,7 +272,8 @@ func (p *javaProc) stop() {
 // ------------------------------------------------------------------------------------------------------- go helpers
 
 type msgOpts struct {
-	from     int64 // first sequence number to publish (receivers always verify from 0)
+	from     int64 // first sequence number to publish (receivers verify from first)
+	first    int64 // first sequence number receivers expect (count messages are received from it)
 	count    int64
 	sizes    Sizes
 	claim    bool
@@ -292,6 +293,9 @@ func (o msgOpts) timeoutOrDefault() time.Duration {
 func (o msgOpts) javaArgs() []string {
 	args := []string{fmt.Sprintf("count=%d", o.count), "sizes=" + o.sizes.String(),
 		fmt.Sprintf("reserved=%t", o.reserved), fmt.Sprintf("timeoutMs=%d", o.timeoutOrDefault().Milliseconds())}
+	if o.first != 0 {
+		args = append(args, fmt.Sprintf("first=%d", o.first))
+	}
 	if o.claim {
 		args = append(args, "mode=claim")
 	}
@@ -371,6 +375,7 @@ type pollFunc func(handler term.FragmentHandler, fragmentLimit int) int
 // goReceive polls until count messages arrived (or timeout) and returns what was received.
 func goReceive(poll pollFunc, o msgOpts) Result {
 	v := NewVerifier(o.sizes, o.reserved)
+	v.First = o.first
 	handler := aeron.NewFragmentAssembler(v.OnFragment, 4096).OnFragment
 	limit := 10
 	if o.delay > 0 {
@@ -393,8 +398,19 @@ func requireResult(t *testing.T, who string, r Result, o msgOpts, position int64
 	require.Falsef(t, r.TimedOut, "%s timed out: received %d/%d (first error %q)", who, r.Count, o.count, r.FirstError)
 	require.Equalf(t, o.count, r.Count, "%s message count", who)
 	require.Zerof(t, r.Errors, "%s errors, first: %s", who, r.FirstError)
-	require.Equalf(t, ExpectedDigest(o.sizes, o.count), r.SHA256, "%s digest", who)
+	require.Equalf(t, ExpectedDigestFrom(o.sizes, o.first, o.count), r.SHA256, "%s digest", who)
 	if position >= 0 {
 		require.Equalf(t, position, r.Position, "%s final position", who)
 	}
+}
+
+// withParams appends URI params ("k=v|k2=v2") to a channel.
+func withParams(channel, params string) string {
+	if params == "" {
+		return channel
+	}
+	if strings.Contains(channel, "?") {
+		return channel + "|" + params
+	}
+	return channel + "?" + params
 }

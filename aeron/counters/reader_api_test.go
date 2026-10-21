@@ -1,6 +1,7 @@
 package counters
 
 import (
+	"os"
 	"testing"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
@@ -168,4 +169,25 @@ func TestAtomicCounterOps(t *testing.T) {
 	assert.EqualValues(t, 10, r.GetCounterValue(2))
 	assert.EqualValues(t, 1, c.TypeID())
 	assert.Equal(t, "x", c.Label())
+}
+
+// CncFileDescriptor.checkVersion only requires the major version to match.
+func TestMapFileChecksMajorVersionOnly(t *testing.T) {
+	write := func(version int32) string {
+		b := make([]byte, 4096)
+		buf := atomic.MakeBuffer(b)
+		buf.PutInt32(0, version)
+		path := t.TempDir() + "/" + CncFile
+		require.NoError(t, os.WriteFile(path, b, 0o644))
+		return path
+	}
+	meta, m, err := MapFile(write(int32(util.SemanticVersionCompose(0, 2, 1))))
+	require.NoError(t, err)
+	require.NotNil(t, meta)
+	require.NoError(t, m.Close())
+
+	_, _, err = MapFile(write(int32(util.SemanticVersionCompose(1, 0, 0))))
+	require.Error(t, err)
+	_, _, err = MapFile(write(0))
+	require.Error(t, err, "uninitialised CnC file")
 }

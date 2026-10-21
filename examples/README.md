@@ -31,11 +31,12 @@ messages, `-len` message length, `-frags` fragment limit, `-idle busy|yield|slee
 | `cluster` (service) | cluster EchoService | Go clustered service |
 | `../archive/examples/basic_recording_publisher` | archive RecordedBasicPublisher | `-prefix $AERON_DIR -messages 10` |
 | `../archive/examples/basic_replayed_subscriber` | archive ReplayedBasicSubscriber | replays the latest recording; `-exit 10` |
+| `../archive/examples/basic_replay_merge` | archive ReplayMergeSubscriber | replays the latest recording and merges onto live; `-exit 10` |
+| `../archive/examples/persistent_subscriber` | archive PersistentSubscriber | PersistentSubscription from the start of the latest recording; `-exit 10` |
 | `../archive/examples/replay_throughput` | archive EmbeddedReplayThroughput | records 1M IPC messages, replays them, prints rates |
 
 Differences from Java: there is no embedded media driver in Go, so `Embedded*` samples use the
-external driver; `PrintAvailableImage` cannot print the image's channel/stream/source because the Go
-`Image` interface does not expose them (see `docs/API_AUDIT.md` A1). The CnC error-log, loss-report and
+external driver. The CnC error-log, loss-report and
 stream-counter parsing used by the stat tools lives in `examples/internal/cnc` until a library API exists.
 
 ## End-to-end tests

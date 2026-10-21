@@ -12,10 +12,9 @@ export AERON_DIR ?= /dev/shm/aeron-compose
 export UID      ?= $(shell id -u)
 export GID      ?= $(shell id -g)
 
-# Core client packages run under the race detector. checkptr (enabled by -race) is disabled because
-# the flyweight/counters code does pointer arithmetic over mmapped buffers that checkptr rejects.
+# Core client packages run under the race detector (which also enables checkptr).
 RACE_PKGS       ?= ./aeron/... ./archive/... ./cluster/...
-RACE_FLAGS      ?= -race -gcflags=all=-d=checkptr=0
+RACE_FLAGS      ?= -race
 
 E2E_CHECKERS    := go-subscriber go-recorder go-publisher go-replayer go-mdc-publisher go-replay-merge
 

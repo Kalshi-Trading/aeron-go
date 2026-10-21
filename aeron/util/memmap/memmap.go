@@ -68,15 +68,20 @@ func MapExisting(filename string, offset int64, length int) (*File, error) {
 	if size < 0 {
 		return nil, fmt.Errorf("mmap: stat %q returned %d", filename, size)
 	}
-	if size != int64(size) {
+	if size != int64(int(size)) {
 		return nil, fmt.Errorf("mmap: file %q is too large", filename)
 	}
+	if offset < 0 || offset >= size {
+		return nil, fmt.Errorf("mmap: offset %d outside file %q of size %d", offset, filename, size)
+	}
 
-	var mapSize int
+	mapSize := int(size - offset)
 	if length != 0 {
+		if length < 0 || int64(length) > size-offset {
+			return nil, fmt.Errorf("mmap: region offset=%d length=%d exceeds file %q of size %d",
+				offset, length, filename, size)
+		}
 		mapSize = length
-	} else {
-		mapSize = int(size)
 	}
 
 	logger.Debugf("Mapping existing file: fd: %d, size: %d, offset: %d", f.Fd(), size, offset)
@@ -92,9 +97,6 @@ func MapExisting(filename string, offset int64, length int) (*File, error) {
 // NewFile is a factory method to create a new memory mapped file with the specified capacity
 func NewFile(filename string, offset int64, length int) (*File, error) {
 	logger.Debugf("Will try to map new %s, %d, %d", filename, offset, length)
-	if length <= 0 {
-		return nil, fmt.Errorf("mmap: invalid length %d for new file %q", length, filename)
-	}
 
 	/* #nosec G304 -- Read cluster-mark-service-0.dat */
 	f, err := os.Create(filename)
@@ -103,6 +105,9 @@ func NewFile(filename string, offset int64, length int) (*File, error) {
 	}
 	defer f.Close()
 
+	if length <= 0 || offset < 0 {
+		return nil, fmt.Errorf("mmap: invalid region offset=%d length=%d for %q", offset, length, filename)
+	}
 	if err = f.Truncate(offset + int64(length)); err != nil {
 		return nil, err
 	}

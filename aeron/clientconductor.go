@@ -630,6 +630,7 @@ func (cc *ClientConductor) closeImages(images []Image, handler UnavailableImageH
 		if image == nil {
 			continue
 		}
+		closeImage(image)
 		cc.linger(image, lingerNs)
 		if handler != nil {
 			img := image
@@ -847,7 +848,30 @@ func (cc *ClientConductor) AsyncRemovePublication(registrationID int64) error {
 	if err := cc.ensureOpen(); err != nil {
 		return err
 	}
+	if cc.removePendingLocked(registrationID, kindPendingPublication, kindPendingExclusivePublication) {
+		_, err := cc.driverProxy.RemovePublication(registrationID, false)
+		return err
+	}
 	return cc.releasePublicationLocked(registrationID, false)
+}
+
+// removePendingLocked forgets an async add which the driver has not yet answered, so that a later ready response
+// is ignored. Like Java ClientConductor.removePublication/removeSubscription the caller then sends the driver remove.
+func (cc *ClientConductor) removePendingLocked(registrationID int64, kinds ...resourceKind) bool {
+	res := cc.resources[registrationID]
+	if res == nil {
+		// A failed add whose error was never collected: the driver holds nothing to remove.
+		delete(cc.asyncErrors, registrationID)
+		return false
+	}
+	for _, k := range kinds {
+		if res.kind == k {
+			delete(cc.resources, registrationID)
+			delete(cc.asyncCommandIDs, registrationID)
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -923,23 +947,29 @@ func (cc *ClientConductor) FindSubscription(registrationID int64) (*Subscription
 	return cc.GetSubscription(registrationID)
 }
 
-// releaseSubscription is called by Subscription.Close after it has emptied its image list.
-func (cc *ClientConductor) releaseSubscription(regID int64, images []Image) error {
+// releaseSubscription closes sub, its images and sends REMOVE_SUBSCRIPTION (Java ClientConductor.removeSubscription).
+// The image list is emptied under adminLock so OnAvailableImage cannot add an image after the list was drained.
+func (cc *ClientConductor) releaseSubscription(sub *Subscription) error {
 	cc.adminLock.Lock()
 	defer cc.unlock()
-	return cc.releaseSubscriptionLocked(regID, images)
-}
-
-func (cc *ClientConductor) releaseSubscriptionLocked(regID int64, images []Image) error {
 	if cc.isTerminating.Get() || cc.isClosed.Get() {
 		return nil
 	}
+	if !sub.isClosed.CompareAndSet(false, true) {
+		return nil
+	}
+	return cc.releaseSubscriptionLocked(sub)
+}
+
+// releaseSubscriptionLocked must be called with adminLock held after sub has been marked closed.
+func (cc *ClientConductor) releaseSubscriptionLocked(sub *Subscription) error {
+	cc.closeImages(sub.images.Empty(), sub.UnavailableImageHandler(), explicitCloseLingerNs)
+	regID := sub.registrationID
 	res := cc.resources[regID]
-	if res == nil || res.kind != kindSubscription {
+	if res == nil || res.kind != kindSubscription || res.subscription != sub {
 		return nil
 	}
 	delete(cc.resources, regID)
-	cc.closeImages(images, res.subscription.UnavailableImageHandler(), explicitCloseLingerNs)
 	_, err := cc.driverProxy.RemoveSubscription(regID)
 	return err
 }
@@ -951,6 +981,10 @@ func (cc *ClientConductor) AsyncRemoveSubscription(registrationID int64) error {
 	if err := cc.ensureOpen(); err != nil {
 		return err
 	}
+	if cc.removePendingLocked(registrationID, kindPendingSubscription) {
+		_, err := cc.driverProxy.RemoveSubscription(registrationID)
+		return err
+	}
 	res := cc.resources[registrationID]
 	if res == nil || res.kind != kindSubscription {
 		return nil
@@ -958,7 +992,7 @@ func (cc *ClientConductor) AsyncRemoveSubscription(registrationID int64) error {
 	if !res.subscription.isClosed.CompareAndSet(false, true) {
 		return nil
 	}
-	return cc.releaseSubscriptionLocked(registrationID, res.subscription.images.Empty())
+	return cc.releaseSubscriptionLocked(res.subscription)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1574,7 +1608,6 @@ func (cc *ClientConductor) OnPublicationError(buffer *atomic.Buffer, offset int3
 		if (res.kind == kindPublication || res.kind == kindExclusivePublication) &&
 			res.pubBase.originalRegID == frame.RegistrationID {
 			cc.queueCallback(func() { h(&frame) })
-			return
 		}
 	}
 }

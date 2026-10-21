@@ -39,7 +39,6 @@ func main() {
 	channel := *examples.ExamplesConfig.Channel
 	stream1 := int32(*examples.ExamplesConfig.StreamID)
 	stream2 := stream1 + 1
-	fmt.Printf("Subscribing to %s on stream ids %d and %d\n", channel, stream1, stream2)
 
 	aeronCtx := examples.NewContext().
 		AvailableImageHandler(examples.PrintAvailableImage).
@@ -59,6 +58,8 @@ func main() {
 		log.Fatalf("Failed to add subscription: %v", err)
 	}
 	defer sub2.Close()
+	// Printed once registered so a publisher started after this line is not NotConnected.
+	fmt.Printf("Subscribing to %s on stream ids %d and %d\n", channel, stream1, stream2)
 
 	received := 0
 	reassembled := func(stream int32, expectedLength int32) term.FragmentHandler {

@@ -60,7 +60,9 @@ func (s *SubscriptionTestSuite) SetupTest() {
 }
 
 func (s *SubscriptionTestSuite) TestShouldEnsureTheSubscriptionIsOpenWhenPolling() {
-	s.cc.On("releaseSubscription", RegistrationId, mock.Anything).Return(nil)
+	s.cc.On("releaseSubscription", s.sub).Run(func(args mock.Arguments) {
+		args.Get(0).(*Subscription).isClosed.Set(true)
+	}).Return(nil)
 
 	s.Require().NoError(s.sub.Close())
 	s.Assert().True(s.sub.IsClosed())
@@ -133,6 +135,18 @@ func (_m *MockReceivingConductor) AddRcvDestination(registrationID int64, endpoi
 	return r0
 }
 
+// AsyncAddRcvDestination provides a mock function with given fields: registrationID, endpointChannel
+func (_m *MockReceivingConductor) AsyncAddRcvDestination(registrationID int64, endpointChannel string) (int64, error) {
+	ret := _m.Called(registrationID, endpointChannel)
+	return ret.Get(0).(int64), ret.Error(1)
+}
+
+// AsyncRemoveRcvDestination provides a mock function with given fields: registrationID, endpointChannel
+func (_m *MockReceivingConductor) AsyncRemoveRcvDestination(registrationID int64, endpointChannel string) (int64, error) {
+	ret := _m.Called(registrationID, endpointChannel)
+	return ret.Get(0).(int64), ret.Error(1)
+}
+
 // CounterReader provides a mock function with given fields:
 func (_m *MockReceivingConductor) CounterReader() *counters.Reader {
 	ret := _m.Called()
@@ -177,13 +191,13 @@ func (_m *MockReceivingConductor) rejectImage(imageCorrelationID int64, position
 	return r0
 }
 
-// releaseSubscription provides a mock function with given fields: regID, images
-func (_m *MockReceivingConductor) releaseSubscription(regID int64, images []Image) error {
-	ret := _m.Called(regID, images)
+// releaseSubscription provides a mock function with given fields: sub
+func (_m *MockReceivingConductor) releaseSubscription(sub *Subscription) error {
+	ret := _m.Called(sub)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(int64, []Image) error); ok {
-		r0 = rf(regID, images)
+	if rf, ok := ret.Get(0).(func(*Subscription) error); ok {
+		r0 = rf(sub)
 	} else {
 		r0 = ret.Error(0)
 	}

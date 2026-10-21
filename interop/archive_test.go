@@ -14,7 +14,22 @@ import (
 
 func connectGoArchive(t *testing.T) *archive.Archive {
 	t.Helper()
-	arch, err := archive.NewArchive(archive.DefaultOptions(), goContext())
+	return connectGoArchiveWith(t, archive.DefaultOptions())
+}
+
+// connectGoArchiveIPC connects over the archive's local IPC control channel (aeron.archive.control.local.*), which an
+// IPC response-channel replay needs: the archive's IPC response publication is only linked to the replay subscription
+// when the request publication is IPC too (same in Java).
+func connectGoArchiveIPC(t *testing.T) *archive.Archive {
+	t.Helper()
+	opts := archive.DefaultOptions()
+	opts.RequestChannel, opts.ResponseChannel = "aeron:ipc", "aeron:ipc"
+	return connectGoArchiveWith(t, opts)
+}
+
+func connectGoArchiveWith(t *testing.T, opts *archive.Options) *archive.Archive {
+	t.Helper()
+	arch, err := archive.NewArchive(opts, goContext())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = arch.Close() })
 	return arch

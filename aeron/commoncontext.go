@@ -31,6 +31,7 @@ import (
 	"unsafe"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
+	"github.com/lirm/aeron-go/aeron/cnc"
 	"github.com/lirm/aeron-go/aeron/counters"
 	rb "github.com/lirm/aeron-go/aeron/ringbuffer"
 	"github.com/lirm/aeron-go/aeron/util"
@@ -152,25 +153,24 @@ func DefaultCncFileName() string {
 }
 
 // CheckCncVersion returns an error if the CnC file version is not compatible with this client: the major versions
-// must match (CncFileDescriptor.checkVersion) and the driver's minor version must not be older than the client's.
+// must match (CncFileDescriptor.checkVersion) and the driver's minor version must not be older than the client's
+// (the extra check Aeron.Context.connectToDriver makes). Errors are *AeronError of category ERROR; an incompatible
+// major version also matches cnc.ErrIncompatibleVersion.
 func CheckCncVersion(cncVersion int32) error {
 	if err := checkCncMajorVersion(cncVersion); err != nil {
 		return err
 	}
 	v := uint32(cncVersion)
 	if util.SemanticVersionMinor(v) < util.SemanticVersionMinor(CncVersion) {
-		return fmt.Errorf("driverVersion=%s insufficient for clientVersion=%s",
-			util.SemanticVersionToString(v), util.SemanticVersionToString(CncVersion))
+		return NewAeronError(CategoryError, fmt.Sprintf("driverVersion=%s insufficient for clientVersion=%s",
+			util.SemanticVersionToString(v), util.SemanticVersionToString(CncVersion)))
 	}
 	return nil
 }
 
-// checkCncMajorVersion is CncFileDescriptor.checkVersion: only the major versions must match.
 func checkCncMajorVersion(cncVersion int32) error {
-	v := uint32(cncVersion)
-	if util.SemanticVersionMajor(v) != util.SemanticVersionMajor(CncVersion) {
-		return fmt.Errorf("CnC version not compatible: app=%s file=%s",
-			util.SemanticVersionToString(CncVersion), util.SemanticVersionToString(v))
+	if err := cnc.CheckVersion(cncVersion); err != nil {
+		return WrapAeronError(CategoryError, "", err)
 	}
 	return nil
 }
@@ -197,8 +197,8 @@ func cncFileUsable(cncFile string) bool {
 }
 
 // mapCncFile maps an existing CnC file. It returns (nil, nil) when the version field is not yet initialised.
-// checkMinor additionally rejects drivers whose minor CnC version is older than the client's (only done on connect,
-// as in Java awaitCncFileCreation; isDriverActive and requestDriverTermination check the major version only).
+// checkMinor additionally rejects a driver whose minor CnC version is older than the client's, as only
+// Aeron.Context.connectToDriver does; isDriverActive and requestDriverTermination check the major version only.
 func mapCncFile(cncFile string, checkMinor bool) (*cncMapping, error) {
 	file, err := memmap.MapExisting(cncFile, 0, 0)
 	if err != nil {

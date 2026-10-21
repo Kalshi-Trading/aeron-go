@@ -253,7 +253,7 @@ func TestDecodePublicationErrorFrame(t *testing.T) {
 	if err := fly.SetSourceAddress(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 4040}); err != nil {
 		t.Fatal(err)
 	}
-	fly.SetErrorCode(17)
+	fly.SetErrorCode(13)
 	fly.SetErrorMessage("rejected")
 	length = int(fly.Length())
 
@@ -261,7 +261,7 @@ func TestDecodePublicationErrorFrame(t *testing.T) {
 	require.NoError(t, decodePublicationErrorFrame(buf, 0, int32(length), &f))
 	assert.Equal(t, PublicationErrorFrame{
 		RegistrationID: 11, DestinationRegistrationID: 12, SessionID: 13, StreamID: 14, ReceiverID: 15,
-		GroupTag: 16, ErrorCode: 17, ErrorMessage: "rejected",
+		GroupTag: 16, ErrorCode: 13, ErrorMessage: "rejected",
 		SourceAddress: &net.UDPAddr{IP: net.IP{127, 0, 0, 1}, Port: 4040},
 	}, *f.Clone())
 	assert.Error(t, decodePublicationErrorFrame(buf, 0, 10, &f))

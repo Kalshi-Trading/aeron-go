@@ -212,3 +212,38 @@ func TestFlyweight(t *testing.T) {
 	suite.Run(t, &FlyweightAlignmentTestSuite{shouldAlign: false})
 	suite.Run(t, new(FlyweightTestSuite))
 }
+
+type oneStringFly struct {
+	FWBase
+	s StringField
+}
+
+func (m *oneStringFly) Wrap(buf *atomic.Buffer, offset int) Flyweight {
+	m.SetSize(m.s.Wrap(buf, offset, m, true))
+	return m
+}
+
+// StringField.Set must bounds-check the new value instead of writing past the wrapped buffer.
+func TestStringFieldSetOutOfBoundsPanicsWithoutWriting(t *testing.T) {
+	backing := make([]byte, 16)
+	buf := atomic.MakeBuffer(backing[:8])
+	var fly oneStringFly
+	fly.Wrap(buf, 4) // empty string at the very end of the buffer
+	func() {
+		defer func() {
+			if _, ok := recover().(*atomic.IndexOutOfBoundsError); !ok {
+				t.Fatal("expected *atomic.IndexOutOfBoundsError")
+			}
+		}()
+		fly.s.Set("toolong")
+	}()
+	for i, b := range backing {
+		if b != 0 {
+			t.Fatalf("byte %d corrupted: %v", i, backing)
+		}
+	}
+	fly.s.Set("")
+	if fly.s.Get() != "" {
+		t.Fatal(fly.s.Get())
+	}
+}

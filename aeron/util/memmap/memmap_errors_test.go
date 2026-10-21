@@ -5,13 +5,17 @@ import (
 	"testing"
 )
 
-func TestNewFileInvalidLengthReturnsError(t *testing.T) {
+func TestNewFileInvalidRegionReturnsError(t *testing.T) {
 	name := filepath.Join(t.TempDir(), "zero.bin")
 	for _, length := range []int{0, -1} {
 		if f, err := NewFile(name, 0, length); err == nil {
 			_ = f.Close()
 			t.Fatalf("NewFile(length=%d) returned no error", length)
 		}
+	}
+	if f, err := NewFile(name, -1, 4096); err == nil {
+		_ = f.Close()
+		t.Fatal("NewFile(offset=-1) returned no error")
 	}
 }
 

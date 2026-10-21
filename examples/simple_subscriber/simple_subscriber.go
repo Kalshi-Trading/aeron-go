@@ -39,7 +39,6 @@ func main() {
 	defer cancel()
 
 	channel, streamID := *examples.ExamplesConfig.Channel, int32(*examples.ExamplesConfig.StreamID)
-	fmt.Printf("Subscribing to %s on stream id %d\n", channel, streamID)
 
 	a, err := aeron.Connect(examples.NewContext())
 	if err != nil {
@@ -51,6 +50,8 @@ func main() {
 		log.Fatalf("Failed to add subscription: %v", err)
 	}
 	defer subscription.Close()
+	// Printed once registered so a publisher started after this line is not NotConnected.
+	fmt.Printf("Subscribing to %s on stream id %d\n", channel, streamID)
 
 	received := 0
 	handler := func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
