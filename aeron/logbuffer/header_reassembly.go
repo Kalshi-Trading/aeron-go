@@ -50,9 +50,9 @@ func (hdr *Header) Type() uint16 {
 	return hdr.buffer.GetUInt16(typeOffset(hdr.offset))
 }
 
-// ReservedValue is the reserved value field of the header. Equivalent to GetReservedValue.
+// ReservedValue is the reserved value field of the header.
 func (hdr *Header) ReservedValue() int64 {
-	return hdr.GetReservedValue()
+	return GetReservedValue(&hdr.buffer, hdr.offset)
 }
 
 // FragmentedFrameLength is the total term occupancy of all fragments of a reassembled message, or -1

@@ -193,7 +193,7 @@ func TestChannelUriE2ETaggedChannels(t *testing.T) {
 
 	// Explicit session-id selection on both sides.
 	const sessionID = 777001
-	ch := build(t, udp().Endpoint("localhost:24333").SessionId(sessionID))
+	ch := build(t, udp().Endpoint("localhost:24333").SessionID(sessionID))
 	pubS := addPub(t, a, ch, streamA, true)
 	assert.Equal(t, int32(sessionID), pubS.SessionID())
 	subS := addSub(t, a, ch, streamA, nil)
@@ -233,7 +233,7 @@ func TestChannelUriE2EResponseChannel(t *testing.T) {
 		func(image aeron.Image) { requestImage.Store(image) })
 	subRsp := addSub(t, a, build(t, udp().ControlEndpoint(responseControl).ControlMode(aeron.ControlModeResponse)),
 		responseStream, nil)
-	pubReq := addPub(t, a, build(t, udp().Endpoint(requestEndpoint).ResponseCorrelationId(subRsp.RegistrationID())),
+	pubReq := addPub(t, a, build(t, udp().Endpoint(requestEndpoint).ResponseCorrelationID(subRsp.RegistrationID())),
 		requestStream, false)
 
 	awaitTrue(t, "request publication connected", pubReq.IsConnected)
@@ -241,7 +241,7 @@ func TestChannelUriE2EResponseChannel(t *testing.T) {
 	image := requestImage.Load().(aeron.Image)
 
 	pubRsp := addPub(t, a, build(t, udp().ControlEndpoint(responseControl).ControlMode(aeron.ControlModeResponse).
-		ResponseCorrelationId(image.CorrelationID())), responseStream, false)
+		ResponseCorrelationID(image.CorrelationID())), responseStream, false)
 	isResponse, err := aeron.IsControlModeResponse(pubRsp.Channel())
 	require.NoError(t, err)
 	assert.True(t, isResponse)

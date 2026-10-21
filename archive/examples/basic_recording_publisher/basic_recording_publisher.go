@@ -35,6 +35,7 @@ import (
 	"github.com/lirm/aeron-go/aeron/logging"
 	"github.com/lirm/aeron-go/archive"
 	"github.com/lirm/aeron-go/archive/examples"
+	"github.com/lirm/aeron-go/archive/status"
 )
 
 var interval = flag.Duration("interval", time.Second, "delay between messages")
@@ -82,7 +83,7 @@ func main() {
 loop:
 	for i := 0; i < messages; i++ {
 		msg := []byte(fmt.Sprintf("Hello World! %d", i))
-		buffer.PutBytesArray(0, &msg, 0, int32(len(msg)))
+		buffer.PutBytesSlice(0, msg)
 		fmt.Printf("Offering %d/%d - ", i, messages)
 		if result := publication.Offer(buffer, 0, int32(len(msg)), nil); result > 0 {
 			fmt.Println("yay!")
@@ -146,8 +147,8 @@ func awaitRecordingCounter(arch *archive.Archive, sessionID int32, timeout time.
 	reader := arch.Aeron().CounterReader()
 	deadline := time.Now().Add(timeout)
 	for {
-		if counterID := archive.FindCounterIdBySession(reader, sessionID); counterID != counters.NullCounterId {
-			return counterID, archive.GetRecordingId(reader, counterID), nil
+		if counterID := status.FindCounterIdBySession(reader, sessionID, status.NullValue); counterID != counters.NullCounterId {
+			return counterID, status.GetRecordingId(reader, counterID), nil
 		}
 		if _, err := arch.PollForErrorResponse(); err != nil {
 			return 0, 0, err
@@ -164,7 +165,7 @@ func awaitRecordingPosition(arch *archive.Archive, counterID int32, recordingID,
 	reader := arch.Aeron().CounterReader()
 	deadline := time.Now().Add(timeout)
 	for reader.GetCounterValue(counterID) < position {
-		if !archive.IsRecordingActive(reader, counterID, recordingID) {
+		if !status.IsActive(reader, counterID, recordingID) {
 			return fmt.Errorf("recording has stopped unexpectedly: %d", recordingID)
 		}
 		if time.Now().After(deadline) {

@@ -105,7 +105,7 @@ func (c *reassemblyChecker) failf(format string, args ...interface{}) {
 }
 
 func (c *reassemblyChecker) onMessage(buffer *atomic.Buffer, offset, length int32, header *logbuffer.Header) {
-	c.sessionID = header.SessionId()
+	c.sessionID = header.SessionID()
 	if c.pending == nil {
 		c.pending = &pendingMessage{
 			index:         c.received,

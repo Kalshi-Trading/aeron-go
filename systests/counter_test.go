@@ -98,15 +98,15 @@ func (s *CounterTestSuite) TestShouldBeAbleToAddCounter() {
 	s.Require().NoError(err)
 
 	s.Assert().False(counter.IsClosed())
-	s.Assert().Equal(counter.RegistrationId(), s.clientA.CounterReader().GetCounterRegistrationId(counter.Id()))
-	s.Assert().Equal(s.clientA.ClientID(), s.clientA.CounterReader().GetCounterOwnerId(counter.Id()))
+	s.Assert().Equal(counter.RegistrationID(), s.clientA.CounterReader().GetCounterRegistrationID(counter.ID()))
+	s.Assert().Equal(s.clientA.ClientID(), s.clientA.CounterReader().GetCounterOwnerID(counter.ID()))
 
-	GetCounterFromChanOrFail(counter.Id(), chanA, &s.Suite)
-	GetCounterFromChanOrFail(counter.Id(), chanB, &s.Suite)
+	GetCounterFromChanOrFail(counter.ID(), chanA, &s.Suite)
+	GetCounterFromChanOrFail(counter.ID(), chanB, &s.Suite)
 	availableCounterHandlerClientA.AssertCalled(s.T(), "Handle",
-		mock.Anything, counter.RegistrationId(), counter.Id())
+		mock.Anything, counter.RegistrationID(), counter.ID())
 	availableCounterHandlerClientB.AssertCalled(s.T(), "Handle",
-		mock.Anything, counter.RegistrationId(), counter.Id())
+		mock.Anything, counter.RegistrationID(), counter.ID())
 }
 
 func GetCounterFromChanOrFail(counterId int32, ch chan int32, s *suite.Suite) {
@@ -143,8 +143,8 @@ func (s *CounterTestSuite) TestShouldBeAbleToAddReadableCounterWithinHandler() {
 		s.Fail("Timed out waiting for a ReadableCounter")
 	}
 	s.Assert().Equal(counters.RecordAllocated, readableCounter.State())
-	s.Assert().Equal(counter.Id(), readableCounter.CounterId)
-	s.Assert().Equal(counter.RegistrationId(), readableCounter.RegistrationId)
+	s.Assert().Equal(counter.ID(), readableCounter.CounterId)
+	s.Assert().Equal(counter.RegistrationID(), readableCounter.RegistrationId)
 	s.Assert().Equal(counterLabel, readableCounter.Label())
 }
 
@@ -162,8 +162,8 @@ func (s *CounterTestSuite) TestShouldBeAbleToAddReadableCounterWithinHandlerWith
 		s.Fail("Timed out waiting for a ReadableCounter")
 	}
 	s.Assert().Equal(counters.RecordAllocated, readableCounter.State())
-	s.Assert().Equal(counter.Id(), readableCounter.CounterId)
-	s.Assert().Equal(counter.RegistrationId(), readableCounter.RegistrationId)
+	s.Assert().Equal(counter.ID(), readableCounter.CounterId)
+	s.Assert().Equal(counter.RegistrationID(), readableCounter.RegistrationId)
 	s.Assert().Equal(counterLabel, readableCounter.Label())
 }
 
@@ -188,8 +188,8 @@ func (s *CounterTestSuite) TestShouldBeAbleToAddReadableCounterAndGetCounterRead
 		s.Fail("Timed out waiting for a ReadableCounter")
 	}
 	s.Assert().Equal(counters.RecordAllocated, readableCounter.State())
-	s.Assert().Equal(counter.Id(), readableCounter.CounterId)
-	s.Assert().Equal(counter.RegistrationId(), readableCounter.RegistrationId)
+	s.Assert().Equal(counter.ID(), readableCounter.CounterId)
+	s.Assert().Equal(counter.RegistrationID(), readableCounter.RegistrationId)
 	s.Assert().Equal(counterLabel, readableCounter.Label())
 
 	s.Assert().Equal(counter.Counter().Get(), readableCounter.Get())
@@ -278,7 +278,7 @@ type ReadableCounterHandler struct {
 }
 
 func (r ReadableCounterHandler) Handle(reader *counters.Reader, registrationId int64, counterId int32) {
-	if counterTypeId == reader.GetCounterTypeId(counterId) {
+	if counterTypeId == reader.GetCounterTypeID(counterId) {
 		counter, err := counters.NewReadableRegisteredCounter(reader, registrationId, counterId)
 		r.suite.Require().NoError(err)
 		r.ch <- counter

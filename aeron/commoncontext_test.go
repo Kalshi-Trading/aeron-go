@@ -251,10 +251,10 @@ func TestDecodePublicationErrorFrame(t *testing.T) {
 	buf.PutUInt16(pubErrAddressTypeOffset, uint16(pubErrAddressTypeIPv4))
 	buf.PutUInt16(pubErrAddressPortOffset, 4040)
 	ip := []byte{127, 0, 0, 1}
-	buf.PutBytesArray(pubErrAddressOffset, &ip, 0, 4)
+	buf.PutBytesSlice(pubErrAddressOffset, ip[:4])
 	buf.PutInt32(pubErrErrorCodeOffset, 17)
 	buf.PutInt32(pubErrErrorMessageOffset, int32(len(msg)))
-	buf.PutBytesArray(pubErrErrorMessageOffset+4, &msg, 0, int32(len(msg)))
+	buf.PutBytesSlice(pubErrErrorMessageOffset+4, msg)
 
 	var f PublicationErrorFrame
 	require.NoError(t, decodePublicationErrorFrame(buf, 0, int32(length), &f))
@@ -273,7 +273,7 @@ func TestAppendToCounterLabel(t *testing.T) {
 	buf.PutInt32(rec, ctr.RecordAllocated)
 	label := []byte("client-heartbeat: 5")
 	buf.PutInt32(rec+ctr.LabelOffset, int32(len(label)))
-	buf.PutBytesArray(rec+ctr.LabelOffset+4, &label, 0, int32(len(label)))
+	buf.PutBytesSlice(rec+ctr.LabelOffset+4, label)
 
 	n, err := appendToCounterLabel(buf, 1, heartbeatLabelSuffix("my-client"))
 	require.NoError(t, err)

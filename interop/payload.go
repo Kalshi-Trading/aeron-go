@@ -88,7 +88,7 @@ func Fill(dst []byte, seq int64) {
 func FillBuffer(buffer *atomic.Buffer, offset int32, seq int64, length int32) {
 	b := make([]byte, length)
 	Fill(b, seq)
-	buffer.PutBytesArray(offset, &b, 0, length)
+	buffer.PutBytesSlice(offset, b[:length])
 }
 
 // Verify checks that msg is message expectedSeq. It returns "" when valid.
@@ -160,7 +160,7 @@ func (v *Verifier) Count() int64 {
 // OnFragment is a term.FragmentHandler.
 func (v *Verifier) OnFragment(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
 	msg := buffer.GetBytesArray(offset, length)
-	v.OnMessage(msg, header.Position(), header.SessionId(), header.GetReservedValue())
+	v.OnMessage(msg, header.Position(), header.SessionID(), header.ReservedValue())
 }
 
 // OnMessage verifies one whole message.

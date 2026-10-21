@@ -282,7 +282,7 @@ func (archive *Archive) publicationLimit(publication aeron.Publisher) int64 {
 	reader := archive.aeron.CounterReader()
 	limit := int64(-1)
 	reader.ScanForType(driverPublisherLimitTypeID, func(counterID int32, _ *atomic.Buffer) bool {
-		if reader.GetCounterRegistrationId(counterID) == publication.RegistrationID() {
+		if reader.GetCounterRegistrationID(counterID) == publication.RegistrationID() {
 			limit = reader.GetCounterValue(counterID)
 			return false
 		}

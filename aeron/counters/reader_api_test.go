@@ -23,12 +23,12 @@ func allocate(r *Reader, id int32, typeId int32, key []byte, label string, regId
 	r.metaData.PutInt32(m+TypeIdOffset, typeId)
 	r.metaData.PutInt64(m+FreeForReuseDeadlineOffset, NotFreeToReuse)
 	if len(key) > 0 {
-		r.metaData.PutBytesArray(m+KeyOffset, &key, 0, int32(len(key)))
+		r.metaData.PutBytesSlice(m+KeyOffset, key)
 	}
 	lb := []byte(label)
 	r.metaData.PutInt32(m+LabelOffset, int32(len(lb)))
 	if len(lb) > 0 {
-		r.metaData.PutBytesArray(m+LabelOffset+util.SizeOfInt32, &lb, 0, int32(len(lb)))
+		r.metaData.PutBytesSlice(m+LabelOffset+util.SizeOfInt32, lb)
 	}
 	v := CounterOffset(id)
 	r.values.PutInt64(v+RegistrationIdOffset, regId)
@@ -39,8 +39,8 @@ func allocate(r *Reader, id int32, typeId int32, key []byte, label string, regId
 
 func TestMaxCounterIdAndLastSlot(t *testing.T) {
 	r := newTestReader()
-	assert.EqualValues(t, testNumCounters-1, r.MaxCounterId())
-	last := r.MaxCounterId()
+	assert.EqualValues(t, testNumCounters-1, r.MaxCounterID())
+	last := r.MaxCounterID()
 	for id := int32(0); id <= last; id++ {
 		allocate(r, id, 7, nil, "c", int64(100+id), 1, 2)
 	}
@@ -49,7 +49,7 @@ func TestMaxCounterIdAndLastSlot(t *testing.T) {
 	assert.True(t, r.IsCounterAllocated(last))
 	assert.False(t, r.IsCounterAllocated(last+1))
 	assert.EqualValues(t, 0, r.GetCounterValue(last+1))
-	assert.Equal(t, last, r.FindByRegistrationId(int64(100+last)))
+	assert.Equal(t, last, r.FindByRegistrationID(int64(100+last)))
 	_, err := NewAtomicCounter(r, last)
 	assert.NoError(t, err)
 	_, err = NewAtomicCounter(r, last+1)
@@ -70,12 +70,12 @@ func TestReaderAccessors(t *testing.T) {
 	r.metaData.PutInt32Ordered(MetaDataOffset(2), RecordReclaimed)
 	r.metaData.PutInt64(MetaDataOffset(2)+FreeForReuseDeadlineOffset, 1234)
 
-	assert.EqualValues(t, 11, r.GetCounterTypeId(0))
+	assert.EqualValues(t, 11, r.GetCounterTypeID(0))
 	assert.Equal(t, "heartbeat", r.GetCounterLabel(0))
 	assert.Equal(t, "", r.GetCounterLabel(1))
-	assert.EqualValues(t, 5, r.GetCounterRegistrationId(0))
-	assert.EqualValues(t, 6, r.GetCounterOwnerId(0))
-	assert.EqualValues(t, 7, r.GetCounterReferenceId(0))
+	assert.EqualValues(t, 5, r.GetCounterRegistrationID(0))
+	assert.EqualValues(t, 6, r.GetCounterOwnerID(0))
+	assert.EqualValues(t, 7, r.GetCounterReferenceID(0))
 	assert.Equal(t, RecordAllocated, r.GetCounterState(0))
 	assert.Equal(t, RecordReclaimed, r.GetCounterState(2))
 	assert.Equal(t, RecordUnused, r.GetCounterState(3))
@@ -83,10 +83,10 @@ func TestReaderAccessors(t *testing.T) {
 	assert.EqualValues(t, 1234, r.GetFreeForReuseDeadline(2))
 	assert.EqualValues(t, 99, r.KeyBuffer(0).GetInt64(0))
 	assert.Len(t, r.GetCounterKey(0), int(MaxKeyLength))
-	assert.EqualValues(t, 0, r.FindByTypeIdAndRegistrationId(11, 5))
-	assert.EqualValues(t, 1, r.FindByTypeIdAndRegistrationId(1001, 8))
-	assert.Equal(t, NullCounterId, r.FindByTypeIdAndRegistrationId(11, 8))
-	assert.EqualValues(t, 0, FindHeartbeatCounterIdByRegistrationId(r, HeartbeatTypeId, 99))
+	assert.EqualValues(t, 0, r.FindByTypeIDAndRegistrationID(11, 5))
+	assert.EqualValues(t, 1, r.FindByTypeIDAndRegistrationID(1001, 8))
+	assert.Equal(t, NullCounterId, r.FindByTypeIDAndRegistrationID(11, 8))
+	assert.EqualValues(t, 0, FindHeartbeatCounterIDByRegistrationID(r, HeartbeatTypeId, 99))
 	assert.True(t, IsHeartbeatActive(r, 0, HeartbeatTypeId, 99))
 	assert.False(t, IsHeartbeatActive(r, 1, HeartbeatTypeId, 99))
 
@@ -137,15 +137,15 @@ func TestStreamCounterAndChannelStatus(t *testing.T) {
 	id := FindChannelEndpointStatus(r, DriverSendChannelStatusTypeId, channel)
 	assert.EqualValues(t, 1, id)
 	assert.Equal(t, "ACTIVE", ChannelEndpointStatusString(r.GetCounterValue(id)))
-	assert.NoError(t, ValidateCounterTypeId(r, 1, DriverSendChannelStatusTypeId))
-	assert.Error(t, ValidateCounterTypeId(r, 1, DriverPublisherLimitTypeId))
+	assert.NoError(t, ValidateCounterTypeID(r, 1, DriverSendChannelStatusTypeId))
+	assert.Error(t, ValidateCounterTypeID(r, 1, DriverPublisherLimitTypeId))
 
 	n, err := AppendToLabel(r.metaData, 0, " extra")
 	require.NoError(t, err)
 	assert.EqualValues(t, 6, n)
 	assert.Equal(t, PublisherLimitName+" extra", r.GetCounterLabel(0))
-	require.NoError(t, SetReferenceId(r.metaData, r.values, 0, 555))
-	assert.EqualValues(t, 555, r.GetCounterReferenceId(0))
+	require.NoError(t, SetReferenceID(r.metaData, r.values, 0, 555))
+	assert.EqualValues(t, 555, r.GetCounterReferenceID(0))
 	_, err = AppendToLabel(r.metaData, 3, "x")
 	assert.Error(t, err)
 }
@@ -166,6 +166,6 @@ func TestAtomicCounterOps(t *testing.T) {
 	assert.False(t, c.ProposeMaxOrdered(3))
 	assert.EqualValues(t, 10, c.Get())
 	assert.EqualValues(t, 10, r.GetCounterValue(2))
-	assert.EqualValues(t, 1, c.TypeId())
+	assert.EqualValues(t, 1, c.TypeID())
 	assert.Equal(t, "x", c.Label())
 }

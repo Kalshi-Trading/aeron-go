@@ -26,12 +26,12 @@ import (
 func TestHeaderConstructor(t *testing.T) {
 	ctx := "ctx"
 	h := NewHeader(-1000, 20).SetContext(ctx)
-	assert.Equal(t, int32(-1000), h.InitialTermId())
+	assert.Equal(t, int32(-1000), h.InitialTermID())
 	assert.Equal(t, int32(20), h.PositionBitsToShift())
 	assert.Equal(t, ctx, h.Context())
 	assert.Equal(t, NullValue, h.FragmentedFrameLength())
 	h.SetInitialTermID(5).SetPositionBitsToShift(16).SetContext(nil)
-	assert.Equal(t, int32(5), h.InitialTermId())
+	assert.Equal(t, int32(5), h.InitialTermID())
 	assert.Equal(t, int32(16), h.PositionBitsToShift())
 	assert.Nil(t, h.Context())
 }
@@ -103,9 +103,9 @@ func TestHeaderReadsDataFromBuffer(t *testing.T) {
 	assert.Equal(t, uint8(0x1A), h.Flags())
 	assert.Equal(t, uint16(0x6), h.Type())
 	assert.Equal(t, int32(-46234), h.TermOffset())
-	assert.Equal(t, int32(333), h.SessionId())
-	assert.Equal(t, int32(5), h.StreamId())
-	assert.Equal(t, int32(-9), h.TermId())
+	assert.Equal(t, int32(333), h.SessionID())
+	assert.Equal(t, int32(5), h.StreamID())
+	assert.Equal(t, int32(-9), h.TermID())
 	assert.Equal(t, int64(909090909090909), h.ReservedValue())
 	assert.Same(t, h.Buffer(), h.Buffer())
 }

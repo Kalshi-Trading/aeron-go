@@ -106,7 +106,7 @@ func main() {
 	counter := 0
 	printHandler := func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
 		fmt.Printf("Message to stream %d from session %d (%d@%d) <<%s>>\n",
-			replayStream, header.SessionId(), length, offset, string(buffer.GetBytesArray(offset, length)))
+			replayStream, header.SessionID(), length, offset, string(buffer.GetBytesArray(offset, length)))
 		counter++
 	}
 

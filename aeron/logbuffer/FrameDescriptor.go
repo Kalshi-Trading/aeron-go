@@ -66,17 +66,17 @@ func GetFlags(logBuffer *atomic.Buffer, frameOffset int32) uint8 {
 	return logBuffer.GetUInt8(offset)
 }
 
-func GetTermId(logBuffer *atomic.Buffer, frameOffset int32) int32 {
+func frameTermID(logBuffer *atomic.Buffer, frameOffset int32) int32 {
 	offset := termIdOffset(frameOffset)
 	return logBuffer.GetInt32Volatile(offset)
 }
 
-func GetSessionId(logBuffer *atomic.Buffer, frameOffset int32) int32 {
+func frameSessionID(logBuffer *atomic.Buffer, frameOffset int32) int32 {
 	offset := sessionIdOffset(frameOffset)
 	return logBuffer.GetInt32Volatile(offset)
 }
 
-func GetStreamId(logBuffer *atomic.Buffer, frameOffset int32) int32 {
+func frameStreamID(logBuffer *atomic.Buffer, frameOffset int32) int32 {
 	offset := streamIdOffset(frameOffset)
 	return logBuffer.GetInt32Volatile(offset)
 }

@@ -146,7 +146,7 @@ func (b *BufferBuilder) AppendBytes(src []byte) *BufferBuilder {
 // completed into a header describing the whole reassembled message.
 func (b *BufferBuilder) CaptureHeader(header *logbuffer.Header) *BufferBuilder {
 	b.completeHeader.
-		SetInitialTermID(header.InitialTermId()).
+		SetInitialTermID(header.InitialTermID()).
 		SetPositionBitsToShift(header.PositionBitsToShift()).
 		SetOffset(0).
 		Wrap(b.headerBuffer.Ptr(), b.headerBuffer.Capacity())

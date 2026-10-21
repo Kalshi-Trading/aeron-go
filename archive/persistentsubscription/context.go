@@ -237,7 +237,7 @@ func (ctx *Context) allocateCounter(name string, typeID int32) (*aeron.Counter, 
 	}
 	deadline := time.Now().Add(counterAllocationTimeout)
 	for {
-		counter, err := ctx.Aeron.FindCounter(id)
+		counter, err := ctx.Aeron.GetCounter(id)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add counter %q: %w", label, err)
 		}

@@ -17,9 +17,7 @@ package memmap
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os"
-	"sync"
 	"syscall"
 	"unsafe"
 
@@ -31,13 +29,10 @@ import (
 type File struct {
 	mmap unsafe.Pointer
 	size int
+	mm   mapper.MMap
 }
 
 var logger = logging.MustGetLogger("memmap")
-
-// We keep this map so that we can get back the original handle from the memory address.
-// map[unsafe.Pointer]mapper.MMap
-var memories = sync.Map{}
 
 // GetFileSize is a helper function to retrieve file size
 func GetFileSize(filename string) int64 {
@@ -97,6 +92,9 @@ func MapExisting(filename string, offset int64, length int) (*File, error) {
 // NewFile is a factory method to create a new memory mapped file with the specified capacity
 func NewFile(filename string, offset int64, length int) (*File, error) {
 	logger.Debugf("Will try to map new %s, %d, %d", filename, offset, length)
+	if length <= 0 {
+		return nil, fmt.Errorf("mmap: invalid length %d for new file %q", length, filename)
+	}
 
 	/* #nosec G304 -- Read cluster-mark-service-0.dat */
 	f, err := os.Create(filename)
@@ -105,13 +103,8 @@ func NewFile(filename string, offset int64, length int) (*File, error) {
 	}
 	defer f.Close()
 
-	_, err = f.Seek(int64(length-1), 0)
-	if err != nil {
-		log.Fatal(err)
-	}
-	_, err = f.Write([]byte("\000"))
-	if err != nil {
-		log.Fatal(err)
+	if err = f.Truncate(offset + int64(length)); err != nil {
+		return nil, err
 	}
 
 	mmap, err := doMap(f, offset, length)
@@ -133,25 +126,25 @@ func (mmap *File) GetMemorySize() int {
 	return mmap.size
 }
 
-// Close attempts to unmap the mapped memory region
-func (mmap *File) Close() (err error) {
-	mm, _ := memories.Load(mmap.mmap)
-	tomap := mm.(mapper.MMap)
-	return tomap.Unmap()
+// Close unmaps the mapped memory region. It is idempotent: closing an already closed File is a no-op,
+// so a second Close can never unmap a region that has since been reused by another mapping.
+func (mmap *File) Close() error {
+	if mmap == nil || mmap.mm == nil {
+		return nil
+	}
+	mm := mmap.mm
+	mmap.mm = nil
+	mmap.mmap = nil
+	return mm.Unmap()
 }
 
 func doMap(f *os.File, offset int64, length int) (*File, error) {
-
+	if length <= 0 {
+		return nil, fmt.Errorf("mmap: invalid map length %d", length)
+	}
 	mm, err := mapper.MapRegion(f, length, mapper.RDWR, 0, offset)
 	if err != nil {
 		return nil, err
 	}
-
-	mmap := new(File)
-	mmap.mmap = unsafe.Pointer(&mm[0])
-	mmap.size = length
-
-	memories.Store(mmap.mmap, mm)
-
-	return mmap, err
+	return &File{mmap: unsafe.Pointer(&mm[0]), size: length, mm: mm}, nil
 }

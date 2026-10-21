@@ -17,7 +17,7 @@ type AtomicCounter struct {
 }
 
 func NewAtomicCounter(reader *Reader, counterId int32) (*AtomicCounter, error) {
-	if err := reader.ValidateCounterId(counterId); err != nil {
+	if err := reader.ValidateCounterID(counterId); err != nil {
 		return nil, err
 	}
 	metaDataOffset := counterId * MetadataLength
@@ -29,8 +29,8 @@ func (ac *AtomicCounter) ptr() *int64 {
 	return (*int64)(unsafe.Add(ac.Reader.values.Ptr(), ac.valueOffset))
 }
 
-// Id returns the counter id.
-func (ac *AtomicCounter) Id() int32 {
+// ID returns the counter id.
+func (ac *AtomicCounter) ID() int32 {
 	return ac.CounterId
 }
 
@@ -42,8 +42,8 @@ func (ac *AtomicCounter) Label() string {
 	return ac.Reader.labelValue(ac.metaDataOffset)
 }
 
-// TypeId returns the type id of the counter.
-func (ac *AtomicCounter) TypeId() int32 {
+// TypeID returns the type id of the counter.
+func (ac *AtomicCounter) TypeID() int32 {
 	return ac.Reader.metaData.GetInt32(ac.metaDataOffset + TypeIdOffset)
 }
 

@@ -106,7 +106,7 @@ type IdAndAvailableCounterHandler struct {
 	handler        AvailableCounterHandler
 }
 
-func NewIdAndAvailablePair(registrationId int64, handler AvailableCounterHandler) *IdAndAvailableCounterHandler {
+func newIDAndAvailablePair(registrationId int64, handler AvailableCounterHandler) *IdAndAvailableCounterHandler {
 	return &IdAndAvailableCounterHandler{registrationId: registrationId, handler: handler}
 }
 
@@ -115,7 +115,7 @@ type IdAndUnavailableCounterHandler struct {
 	handler        UnavailableCounterHandler
 }
 
-func NewIdAndUnavailablePair(registrationId int64, handler UnavailableCounterHandler) *IdAndUnavailableCounterHandler {
+func newIDAndUnavailablePair(registrationId int64, handler UnavailableCounterHandler) *IdAndUnavailableCounterHandler {
 	return &IdAndUnavailableCounterHandler{registrationId: registrationId, handler: handler}
 }
 
@@ -542,7 +542,7 @@ func (cc *ClientConductor) checkLiveness(nowNs int64) (int, error) {
 		id := cc.heartbeatTimestamp.CounterId
 		registrationID, ctrErr := cc.counterReader.GetKeyPartInt64(id, heartheatRegistrationIdOffset)
 		if ctrErr != nil || !cc.counterReader.IsCounterAllocated(id) ||
-			cc.counterReader.GetCounterTypeId(id) != heartbeatTypeId || registrationID != clientID {
+			cc.counterReader.GetCounterTypeID(id) != heartbeatTypeId || registrationID != clientID {
 			return 0, cc.terminate(fmt.Errorf("unexpected close of heartbeat timestamp counter: %d", id))
 		}
 		cc.heartbeatTimestamp.Set(nowMs)
@@ -604,7 +604,7 @@ func (cc *ClientConductor) forceCloseResources() {
 			cc.closeImages(sub.images.Empty(), sub.UnavailableImageHandler(), nullValue)
 		case kindCounter:
 			res.counter.isClosed.Set(true)
-			cc.notifyUnavailableCounter(res.counter.RegistrationId(), res.counter.Id())
+			cc.notifyUnavailableCounter(res.counter.RegistrationID(), res.counter.ID())
 		}
 		delete(cc.resources, id)
 	}
@@ -1158,7 +1158,7 @@ func (cc *ClientConductor) FindCounter(registrationID int64) (*Counter, error) {
 func (cc *ClientConductor) releaseCounter(counter Counter) error {
 	cc.adminLock.Lock()
 	defer cc.unlock()
-	return cc.releaseCounterLocked(counter.RegistrationId(), counter.Id())
+	return cc.releaseCounterLocked(counter.RegistrationID(), counter.ID())
 }
 
 func (cc *ClientConductor) releaseCounterLocked(registrationID int64, counterID int32) error {
@@ -1166,7 +1166,7 @@ func (cc *ClientConductor) releaseCounterLocked(registrationID int64, counterID 
 		return nil
 	}
 	res := cc.resources[registrationID]
-	if res == nil || res.kind != kindCounter || res.counter.Id() != counterID {
+	if res == nil || res.kind != kindCounter || res.counter.ID() != counterID {
 		return nil
 	}
 	res.counter.isClosed.Set(true)
@@ -1190,7 +1190,7 @@ func (cc *ClientConductor) AsyncRemoveCounter(registrationID int64) error {
 	if res == nil || res.kind != kindCounter {
 		return nil
 	}
-	return cc.releaseCounterLocked(registrationID, res.counter.Id())
+	return cc.releaseCounterLocked(registrationID, res.counter.ID())
 }
 
 // NextSessionID asks the driver for the next available session id for a stream (driver >= 1.47).
@@ -1217,11 +1217,11 @@ func (cc *ClientConductor) AddAvailableCounterHandler(handler AvailableCounterHa
 	cc.adminLock.Lock()
 	defer cc.unlock()
 	id := cc.driverProxy.NextCorrelationID()
-	cc.availableCounterHandlers = append(cc.availableCounterHandlers, NewIdAndAvailablePair(id, handler))
+	cc.availableCounterHandlers = append(cc.availableCounterHandlers, newIDAndAvailablePair(id, handler))
 	return id
 }
 
-func (cc *ClientConductor) RemoveAvailableCounterHandlerById(registrationId int64) bool {
+func (cc *ClientConductor) RemoveAvailableCounterHandlerByID(registrationId int64) bool {
 	cc.adminLock.Lock()
 	defer cc.unlock()
 	for i, pair := range cc.availableCounterHandlers {
@@ -1249,11 +1249,11 @@ func (cc *ClientConductor) AddUnavailableCounterHandler(handler UnavailableCount
 	cc.adminLock.Lock()
 	defer cc.unlock()
 	id := cc.driverProxy.NextCorrelationID()
-	cc.unavailableCounterHandlers = append(cc.unavailableCounterHandlers, NewIdAndUnavailablePair(id, handler))
+	cc.unavailableCounterHandlers = append(cc.unavailableCounterHandlers, newIDAndUnavailablePair(id, handler))
 	return id
 }
 
-func (cc *ClientConductor) RemoveUnavailableCounterHandlerById(registrationId int64) bool {
+func (cc *ClientConductor) RemoveUnavailableCounterHandlerByID(registrationId int64) bool {
 	cc.adminLock.Lock()
 	defer cc.unlock()
 	for i, pair := range cc.unavailableCounterHandlers {
@@ -1439,7 +1439,7 @@ func (cc *ClientConductor) OnChannelEndpointError(corrID int64, errorMessage str
 		case kindPublication, kindExclusivePublication:
 			match = res.pubBase.ChannelStatusID() == statusIndicatorID
 		case kindSubscription:
-			match = res.subscription.ChannelStatusId() == statusIndicatorID
+			match = res.subscription.ChannelStatusID() == statusIndicatorID
 		}
 		if match {
 			cc.queueError(NewChannelEndpointError(statusIndicatorID, errorMessage))
@@ -1465,7 +1465,7 @@ func (cc *ClientConductor) OnAvailableCounter(corrID int64, counterID int32) {
 
 func (cc *ClientConductor) OnUnavailableCounter(registrationID int64, counterID int32) {
 	logger.Debugf("OnUnavailableCounter: registrationId=%d, counterId=%d", registrationID, counterID)
-	if res := cc.resources[registrationID]; res != nil && res.kind == kindCounter && res.counter.Id() == counterID {
+	if res := cc.resources[registrationID]; res != nil && res.kind == kindCounter && res.counter.ID() == counterID {
 		res.counter.isClosed.Set(true)
 		delete(cc.resources, registrationID)
 	}
@@ -1478,7 +1478,7 @@ func (cc *ClientConductor) OnStaticCounter(corrID int64, counterID int32) {
 	if res == nil || res.kind != kindPendingStaticCounter {
 		return
 	}
-	counter, err := newCounter(corrID, cc.counterReader.GetCounterRegistrationId(counterID), false, cc, counterID)
+	counter, err := newCounter(corrID, cc.counterReader.GetCounterRegistrationID(counterID), false, cc, counterID)
 	if err != nil {
 		cc.failCommand(corrID, err)
 		return

@@ -43,9 +43,9 @@ const HeartbeatTypeId = DriverHeartbeatTypeId
 // HeartbeatRegistrationIdOffset is the key offset of the registration id in a heartbeat counter.
 const HeartbeatRegistrationIdOffset int32 = 0
 
-// FindHeartbeatCounterIdByRegistrationId finds the heartbeat counter of the client/agent with the given registration
+// FindHeartbeatCounterIDByRegistrationID finds the heartbeat counter of the client/agent with the given registration
 // id (HeartbeatTimestamp.findCounterIdByRegistrationId). Returns NullCounterId if not found.
-func FindHeartbeatCounterIdByRegistrationId(reader *Reader, counterTypeId int32, registrationId int64) int32 {
+func FindHeartbeatCounterIDByRegistrationID(reader *Reader, counterTypeId int32, registrationId int64) int32 {
 	return reader.FindCounter(counterTypeId, func(keyBuffer *atomic.Buffer) bool {
 		return keyBuffer.GetInt64(HeartbeatRegistrationIdOffset) == registrationId
 	})
@@ -54,7 +54,7 @@ func FindHeartbeatCounterIdByRegistrationId(reader *Reader, counterTypeId int32,
 // IsHeartbeatActive reports whether the counter is still allocated as a heartbeat of the given type and registration
 // id (HeartbeatTimestamp.isActive).
 func IsHeartbeatActive(reader *Reader, counterId int32, counterTypeId int32, registrationId int64) bool {
-	if !reader.IsCounterAllocated(counterId) || reader.GetCounterTypeId(counterId) != counterTypeId {
+	if !reader.IsCounterAllocated(counterId) || reader.GetCounterTypeID(counterId) != counterTypeId {
 		return false
 	}
 	v, err := reader.GetKeyPartInt64(counterId, HeartbeatRegistrationIdOffset)
@@ -141,9 +141,9 @@ func FindChannelEndpointStatus(reader *Reader, typeId int32, channel string) int
 	return result
 }
 
-// ValidateCounterTypeId returns an error if the counter's type id does not match (AeronCounters.validateCounterTypeId).
-func ValidateCounterTypeId(reader *Reader, counterId int32, expectedTypeId int32) error {
-	if typeId := reader.GetCounterTypeId(counterId); typeId != expectedTypeId {
+// ValidateCounterTypeID returns an error if the counter's type id does not match (AeronCounters.validateCounterTypeId).
+func ValidateCounterTypeID(reader *Reader, counterId int32, expectedTypeId int32) error {
+	if typeId := reader.GetCounterTypeID(counterId); typeId != expectedTypeId {
 		return fmt.Errorf("the type for counterId=%d, typeId=%d does not match the expected=%d",
 			counterId, typeId, expectedTypeId)
 	}
@@ -168,14 +168,14 @@ func AppendToLabel(metaDataBuffer *atomic.Buffer, counterId int32, value string)
 	}
 	if n > 0 {
 		b := []byte(value[:n])
-		metaDataBuffer.PutBytesArray(offset+LabelOffset+util.SizeOfInt32+existing, &b, 0, n)
+		metaDataBuffer.PutBytesSlice(offset+LabelOffset+util.SizeOfInt32+existing, b[:n])
 		metaDataBuffer.PutInt32Ordered(offset+LabelOffset, existing+n)
 	}
 	return n, nil
 }
 
-// SetReferenceId sets the reference id of a counter (AeronCounters.setReferenceId).
-func SetReferenceId(metaDataBuffer, valuesBuffer *atomic.Buffer, counterId int32, referenceId int64) error {
+// SetReferenceID sets the reference id of a counter (AeronCounters.setReferenceId).
+func SetReferenceID(metaDataBuffer, valuesBuffer *atomic.Buffer, counterId int32, referenceId int64) error {
 	if err := validateMetaDataCounterId(metaDataBuffer, counterId); err != nil {
 		return err
 	}

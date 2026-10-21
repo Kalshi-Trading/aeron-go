@@ -105,7 +105,7 @@ func (f *flyweightBase) putBytes(fieldOffset int32, value []byte) int32 {
 	length := int32(len(value))
 	f.putInt32(fieldOffset, length)
 	if length > 0 {
-		f.buffer.PutBytesArray(f.offset+fieldOffset+sizeOfInt32, &value, 0, length)
+		f.buffer.PutBytesSlice(f.offset+fieldOffset+sizeOfInt32, value[:length])
 	}
 	return sizeOfInt32 + length
 }

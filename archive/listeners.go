@@ -95,20 +95,3 @@ type ControlResponseListener interface {
 	ControlEventListener
 	OnRecordingDescriptor(descriptor *codecs.RecordingDescriptor)
 }
-
-// recordingSignalListenerConsumer bridges the legacy ArchiveListeners.RecordingSignalListener callback.
-func recordingSignalListenerConsumer(listeners *ArchiveListeners) RecordingSignalConsumer {
-	return RecordingSignalConsumerFunc(func(controlSessionId, correlationId, recordingId, subscriptionId,
-		position int64, signal codecs.RecordingSignalEnum) {
-		if listeners != nil && listeners.RecordingSignalListener != nil {
-			listeners.RecordingSignalListener(&codecs.RecordingSignalEvent{
-				ControlSessionId: controlSessionId,
-				CorrelationId:    correlationId,
-				RecordingId:      recordingId,
-				SubscriptionId:   subscriptionId,
-				Position:         position,
-				Signal:           signal,
-			})
-		}
-	})
-}

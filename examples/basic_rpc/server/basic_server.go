@@ -84,7 +84,7 @@ func main() {
 	handler := func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
 		bytes := buffer.GetBytesArray(offset, length)
 
-		c, found := clients[header.SessionId()]
+		c, found := clients[header.SessionID()]
 		if !found {
 			pub, err := a.AddExclusivePublication(string(bytes), int32(*examples.ExamplesConfig.StreamID))
 			if err != nil {
@@ -93,7 +93,7 @@ func main() {
 			c = &client{
 				pub: pub,
 			}
-			clients[header.SessionId()] = c
+			clients[header.SessionID()] = c
 		}
 	}
 

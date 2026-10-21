@@ -152,7 +152,7 @@ func sessionMessage(sessionId, leadershipTermId, timestamp int64, payload string
 	buf.PutInt64(16, sessionId)
 	buf.PutInt64(24, timestamp)
 	p := []byte(payload)
-	buf.PutBytesArray(SessionHeaderLength, &p, 0, int32(len(p)))
+	buf.PutBytesSlice(SessionHeaderLength, p)
 	return buf
 }
 

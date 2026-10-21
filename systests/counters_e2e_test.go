@@ -120,8 +120,8 @@ func TestCountersE2EGoToJava(t *testing.T) {
 	require.NoError(t, err)
 	counter.Set(424242)
 	assert.True(t, counter.IsClientOwned())
-	assert.Equal(t, client.ClientID(), reader.GetCounterOwnerId(counter.Id()))
-	assert.Equal(t, counter.RegistrationId(), reader.GetCounterRegistrationId(counter.Id()))
+	assert.Equal(t, client.ClientID(), reader.GetCounterOwnerID(counter.ID()))
+	assert.Equal(t, counter.RegistrationID(), reader.GetCounterRegistrationID(counter.ID()))
 
 	key := atomic.MakeBuffer(make([]byte, 8))
 	key.PutInt64(0, 0x1234567890)
@@ -130,52 +130,52 @@ func TestCountersE2EGoToJava(t *testing.T) {
 	require.NoError(t, err)
 	keyed.Increment()
 	keyed.GetAndAdd(76)
-	v, err := reader.GetKeyPartInt64(keyed.Id(), 0)
+	v, err := reader.GetKeyPartInt64(keyed.ID(), 0)
 	require.NoError(t, err)
 	assert.EqualValues(t, 0x1234567890, v)
-	assert.Equal(t, keyedTypeId, reader.GetCounterTypeId(keyed.Id()))
-	assert.Equal(t, keyedLabel, reader.GetCounterLabel(keyed.Id()))
-	assert.Equal(t, counters.RecordAllocated, reader.GetCounterState(keyed.Id()))
-	assert.Equal(t, counters.NotFreeToReuse, reader.GetFreeForReuseDeadline(keyed.Id()))
+	assert.Equal(t, keyedTypeId, reader.GetCounterTypeID(keyed.ID()))
+	assert.Equal(t, keyedLabel, reader.GetCounterLabel(keyed.ID()))
+	assert.Equal(t, counters.RecordAllocated, reader.GetCounterState(keyed.ID()))
+	assert.Equal(t, counters.NotFreeToReuse, reader.GetFreeForReuseDeadline(keyed.ID()))
 
 	static1, err := client.AddStaticCounterByLabel(staticTypeId, staticLabel, staticRegId)
 	require.NoError(t, err)
 	static2, err := client.AddStaticCounterByLabel(staticTypeId, "ignored-label", staticRegId)
 	require.NoError(t, err)
-	assert.Equal(t, static1.Id(), static2.Id(), "static counters must dedupe")
-	assert.NotEqual(t, static1.CorrelationId(), static2.CorrelationId())
+	assert.Equal(t, static1.ID(), static2.ID(), "static counters must dedupe")
+	assert.NotEqual(t, static1.CorrelationID(), static2.CorrelationID())
 	assert.False(t, static1.IsClientOwned())
-	assert.Equal(t, staticRegId, static1.RegistrationId())
-	assert.EqualValues(t, aeron.NullValue, reader.GetCounterOwnerId(static1.Id()))
-	assert.Equal(t, static1.Id(), reader.FindByTypeIdAndRegistrationId(staticTypeId, staticRegId))
+	assert.Equal(t, staticRegId, static1.RegistrationID())
+	assert.EqualValues(t, aeron.NullValue, reader.GetCounterOwnerID(static1.ID()))
+	assert.Equal(t, static1.ID(), reader.FindByTypeIDAndRegistrationID(staticTypeId, staticRegId))
 	static1.Set(99)
 
 	// Non-static collision: the driver rejects a static counter for an existing client owned counter.
-	_, err = client.AddStaticCounterByLabel(typeId, "collide", counter.RegistrationId())
+	_, err = client.AddStaticCounterByLabel(typeId, "collide", counter.RegistrationID())
 	assert.ErrorContains(t, err, "non-static counter exists")
 
 	stat := runCountersCompose(t, "run", "--rm", "aeron-stat")
 	id, val, ok := aeronStatLine(stat, label)
 	require.True(t, ok, "AeronStat output missing %s:\n%s", label, stat)
-	assert.Equal(t, counter.Id(), id)
+	assert.Equal(t, counter.ID(), id)
 	assert.EqualValues(t, 424242, val)
 	id, val, ok = aeronStatLine(stat, keyedLabel)
 	require.True(t, ok, "AeronStat output missing %s", keyedLabel)
-	assert.Equal(t, keyed.Id(), id)
+	assert.Equal(t, keyed.ID(), id)
 	assert.EqualValues(t, 77, val)
 	id, val, ok = aeronStatLine(stat, staticLabel)
 	require.True(t, ok, "AeronStat output missing %s", staticLabel)
-	assert.Equal(t, static1.Id(), id)
+	assert.Equal(t, static1.ID(), id)
 	assert.EqualValues(t, 99, val)
-	t.Logf("AeronStat saw: counter=%d keyed=%d static=%d", counter.Id(), keyed.Id(), static1.Id())
+	t.Logf("AeronStat saw: counter=%d keyed=%d static=%d", counter.ID(), keyed.ID(), static1.ID())
 
 	// Java addStaticCounter with the same (typeId, registrationId) must return the same counter.
 	out := runCountersCompose(t, "run", "--rm", "counters-tool", "add-static",
 		strconv.Itoa(int(staticTypeId)), strconv.FormatInt(staticRegId, 10), "java-ignored")
-	assert.Contains(t, out, fmt.Sprintf("STATIC id=%d registrationId=%d value=99", static1.Id(), staticRegId))
+	assert.Contains(t, out, fmt.Sprintf("STATIC id=%d registrationId=%d value=99", static1.ID(), staticRegId))
 
 	// Closing the Go client frees client owned counters but not the static counter.
-	counterId := counter.Id()
+	counterId := counter.ID()
 	require.NoError(t, client.Close())
 	client = connectE2E(t, dir)
 	defer client.Close()
@@ -184,10 +184,10 @@ func TestCountersE2EGoToJava(t *testing.T) {
 		return reader.GetCounterState(counterId) != counters.RecordAllocated ||
 			reader.GetCounterLabel(counterId) != label
 	})
-	assert.Equal(t, counters.RecordAllocated, reader.GetCounterState(static1.Id()))
+	assert.Equal(t, counters.RecordAllocated, reader.GetCounterState(static1.ID()))
 	static3, err := client.AddStaticCounterByLabel(staticTypeId, staticLabel, staticRegId)
 	require.NoError(t, err)
-	assert.Equal(t, static1.Id(), static3.Id())
+	assert.Equal(t, static1.ID(), static3.ID())
 	assert.EqualValues(t, 99, static3.Get())
 }
 
@@ -206,7 +206,7 @@ func TestCountersE2EJavaToGo(t *testing.T) {
 	available := make(chan [2]int64, 64)
 	unavailable := make(chan [2]int64, 64)
 	client.AddAvailableCounterHandler(counterHandlerFunc(func(r *counters.Reader, regId int64, counterId int32) {
-		if r.GetCounterTypeId(counterId) == typeId {
+		if r.GetCounterTypeID(counterId) == typeId {
 			available <- [2]int64{regId, int64(counterId)}
 		}
 	}))
@@ -255,11 +255,11 @@ func TestCountersE2EJavaToGo(t *testing.T) {
 	})
 	require.Equal(t, javaId, found)
 	waitFor(t, 5*time.Second, "java value", func() bool { return reader.GetCounterValue(javaId) == 31337 })
-	t.Logf("java counter id=%d registrationId=%d valuesRegId=%d owner=%d", javaId, javaRegId, reader.GetCounterRegistrationId(javaId), reader.GetCounterOwnerId(javaId))
-	assert.Equal(t, javaRegId, reader.GetCounterRegistrationId(javaId))
+	t.Logf("java counter id=%d registrationId=%d valuesRegId=%d owner=%d", javaId, javaRegId, reader.GetCounterRegistrationID(javaId), reader.GetCounterOwnerID(javaId))
+	assert.Equal(t, javaRegId, reader.GetCounterRegistrationID(javaId))
 	// Registration ids are not unique across counter types (e.g. static counters), so match on type too.
-	assert.Equal(t, javaId, reader.FindByTypeIdAndRegistrationId(typeId, javaRegId))
-	assert.NotEqual(t, client.ClientID(), reader.GetCounterOwnerId(javaId))
+	assert.Equal(t, javaId, reader.FindByTypeIDAndRegistrationID(typeId, javaRegId))
+	assert.NotEqual(t, client.ClientID(), reader.GetCounterOwnerID(javaId))
 	rc, err := counters.NewReadableRegisteredCounter(reader, javaRegId, javaId)
 	require.NoError(t, err)
 	assert.EqualValues(t, 31337, rc.Get())

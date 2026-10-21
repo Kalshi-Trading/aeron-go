@@ -75,7 +75,7 @@ func main() {
 				claim.Abort()
 			} else {
 				bytes := ([]byte)(message)
-				claim.Buffer().PutBytesArray(claim.Offset(), &bytes, 0, int32(len(message)))
+				claim.Buffer().PutBytesSlice(claim.Offset(), bytes[:int32(len(message))])
 				claim.Commit()
 				log.Printf("%d: success!", counter)
 			}

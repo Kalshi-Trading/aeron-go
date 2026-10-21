@@ -277,13 +277,13 @@ func TestChannelUriTags(t *testing.T) {
 }
 
 func TestChannelUriAddSessionId(t *testing.T) {
-	got, err := AddSessionId("aeron:udp?endpoint=localhost:1", -5)
+	got, err := AddSessionID("aeron:udp?endpoint=localhost:1", -5)
 	require.NoError(t, err)
 	assert.Equal(t, "aeron:udp?endpoint=localhost:1|session-id=-5", got)
-	got, err = AddSessionId("aeron:udp?session-id=1|endpoint=localhost:1", 7)
+	got, err = AddSessionID("aeron:udp?session-id=1|endpoint=localhost:1", 7)
 	require.NoError(t, err)
 	assert.Equal(t, "aeron:udp?session-id=7|endpoint=localhost:1", got)
-	_, err = AddSessionId("udp", 7)
+	_, err = AddSessionID("udp", 7)
 	assert.Error(t, err)
 }
 

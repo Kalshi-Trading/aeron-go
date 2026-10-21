@@ -136,8 +136,8 @@ func (sub *Subscription) ChannelStatus() int {
 	}
 }
 
-// ChannelStatusId returns the counter ID used to represent the channel status of this Subscription.
-func (sub *Subscription) ChannelStatusId() int32 {
+// ChannelStatusID returns the counter ID used to represent the channel status of this Subscription.
+func (sub *Subscription) ChannelStatusID() int32 {
 	return sub.channelStatusID
 }
 
@@ -232,17 +232,6 @@ func (sub *Subscription) ControlledPoll(handler term.ControlledFragmentHandler, 
 	}
 
 	return fragmentsRead
-}
-
-//go:norace
-func (sub *Subscription) hasImage(sessionID int32) bool {
-	img := sub.images.Get()
-	for _, image := range img {
-		if image.SessionID() == sessionID {
-			return true
-		}
-	}
-	return false
 }
 
 // addImage publishes a new copy of the image list with the image appended (copy-on-write) so that concurrent

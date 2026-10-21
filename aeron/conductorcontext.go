@@ -78,7 +78,7 @@ func appendToCounterLabel(metaData *atomic.Buffer, counterID int32, value string
 	if len(b) == 0 {
 		return 0, nil
 	}
-	metaData.PutBytesArray(recordOffset+ctr.LabelOffset+4+existing, &b, 0, int32(len(b)))
+	metaData.PutBytesSlice(recordOffset+ctr.LabelOffset+4+existing, b)
 	metaData.PutInt32Ordered(recordOffset+ctr.LabelOffset, existing+int32(len(b)))
 	return int32(len(b)), nil
 }
@@ -171,15 +171,4 @@ func (aeron *Aeron) ConductorAgentInvoker() *ConductorAgentInvoker {
 // Context returns the concluded context the client was connected with.
 func (aeron *Aeron) Context() *Context {
 	return aeron.context
-}
-
-// awaitIdle is called while a blocking call awaits a driver response. With the conductor agent invoker it performs a
-// duty cycle so responses are processed on the caller's goroutine.
-func (aeron *Aeron) awaitIdle() {
-	if aeron.invoker != nil {
-		if aeron.invoker.Invoke() > 0 {
-			return
-		}
-	}
-	aeron.context.awaitingIdleStrategy.Idle(0)
 }

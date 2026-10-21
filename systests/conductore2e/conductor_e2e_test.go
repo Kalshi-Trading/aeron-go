@@ -239,13 +239,13 @@ func TestCountersAndCloseHandlers(t *testing.T) {
 	counter, err := a.AddCounterByLabel(1001, "conductor-e2e")
 	require.NoError(t, err)
 	counter.Counter().Set(42)
-	require.EqualValues(t, 42, a.CounterReader().GetCounterValue(counter.Id()))
+	require.EqualValues(t, 42, a.CounterReader().GetCounterValue(counter.ID()))
 
 	static1, err := a.AddStaticCounterByLabel(1002, "conductor-e2e-static", 987654)
 	require.NoError(t, err)
 	static2, err := a.AddStaticCounterByLabel(1002, "conductor-e2e-static", 987654)
 	require.NoError(t, err)
-	require.Equal(t, static1.Id(), static2.Id(), "static counters are shared by (type, registration id)")
+	require.Equal(t, static1.ID(), static2.ID(), "static counters are shared by (type, registration id)")
 
 	var closed atomic.Int32
 	a.AddCloseHandler(func() { closed.Add(1) })

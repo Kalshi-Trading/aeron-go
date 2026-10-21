@@ -495,7 +495,7 @@ func (image *image) MtuLength() int32 {
 
 // InitialTermID returns the initial term id assigned when the publication was created.
 func (image *image) InitialTermID() int32 {
-	return image.header.InitialTermId()
+	return image.header.InitialTermID()
 }
 
 // PositionBitsToShift returns the number of bits to right shift a position to get a term count.
