@@ -33,40 +33,8 @@ const (
 	ReplayAllAndStop   = int64(-2) // AeronArchive.REPLAY_ALL_AND_STOP: replay up to the stop/limit position then stop
 )
 
-// Archive error codes carried in ControlResponse.RelevantId when Code is ERROR (ArchiveException in Java).
-const (
-	ErrorCodeGeneric                      = int64(0)
-	ErrorCodeActiveListing                = int64(1)
-	ErrorCodeActiveRecording              = int64(2)
-	ErrorCodeActiveSubscription           = int64(3)
-	ErrorCodeUnknownSubscription          = int64(4)
-	ErrorCodeUnknownRecording             = int64(5)
-	ErrorCodeUnknownReplay                = int64(6)
-	ErrorCodeMaxReplays                   = int64(7)
-	ErrorCodeMaxRecordings                = int64(8)
-	ErrorCodeInvalidExtension             = int64(9)
-	ErrorCodeAuthenticationRejected       = int64(10)
-	ErrorCodeStorageSpace                 = int64(11)
-	ErrorCodeUnknownReplication           = int64(12)
-	ErrorCodeUnauthorisedAction           = int64(13)
-	ErrorCodeReplicationConnectionFailure = int64(14)
-	ErrorCodeInvalidPosition              = int64(16)
-)
-
 // replayRequestTermLength mirrors AeronArchive.Context controlTermBufferLength default (64KiB).
 const replayRequestTermLength = 64 * 1024
-
-// ArchiveError is returned when the archive answers a request with a ControlResponse of code ERROR.
-// ErrorCode is one of the ErrorCode* constants.
-type ArchiveError struct {
-	CorrelationID int64
-	ErrorCode     int64
-	Message       string
-}
-
-func (e *ArchiveError) Error() string {
-	return fmt.Sprintf("response for correlationId=%d, errorCode=%d, error: %s", e.CorrelationID, e.ErrorCode, e.Message)
-}
 
 // ReplayParams contains the optional parameters for a replay, equivalent to
 // io.aeron.archive.client.ReplayParams. Use NewReplayParams() for the defaults.
@@ -160,7 +128,7 @@ func (archive *Archive) pollForResponseLocked(correlationID int64) (int64, error
 	if err != nil {
 		if r := archive.Control.Results.ControlResponse; r != nil && archive.Control.Results.IsPollComplete &&
 			r.CorrelationId == correlationID && r.Code == codecs.ControlResponseCode.ERROR {
-			return relevantID, &ArchiveError{CorrelationID: correlationID, ErrorCode: r.RelevantId, Message: string(r.ErrorMessage)}
+			return relevantID, newArchiveResponseException(string(r.ErrorMessage), r.RelevantId, correlationID)
 		}
 		return relevantID, err
 	}

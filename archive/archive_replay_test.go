@@ -80,7 +80,7 @@ func TestArchiveError(t *testing.T) {
 	if !errors.As(err, &archiveErr) || archiveErr.ErrorCode != ErrorCodeUnknownSubscription {
 		t.Fatal("errors.As failed")
 	}
-	if err.Error() != "response for correlationId=3, errorCode=4, error: no recording subscription" {
+	if err.Error() != "ArchiveException: no recording subscription" {
 		t.Fatalf("unexpected message %q", err.Error())
 	}
 }

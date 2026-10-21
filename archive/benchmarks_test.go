@@ -74,11 +74,14 @@ func BenchmarkDescriptorFragmentHandler(b *testing.B) {
 	length := int32(len(bytes))
 	atomicbuffer := atomic.MakeBuffer(bytes, len(bytes))
 
-	// Mock the correlationId to Control map
-	correlations.Store(rd.CorrelationId, new(Control))
+	control := &Control{archive: &Archive{Listeners: &ArchiveListeners{}, Options: DefaultOptions()}}
+	control.decoder = newResponseDecoder(false)
+	control.sessionID = rd.ControlSessionId
+	control.correlationID = rd.CorrelationId
+	control.descriptorsWanted = b.N + 1
 
 	for n := 0; n < b.N; n++ {
-		DescriptorFragmentHandler(archive.SessionID, atomicbuffer, 0, length, nil)
+		control.descriptorFragmentHandler(atomicbuffer, 0, length, nil)
 	}
 
 }

@@ -109,7 +109,7 @@ func expectNothing(t *testing.T, sub *aeron.Subscription, wait time.Duration) {
 	}
 }
 
-func expectArchiveError(t *testing.T, err error, code int64) {
+func expectArchiveError(t *testing.T, err error, code ArchiveErrorCode) {
 	t.Helper()
 	var archiveErr *ArchiveError
 	if !errors.As(err, &archiveErr) || archiveErr.ErrorCode != code {

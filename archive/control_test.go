@@ -25,23 +25,23 @@ func TestControl_PollForResponse(t *testing.T) {
 		correlations.Store(int64(1), control)
 		id, err := control.PollForResponse(1, 0)
 		assert.Zero(t, id)
-        assert.EqualError(t, err, `timeout waiting for correlationID 1`)
+		assert.EqualError(t, err, `timeout waiting for correlationID 1`)
 	})
 
 	t.Run("returns the error response", func(t *testing.T) {
 		control, image := newTestControl(t)
 		mockPollResponses(t, image,
 			&codecs.ControlResponse{
-				Code:             codecs.ControlResponseCode.ERROR,
-				CorrelationId:    1,
-				ErrorMessage:     []byte(`b0rk`),
-				RelevantId:       3,
+				Code:          codecs.ControlResponseCode.ERROR,
+				CorrelationId: 1,
+				ErrorMessage:  []byte(`b0rk`),
+				RelevantId:    3,
 			},
 		)
 		correlations.Store(int64(1), control)
 		id, err := control.PollForResponse(1, 0)
 		assert.EqualValues(t, 3, id)
-		assert.EqualError(t, err, `Control Response failure: b0rk`)
+		assert.EqualError(t, err, `ArchiveException: response for correlationId=1, errorCode=ACTIVE_SUBSCRIPTION, error: b0rk`)
 	})
 
 	t.Run("discards all responses preceding the first error", func(t *testing.T) {
@@ -50,33 +50,33 @@ func TestControl_PollForResponse(t *testing.T) {
 			&codecs.ControlResponse{Code: codecs.ControlResponseCode.OK},
 			&codecs.ControlResponse{Code: codecs.ControlResponseCode.OK},
 			&codecs.ControlResponse{
-				Code:             codecs.ControlResponseCode.ERROR,
-				CorrelationId:    1,
-				ErrorMessage:     []byte(`b0rk`),
-				RelevantId:       3,
+				Code:          codecs.ControlResponseCode.ERROR,
+				CorrelationId: 1,
+				ErrorMessage:  []byte(`b0rk`),
+				RelevantId:    3,
 			},
 		)
 		correlations.Store(int64(1), control)
 		id, err := control.PollForResponse(1, 0)
 		assert.EqualValues(t, 3, id)
-		assert.EqualError(t, err, `Control Response failure: b0rk`)
+		assert.EqualError(t, err, `ArchiveException: response for correlationId=1, errorCode=ACTIVE_SUBSCRIPTION, error: b0rk`)
 	})
 
 	t.Run("does not process messages after result", func(t *testing.T) {
 		control, image := newTestControl(t)
 		mockPollResponses(t, image,
 			&codecs.ControlResponse{
-				Code:             codecs.ControlResponseCode.ERROR,
-				CorrelationId:    1,
-				ErrorMessage:     []byte(`b0rk`),
-				RelevantId:       3,
+				Code:          codecs.ControlResponseCode.ERROR,
+				CorrelationId: 1,
+				ErrorMessage:  []byte(`b0rk`),
+				RelevantId:    3,
 			},
 			&codecs.ControlResponse{Code: codecs.ControlResponseCode.OK},
 		)
 		correlations.Store(int64(1), control)
 		id, err := control.PollForResponse(1, 0)
 		assert.EqualValues(t, 3, id)
-		assert.EqualError(t, err, `Control Response failure: b0rk`)
+		assert.EqualError(t, err, `ArchiveException: response for correlationId=1, errorCode=ACTIVE_SUBSCRIPTION, error: b0rk`)
 		fragments := image.Poll(func(buffer *atomic.Buffer, offset, length int32, header *logbuffer.Header) {}, 1)
 		assert.EqualValues(t, 1, fragments)
 	})
@@ -101,7 +101,7 @@ func TestControl_PollForErrorResponse(t *testing.T) {
 		)
 		cnt, err := control.PollForErrorResponse()
 		assert.EqualValues(t, 1, cnt)
-		assert.EqualError(t, err, `PollForErrorResponse received a ControlResponse (correlationId:0 Code:ERROR error="b0rk"`)
+		assert.EqualError(t, err, `ArchiveException: response for correlationId=0, errorCode=GENERIC, error: b0rk`)
 	})
 
 	t.Run("discards all queued responses unless error", func(t *testing.T) {
@@ -134,6 +134,7 @@ func TestControl_PollForErrorResponse(t *testing.T) {
 }
 
 func mockPollResponses(t *testing.T, image *aeron.MockImage, responses ...encodable) {
+	image.On("IsClosed").Return(false).Maybe()
 	poll := image.On("Poll", mock.Anything, mock.Anything)
 	poll.Maybe()
 	poll.Run(func(args mock.Arguments) {
@@ -202,16 +203,11 @@ func newTestControl(t *testing.T) (*Control, *aeron.MockImage) {
 	}
 	c.archive = &Archive{
 		Listeners: &ArchiveListeners{},
-		Options:   &Options{
-			Timeout: 100*time.Millisecond,
+		Options: &Options{
+			Timeout:      100 * time.Millisecond,
 			IdleStrategy: idlestrategy.Yielding{},
 		},
 	}
-	c.errorFragmentHandler = c.errorResponseFragmentHandler
-	c.fragmentAssembler = aeron.NewControlledFragmentAssembler(
-		c.onFragment, aeron.DefaultFragmentAssemblyBufferLength,
-	)
-	c.errorFragmentHandler = c.errorResponseFragmentHandler
 	return c, image
 }
 
