@@ -17,8 +17,6 @@ limitations under the License.
 package driver
 
 import (
-	"strings"
-
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/broadcast"
 	"github.com/lirm/aeron-go/aeron/command"
@@ -169,8 +167,7 @@ func (adapter *ListenerAdapter) OnMessage(msgTypeID int32, buffer *atomic.Buffer
 	case command.OnError:
 		msg := adapter.errorResponse.Wrap(buffer, offset)
 		errorMessage := msg.ErrorMessage()
-		if msg.ErrorCode() == command.ErrorCodeChannelEndpointError ||
-			strings.Contains(errorMessage, "Address already in use") { // hack for c media driver
+		if msg.ErrorCode() == command.ErrorCodeChannelEndpointError {
 			listener.OnChannelEndpointError(msg.OffendingCommandCorrelationID(), errorMessage)
 		} else {
 			listener.OnErrorResponse(msg.OffendingCommandCorrelationID(), msg.ErrorCode(), errorMessage)
