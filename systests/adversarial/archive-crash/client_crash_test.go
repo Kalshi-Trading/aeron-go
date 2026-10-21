@@ -276,7 +276,7 @@ func TestArchiveStorageFullThenRecovery(t *testing.T) {
 	replayVerify(t, arch, desc.RecordingId, desc.StartPosition, stop, stream, v)
 	require.Equal(t, stop, v.lastPos)
 
-	_, err = arch.PurgeRecording(desc.RecordingId)
+	err = arch.PurgeRecording(desc.RecordingId)
 	require.NoError(t, err)
 	recordAndVerify(t, arch, "aeron:udp?endpoint=localhost:27381", stream+2, 500)
 }
