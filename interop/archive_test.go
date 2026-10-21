@@ -8,6 +8,7 @@ import (
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/counters"
 	"github.com/lirm/aeron-go/archive"
+	"github.com/lirm/aeron-go/archive/status"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,9 +25,9 @@ func awaitRecordingCounter(t *testing.T, reader *counters.Reader, sessionID int3
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		counterID = archive.FindCounterIdBySession(reader, sessionID)
+		counterID = status.FindCounterIdBySession(reader, sessionID, status.NullValue)
 		if counterID != counters.NullCounterId {
-			return counterID, archive.GetRecordingId(reader, counterID)
+			return counterID, status.GetRecordingId(reader, counterID)
 		}
 		require.Truef(t, time.Now().Before(deadline), "no recording counter for session %d", sessionID)
 		time.Sleep(time.Millisecond)
