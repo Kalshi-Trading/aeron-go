@@ -85,3 +85,8 @@ func FrameSessionID(buffer *atomic.Buffer, frameOffset int32, sessionID int32) {
 func GetFrameLengthPlain(buffer *atomic.Buffer, frameOffset int32) int32 {
 	return buffer.GetInt32(lengthOffset(frameOffset))
 }
+
+// IsFrameAligned returns true if length is a multiple of FrameAlignment.
+func IsFrameAligned(length int32) bool {
+	return length&(FrameAlignment-1) == 0
+}
