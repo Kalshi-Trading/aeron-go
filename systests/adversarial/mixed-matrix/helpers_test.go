@@ -78,6 +78,10 @@ func TestMain(m *testing.M) {
 	if out, err := exec.Command("go", "build", "-o", peerBinary, "./cmd/mmpeer").CombinedOutput(); err != nil {
 		panic(fmt.Sprintf("building mmpeer: %v\n%s", err, out))
 	}
+	// the Java peer image is built here so that the suite runs standalone (e.g. from make e2e-adversarial)
+	if err := compose("--profile", "tools", "build", "adv-mm-peer"); err != nil {
+		panic(fmt.Sprintf("building the Java peer image: %v", err))
+	}
 	code := m.Run()
 	removePeers()
 	_ = compose("down", "--timeout", "1")
