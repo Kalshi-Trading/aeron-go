@@ -152,7 +152,7 @@ func TouchFile(path string) error {
 	if path == "" {
 		return nil
 	}
-	return os.WriteFile(path, []byte("ready\n"), 0o644)
+	return os.WriteFile(path, []byte("ready\n"), 0o600)
 }
 
 // ReassemblingPoller adapts a subscription to PollFunc, reassembling fragmented messages.
