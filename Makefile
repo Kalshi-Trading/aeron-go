@@ -83,6 +83,7 @@ e2e-down:
 #   2. cluster/client against the 1-node cluster (its own client driver)
 #   3. cluster/ (Go clustered service); its ClusteredMediaDriver shares archive port 8110 with the auth archive
 #   4. cluster/client with CLUSTER_E2E_NODES=3 (leader failover); the 3 nodes reuse cluster-node-0's ports
+#   5. systests/conductore2e driver-kill test (AERON_E2E_KILL=1 kills and restarts the archiving driver), last
 e2e-test:
 	status=0; \
 	$(E2E_ENV) $(GO) test -count=1 -p 1 -timeout 20m $$($(GO) list ./... | grep -v -e '/cluster$$' -e '/cluster/client$$') || status=1; \
@@ -92,6 +93,7 @@ e2e-test:
 	$(CLUSTER_COMPOSE) rm -sf cluster-node-0; \
 	$(CLUSTER_COMPOSE) --profile three up -d --build --wait node0 node1 node2 || status=1; \
 	$(E2E_ENV) AERON_DIR=$(CLUSTER_AERON_DIR) CLUSTER_E2E_NODES=3 $(GO) test -count=1 -timeout 10m ./cluster/client/ || status=1; \
+	$(E2E_ENV) AERON_E2E_KILL=1 $(GO) test -count=1 -timeout 5m -run TestDriverKillTimesOutAndClosesCleanly ./systests/conductore2e/ || status=1; \
 	exit $$status
 
 e2e:

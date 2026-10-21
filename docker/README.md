@@ -16,7 +16,7 @@ mirror.gcr.io and tags it with its Docker Hub name (or set JAVA_IMAGE / GO_IMAGE
 
 ## End-to-end tests
 
-    make e2e          # start archiving-driver + auth archive + 1-node cluster, run every AERON_E2E=1 test, tear down
+    make e2e          # start every docker/*.compose.yml stack the AERON_E2E=1 tests need, run them all, tear down
     make e2e-docker   # same driver plus the Go clients from e2e/cmd running in containers (profile e2e)
 
 `make e2e-docker` is `docker compose -f docker/docker-compose.yml --profile e2e up --build` plus
