@@ -114,7 +114,7 @@ func NewAeronCluster(
 		opts:                options,
 		aeronClient:         aeronClient,
 		egressSub:           egressSub,
-		ingressChannel:      &ingressChannel,
+		ingressChannel:      ingressChannel,
 		clusterSessionId:    cluster.NullValue,
 		leadershipTermId:    cluster.NullValue,
 		leaderMemberId:      cluster.NullValue,

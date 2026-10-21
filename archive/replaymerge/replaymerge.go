@@ -74,7 +74,7 @@ type ReplayMerge struct {
 	replayDestination string
 	liveDestination   string
 	replayEndpoint    string
-	replayChannelUri  aeron.ChannelUri
+	replayChannelUri  *aeron.ChannelUri
 }
 
 // NewReplayMerge creates a ReplayMerge to manage the merging of a replayed stream and switching over to live stream as
@@ -136,7 +136,7 @@ func NewReplayMerge(
 	rm.replayChannelUri.Set(aeron.LingerParamName, "0")
 	rm.replayChannelUri.Set(aeron.EosParamName, "false")
 
-	var replayDestinationUri aeron.ChannelUri
+	var replayDestinationUri *aeron.ChannelUri
 	replayDestinationUri, err = aeron.ParseChannelUri(replayDestination)
 	if err != nil {
 		err = fmt.Errorf("Invalid replay destination '%s'", replayDestination)
