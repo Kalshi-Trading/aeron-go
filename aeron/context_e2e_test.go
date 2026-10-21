@@ -154,3 +154,33 @@ func pubSubRoundTrip(t *testing.T, a *Aeron, channel string, streamID int32) {
 	require.NoError(t, pub.Close())
 	require.NoError(t, sub.Close())
 }
+
+func TestContextE2EAwaitingIdleStrategyAndContextReuse(t *testing.T) {
+	requireE2E(t)
+	idler := &countingIdler{}
+	ctx := NewContext().ClientName("go-ctx-e2e-reuse").AwaitingIdleStrategy(idler)
+	a, err := Connect(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, canonicalPath(os.Getenv(AeronDirEnv)), ctx.AeronDirectory())
+
+	pub, err := a.AddPublication("aeron:ipc", 7103)
+	require.NoError(t, err)
+	require.NoError(t, pub.Close())
+	assert.Positive(t, idler.n.Load(), "awaitResponse idles with the context's awaiting idle strategy")
+
+	_, err = Connect(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "context is already in use")
+
+	firstID := ctx.ClientID()
+	require.NoError(t, a.Close())
+	a, err = Connect(ctx)
+	require.NoError(t, err)
+	assert.NotEqual(t, firstID, ctx.ClientID())
+	pubSubRoundTrip(t, a, "aeron:ipc", 7104)
+	require.NoError(t, a.Close())
+
+	var errLog strings.Builder
+	_, err = ctx.SaveErrorLog(&errLog)
+	require.NoError(t, err)
+}
