@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
+	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/lirm/aeron-go/archive"
 )
 
@@ -127,7 +128,7 @@ func (ctx *Context) validate() error {
 	if ctx.StartPosition < FromLive {
 		return configError("invalid startPosition %d", ctx.StartPosition)
 	}
-	if ctx.StartPosition >= 0 && ctx.StartPosition&(int64(frameAlignment)-1) != 0 {
+	if ctx.StartPosition >= 0 && ctx.StartPosition&(int64(logbuffer.FrameAlignment)-1) != 0 {
 		return configError("startPosition %d is not frame aligned", ctx.StartPosition)
 	}
 	replayURI, err := aeron.ParseChannelUri(ctx.ReplayChannel)

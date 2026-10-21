@@ -192,8 +192,8 @@ type PersistentSubscription struct {
 
 	controlledFragmentHandler   term.ControlledFragmentHandler
 	uncontrolledFragmentHandler term.FragmentHandler
-	controlledAssembler         imageControlledFragmentAssembler
-	uncontrolledAssembler       imageFragmentAssembler
+	controlledAssembler         *aeron.ImageControlledFragmentAssembler
+	uncontrolledAssembler       *aeron.ImageFragmentAssembler
 
 	joinDifference           int64
 	nextLivePosition         int64
@@ -252,8 +252,8 @@ func newPersistentSubscription(ctx *Context, aeronClient aeronClient) *Persisten
 		op.correlationID = aeron.NullValue
 	}
 	ps.maxRecordedPosition.ps = ps
-	ps.controlledAssembler.delegate = ps.onFragmentControlled
-	ps.uncontrolledAssembler.delegate = ps.onFragmentUncontrolled
+	ps.controlledAssembler = aeron.NewImageControlledFragmentAssembler(ps.onFragmentControlled, 0)
+	ps.uncontrolledAssembler = aeron.NewImageFragmentAssembler(ps.onFragmentUncontrolled, 0)
 	ps.setJoinDifference(minInt64)
 	setCounter(ps.stateCounter, int64(ps.state))
 	return ps
@@ -960,7 +960,7 @@ func (ps *PersistentSubscription) onReplayCatchupFragmentControlled(buffer *atom
 		ps.setState(StateLive)
 		return term.ControlledPollActionAbort
 	}
-	return ps.controlledAssembler.onFragment(buffer, offset, length, header)
+	return ps.controlledAssembler.OnFragment(buffer, offset, length, header)
 }
 
 func (ps *PersistentSubscription) onReplayCatchupFragmentUncontrolled(buffer *atomic.Buffer, offset int32,
@@ -969,7 +969,7 @@ func (ps *PersistentSubscription) onReplayCatchupFragmentUncontrolled(buffer *at
 		ps.setState(StateLive)
 		return term.ControlledPollActionAbort
 	}
-	ps.uncontrolledAssembler.onFragment(buffer, offset, length, header)
+	ps.uncontrolledAssembler.OnFragment(buffer, offset, length, header)
 	return term.ControlledPollActionContinue
 }
 
@@ -1086,9 +1086,9 @@ func (ps *PersistentSubscription) onLiveLeft() {
 
 func (ps *PersistentSubscription) doPoll(image aeron.Image, fragmentLimit int, isControlled bool) int {
 	if isControlled {
-		return image.ControlledPoll(ps.controlledAssembler.onFragment, fragmentLimit)
+		return image.ControlledPoll(ps.controlledAssembler.OnFragment, fragmentLimit)
 	}
-	return image.Poll(ps.uncontrolledAssembler.onFragment, fragmentLimit)
+	return image.Poll(ps.uncontrolledAssembler.OnFragment, fragmentLimit)
 }
 
 func (ps *PersistentSubscription) onFragmentControlled(buffer *atomic.Buffer, offset int32, length int32,

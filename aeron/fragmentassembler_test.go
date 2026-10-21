@@ -15,6 +15,7 @@
 package aeron
 
 import (
+	"math"
 	"sync"
 	"testing"
 
@@ -482,4 +483,36 @@ func TestImageAssemblersExposeBufferBuilder(t *testing.T) {
 	cfa := NewImageControlledFragmentAssembler(nil, 0)
 	assert.EqualValues(t, 0, cfa.BufferBuilder().Capacity())
 	assert.Nil(t, cfa.Delegate())
+}
+
+func TestAssemblersToleratesInitialBufferLengthAboveMaxCapacity(t *testing.T) {
+	for _, initial := range []int32{BufferBuilderMaxCapacity + 1, math.MaxInt32, -1} {
+		tt := newTestTerm(testTermLength, testInitialTermID)
+		msg := patternBytes(3000, 21)
+		frames, _ := tt.writeMessage(0, msg, 1376, fields(testSessionID), nil)
+		var got [][]byte
+		fh := func(b *atomic.Buffer, o, l int32, _ *logbuffer.Header) { got = append(got, b.GetBytesArray(o, l)) }
+		ch := func(b *atomic.Buffer, o, l int32, h *logbuffer.Header) term.ControlledPollAction {
+			fh(b, o, l, h)
+			return term.ControlledPollActionContinue
+		}
+		fa := NewFragmentAssembler(fh, initial)
+		cfa := NewControlledFragmentAssembler(ch, initial)
+		ifa := NewImageFragmentAssembler(fh, initial)
+		icfa := NewImageControlledFragmentAssembler(ch, initial)
+		require.NotNil(t, ifa.BufferBuilder())
+		require.NotNil(t, icfa.BufferBuilder())
+		assert.EqualValues(t, 0, ifa.BufferBuilder().Capacity())
+		for _, h := range []func(*atomic.Buffer, int32, int32, *logbuffer.Header){
+			fa.OnFragment, ifa.OnFragment,
+			func(b *atomic.Buffer, o, l int32, hd *logbuffer.Header) { cfa.OnFragment(b, o, l, hd) },
+			func(b *atomic.Buffer, o, l int32, hd *logbuffer.Header) { icfa.OnFragment(b, o, l, hd) },
+		} {
+			tt.deliver(h, frames...)
+		}
+		require.Len(t, got, 4, "initial=%d", initial)
+		for _, g := range got {
+			assert.Equal(t, msg, g)
+		}
+	}
 }
