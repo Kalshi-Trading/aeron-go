@@ -53,11 +53,11 @@ type publicationBase struct {
 	channelStatusIndicatorID int32
 	revokeOnClose            bool
 
-	isClosed     atomic.Bool
-	metaData     *logbuffer.LogBufferMetaData
-	logMetaData  *atomic.Buffer
-	termBuffers  [logbuffer.PartitionCount]*atomic.Buffer
-	logBuffers   *logbuffer.LogBuffers
+	isClosed    atomic.Bool
+	metaData    *logbuffer.LogBufferMetaData
+	logMetaData *atomic.Buffer
+	termBuffers [logbuffer.PartitionCount]*atomic.Buffer
+	logBuffers  *logbuffer.LogBuffers
 }
 
 func (pub *publicationBase) init(logBuffers *logbuffer.LogBuffers) {

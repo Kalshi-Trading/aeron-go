@@ -123,4 +123,3 @@ func (claim *Claim) PutBytes(srcBuffer *atomic.Buffer, srcIndex int32, length in
 	claim.buffer.PutBytes(DataFrameHeader.Length, srcBuffer, srcIndex, length)
 	return claim
 }
-
