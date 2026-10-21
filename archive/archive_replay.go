@@ -341,22 +341,3 @@ func (archive *Archive) GetMaxRecordedPosition(recordingID int64) (int64, error)
 		return archive.Proxy.MaxRecordedPositionRequest(correlationID, recordingID)
 	})
 }
-
-// ArchiveID returns the id of the connected archive (aeron.archive.id). The value is cached after the first
-// successful request.
-func (archive *Archive) ArchiveID() (int64, error) {
-	archive.mtx.Lock()
-	defer archive.mtx.Unlock()
-	if archive.archiveIDSet {
-		return archive.archiveID, nil
-	}
-	id, err := archive.requestLocked(nextCorrelationID(), func(correlationID int64) error {
-		return archive.Proxy.ArchiveIdRequest(correlationID)
-	})
-	if err != nil {
-		return 0, err
-	}
-	archive.archiveID = id
-	archive.archiveIDSet = true
-	return id, nil
-}

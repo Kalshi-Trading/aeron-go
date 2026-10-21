@@ -19,24 +19,6 @@ import (
 	"bytes"
 )
 
-// Encoders for all the protocol packets
-//
-// Each of these functions creates a []byte suitable for sending over
-// the wire by using the generated encoders created using
-// simple-binary-encoding.
-//
-// All the packet specificationss are defined in the aeron-archive protocol
-// maintained at:
-// http://github.com/real-logic/aeron/blob/master/aeron-archive/src/main/resources/archive/aeron-archive-codecs.xml)
-//
-// The codecs are generated from that specification using Simple
-// Binary Encoding (SBE) from https://github.com/real-logic/simple-binary-encoding
-// ConnectRequestPacket encodes an AuthConnectRequest with no credentials; the plain ConnectRequest
-// message was removed from the archive schema.
-func ConnectRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, correlationID int64, responseStream int32, responseChannel string) ([]byte, error) {
-	return AuthConnectRequestPacket(marshaller, rangeChecking, correlationID, responseStream, responseChannel, nil)
-}
-
 func CloseSessionRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64) ([]byte, error) {
 	var request CloseSessionRequest
 
@@ -549,7 +531,7 @@ func AttachSegmentsRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool
 	return buffer.Bytes(), nil
 }
 
-func AuthConnectRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, correlationID int64, responseStream int32, responseChannel string, encodedCredentials []uint8) ([]byte, error) {
+func AuthConnectRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, correlationID int64, responseStream int32, responseChannel string, encodedCredentials []uint8, clientInfo string) ([]byte, error) {
 	var request AuthConnectRequest
 
 	request.CorrelationId = correlationID
@@ -557,6 +539,7 @@ func AuthConnectRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, c
 	request.ResponseStreamId = responseStream
 	request.ResponseChannel = []uint8(responseChannel)
 	request.EncodedCredentials = encodedCredentials
+	request.ClientInfo = []uint8(clientInfo)
 
 	// Marshal it
 	header := MessageHeader{BlockLength: request.SbeBlockLength(), TemplateId: request.SbeTemplateId(), SchemaId: request.SbeSchemaId(), Version: request.SbeSchemaVersion()}
@@ -695,5 +678,21 @@ func PurgeRecordingRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool
 		return nil, err
 	}
 
+	return buffer.Bytes(), nil
+}
+
+func ArchiveIdRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64) ([]byte, error) {
+	var request ArchiveIdRequest
+	request.ControlSessionId = controlSessionId
+	request.CorrelationId = correlationId
+
+	header := MessageHeader{BlockLength: request.SbeBlockLength(), TemplateId: request.SbeTemplateId(), SchemaId: request.SbeSchemaId(), Version: request.SbeSchemaVersion()}
+	buffer := new(bytes.Buffer)
+	if err := header.Encode(marshaller, buffer); err != nil {
+		return nil, err
+	}
+	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+		return nil, err
+	}
 	return buffer.Bytes(), nil
 }

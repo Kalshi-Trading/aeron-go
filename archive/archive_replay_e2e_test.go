@@ -147,9 +147,8 @@ func TestE2ERecordingAndReplay(t *testing.T) {
 	responseChannel := fmt.Sprintf("aeron:udp?control-mode=response|control=localhost:%d", port+2)
 	replayStream := stream + 1
 
-	id, err := a.ArchiveID()
-	if err != nil || id != 1 {
-		t.Fatalf("ArchiveID() = %d, %v; docker archive uses aeron.archive.id=1", id, err)
+	if id := a.ArchiveID(); id != 1 {
+		t.Fatalf("ArchiveID() = %d; docker archive uses aeron.archive.id=1", id)
 	}
 
 	subscriptionID, err := a.StartRecording(liveChannel, stream, false, false)

@@ -96,12 +96,3 @@ func MaxRecordedPositionRequestPacket(marshaller *SbeGoMarshaller, rangeChecking
 	}
 	return encodePacket(marshaller, rangeChecking, request)
 }
-
-// ArchiveIdRequestPacket encodes a request for the id of the archive.
-func ArchiveIdRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64) ([]byte, error) {
-	request := &ArchiveIdRequest{
-		ControlSessionId: controlSessionId,
-		CorrelationId:    correlationId,
-	}
-	return encodePacket(marshaller, rangeChecking, request)
-}
