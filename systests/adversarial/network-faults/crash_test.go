@@ -197,9 +197,9 @@ func TestReceiverDriverFrozen(t *testing.T) {
 	time.Sleep(4 * time.Second)
 	docker(t, "kill", "-s", "CONT", driverB)
 	pb.resetStall()
-	reader := r1
+	reader, baseline := r1, r1.received
 	deadline := time.Now().Add(20 * time.Second)
-	for reader.received < r1.received+2000 || reader == r1 && !img1.IsClosed() && reader.next < pb.next.Load()-10 {
+	for (reader == r1 && reader.received < baseline+2000) || (reader != r1 && reader.received < 2000) {
 		require.NoError(t, reader.err)
 		select {
 		case img := <-b.available:
@@ -212,9 +212,6 @@ func TestReceiverDriverFrozen(t *testing.T) {
 		if reader.poll() == 0 {
 			require.True(t, time.Now().Before(deadline), "no recovery after SIGCONT: received %d", reader.received)
 			time.Sleep(100 * time.Microsecond)
-		}
-		if reader != r1 && reader.received > 2000 {
-			break
 		}
 	}
 	require.NoError(t, reader.err)

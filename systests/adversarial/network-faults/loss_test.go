@@ -109,6 +109,7 @@ func TestLossPublicationTypes(t *testing.T) {
 		{name: "exclusive-offer", count: 10000, size: mixedSize, exclusive: true},
 		{name: "concurrent-tryclaim", count: 10000, mode: modeTryClaim},
 		{name: "exclusive-tryclaim", count: 10000, mode: modeTryClaim, exclusive: true},
+		{name: "exclusive-offerblock", count: 10000, mode: modeOfferBlock, exclusive: true},
 		{name: "controlled-poll", count: 10000, size: mixedSize, controlled: true},
 		{name: "large-fragmented", count: 60, size: func(seq int64) int { return 64<<10 + int(seq)*7919 }, params: "term-length=8m"},
 		{name: "small-mtu", count: 5000, size: mixedSize, params: "mtu=576"},

@@ -32,6 +32,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -74,6 +75,23 @@ func streamID() int32 {
 
 var stackOnce sync.Once
 var stackErr error
+var stackUp atomic.Bool
+
+// TestMain tears the compose stack down after the run so the next adversarial suite starts from a clean host.
+// Concurrent runs of this suite (for example two go test invocations) would fight over the same containers and
+// qdiscs, so a run holds an exclusive lock for its whole duration.
+func TestMain(m *testing.M) {
+	if lock, err := os.OpenFile("/tmp/aeron-adv-network-faults.lock", os.O_CREATE|os.O_RDWR, 0o666); err == nil {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX)
+		defer lock.Close()
+	}
+	code := m.Run()
+	if stackUp.Load() {
+		_ = exec.Command("docker", "exec", netemContainer, "tc", "qdisc", "del", "dev", "lo", "root").Run()
+		_ = compose("down", "--remove-orphans", "--timeout", "5")
+	}
+	os.Exit(code)
+}
 
 // requireStack skips unless AERON_E2E=1 AERON_ADVERSARIAL=1, brings the compose stack up, makes sure both drivers are
 // running (an earlier test may have killed or frozen one) and clears any netem rules.
@@ -82,7 +100,20 @@ func requireStack(t *testing.T) {
 	if !e2e.Enabled() || os.Getenv("AERON_ADVERSARIAL") != "1" {
 		t.Skip("set AERON_E2E=1 AERON_ADVERSARIAL=1 (injects netem faults and kills docker/adversarial-network-faults.compose.yml containers)")
 	}
-	stackOnce.Do(func() { stackErr = compose("up", "-d", "--build", "--wait") })
+	// Recreate the drivers once per test binary so no state (archive recordings, lingering channels) from an earlier
+	// run leaks into this one.
+	stackOnce.Do(func() {
+		if exec.Command("docker", "image", "inspect", interopImage).Run() != nil {
+			out, err := exec.Command("docker", "compose", "-f", "../../../docker/interop/docker-compose.yml",
+				"--profile", "tools", "build").CombinedOutput()
+			if err != nil {
+				stackErr = fmt.Errorf("building %s: %v: %s", interopImage, err, out)
+				return
+			}
+		}
+		stackErr = compose("up", "-d", "--build", "--wait", "--force-recreate")
+		stackUp.Store(true)
+	})
 	require.NoError(t, stackErr)
 	for _, c := range []string{driverA, driverB} {
 		if paused(c) {

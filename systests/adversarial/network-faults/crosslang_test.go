@@ -1,7 +1,9 @@
 package networkfaults
 
 import (
+	"encoding/binary"
 	"fmt"
+	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"testing"
 	"time"
 
@@ -166,6 +168,63 @@ func TestGoPublisherToJavaSubscriberUnderLoss(t *testing.T) {
 				require.Equal(t, pub.Position(), r.Position)
 				require.Empty(t, a.errors.all())
 			})
+		}
+	}
+}
+
+// javaReader polls one image of InteropTool messages, checking each verifies and that sequences are contiguous from
+// the first one seen (a new image after a partition starts mid stream).
+type javaReader struct {
+	img         aeron.Image
+	first, next int64
+	err         string
+	assembler   *aeron.ImageFragmentAssembler
+	sizes       interop.Sizes
+}
+
+func newJavaReader(img aeron.Image) *javaReader {
+	r := &javaReader{img: img, first: -1, sizes: interop.Sizes{100, 3000}}
+	r.assembler = aeron.NewImageFragmentAssembler(func(buf *ab.Buffer, off, length int32, _ *logbuffer.Header) {
+		msg := buf.GetBytesArray(off, length)
+		seq := int64(binary.LittleEndian.Uint64(msg))
+		if r.first < 0 {
+			r.first, r.next = seq, seq
+		}
+		if e := interop.Verify(msg, r.next, r.sizes); e != "" && r.err == "" {
+			r.err = e
+		}
+		r.next++
+	}, 0)
+	return r
+}
+
+func (r *javaReader) poll() int { return r.img.Poll(r.assembler.OnFragment, 64) }
+
+func (r *javaReader) pollUntil(t *testing.T, n int64, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for r.first < 0 || r.next-r.first < n {
+		require.Empty(t, r.err)
+		if r.poll() == 0 {
+			require.True(t, time.Now().Before(deadline), "timed out: %d..%d", r.first, r.next)
+			time.Sleep(100 * time.Microsecond)
+		}
+	}
+	require.Empty(t, r.err)
+}
+
+func awaitImageWhilePolling(t *testing.T, ch chan aeron.Image, poll func() int, timeout time.Duration) aeron.Image {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		select {
+		case img := <-ch:
+			return img
+		default:
+		}
+		require.True(t, time.Now().Before(deadline), "no image event after %v", timeout)
+		if poll() == 0 {
+			time.Sleep(100 * time.Microsecond)
 		}
 	}
 }

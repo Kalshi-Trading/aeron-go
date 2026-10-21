@@ -9,6 +9,7 @@ import (
 	ab "github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/lirm/aeron-go/aeron/logbuffer/term"
+	"github.com/lirm/aeron-go/aeron/util"
 	"github.com/lirm/aeron-go/e2e"
 )
 
@@ -17,6 +18,7 @@ type pubMode int
 const (
 	modeOffer pubMode = iota
 	modeTryClaim
+	modeOfferBlock // ExclusivePublication.OfferBlock of one pre-formatted frame, falling back to Offer at term ends
 )
 
 func smallSize(seq int64) int { return e2e.HeaderLength + int(seq%200) }
@@ -61,7 +63,10 @@ func (p *publisher) publish(count int64, interval time.Duration, timeout time.Du
 		e2e.EncodeMessage(msg[:n], seq)
 		for {
 			var r int64
-			if p.mode == modeTryClaim && int32(n) <= p.pub.MaxPayloadLength() {
+			if ex, ok := p.pub.(*aeron.ExclusivePublication); ok && p.mode == modeOfferBlock && blockFits(ex, n) {
+				block := formatFrame(ex, msg[:n])
+				r = ex.OfferBlock(ab.MakeBuffer(block), 0, int32(len(block)))
+			} else if p.mode == modeTryClaim && int32(n) <= p.pub.MaxPayloadLength() {
 				if r = p.pub.TryClaim(int32(n), &claim); r > 0 {
 					claim.Buffer().PutBytesSlice(claim.Offset(), msg[:n])
 					claim.Commit()
@@ -195,4 +200,28 @@ func udp(host string, p int, params string) string {
 		ch += "|" + params
 	}
 	return ch
+}
+
+// blockFits reports whether a single unfragmented frame of n bytes fits in the rest of the current term, which
+// OfferBlock requires (it does not pad and rotate like Offer).
+func blockFits(pub *aeron.ExclusivePublication, n int) bool {
+	frame := util.AlignInt32(int32(n)+logbuffer.DataFrameHeader.Length, logbuffer.FrameAlignment)
+	return int32(n) <= pub.MaxPayloadLength() && pub.TermOffset() > 0 && pub.TermOffset()+frame <= pub.TermBufferLength()
+}
+
+// formatFrame lays msg out as one committed data frame at the publication's current position, as an archive
+// replicator would for OfferBlock.
+func formatFrame(pub *aeron.ExclusivePublication, msg []byte) []byte {
+	hdr := &logbuffer.DataFrameHeader
+	frame := make([]byte, util.AlignInt32(int32(len(msg))+hdr.Length, logbuffer.FrameAlignment))
+	b := ab.MakeBuffer(frame)
+	b.PutInt32(hdr.FrameLengthFieldOffset, int32(len(msg))+hdr.Length)
+	b.PutUInt8(hdr.FlagsFieldOffset, 0xC0)
+	b.PutUInt16(hdr.TypeFieldOffset, hdr.TypeData)
+	b.PutInt32(hdr.TermOffsetFieldOffset, pub.TermOffset())
+	b.PutInt32(hdr.SessionIDFieldOffset, pub.SessionID())
+	b.PutInt32(hdr.StreamIDFieldOffset, pub.StreamID())
+	b.PutInt32(hdr.TermIDFieldOffset, pub.TermID())
+	copy(frame[hdr.Length:], msg)
+	return frame
 }
