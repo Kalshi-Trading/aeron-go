@@ -73,7 +73,7 @@ func main() {
 	if received != messages {
 		log.Fatalf("replayed %d messages, expected %d", received, messages)
 	}
-	if err := arch.PurgeRecording(recordingID); err != nil {
+	if _, err := arch.PurgeRecording(recordingID); err != nil {
 		log.Printf("PurgeRecording(%d) failed: %v", recordingID, err)
 	}
 }
