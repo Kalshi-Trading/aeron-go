@@ -152,6 +152,9 @@ func (pub *publicationBase) IsClosed() bool {
 
 // IsRevoked returns whether the publication's log has been marked revoked (Aeron 1.48+).
 func (pub *publicationBase) IsRevoked() bool {
+	if pub.IsClosed() {
+		return false
+	}
 	return pub.logMetaData.GetUInt8(logIsPublicationRevokedOffset) == 1
 }
 
@@ -271,6 +274,7 @@ func (pub *publicationBase) checkForMaxMessageLength(length int32) {
 }
 
 func (pub *publicationBase) checkForMaxPayloadLength(length int32) {
+	checkPositiveLength(length)
 	if length > pub.maxPayloadLength {
 		panic(fmt.Sprintf("claim exceeds maxPayloadLength=%d, length=%d", pub.maxPayloadLength, length))
 	}
@@ -319,5 +323,5 @@ func PublicationErrorString(position int64) string {
 	if position >= 0 {
 		return "NONE"
 	}
-	return fmt.Sprintf("UNKNOWN(%d)", position)
+	return "UNKNOWN"
 }
