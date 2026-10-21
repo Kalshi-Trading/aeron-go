@@ -1,0 +1,42 @@
+# Java Aeron 1.53.3 media driver for the adversarial client-conductor / driver-protocol fault suite in
+# systests/adversarial/conductor-faults (AERON_E2E=1 AERON_ADVERSARIAL=1). The tests SIGKILL, SIGSTOP/SIGCONT and
+# restart this container, so it is separate from every other stack:
+#
+#   adv-conductor-faults-driver  standalone MediaDriver, AERON_DIR=/dev/shm/aeron-adv-conductor-faults, host network.
+#                                Short client/image liveness timeouts so crashed or stalled clients are detected fast.
+#
+# Resources owned by the suite: UDP ports 27800-27899, stream ids 9800-9899.
+#
+#   docker compose -p adv-conductor-faults -f docker/adversarial-conductor-faults.compose.yml up -d --build --wait
+#   AERON_E2E=1 AERON_ADVERSARIAL=1 go test -count=1 -p 1 -race -v ./systests/adversarial/conductor-faults/
+name: adv-conductor-faults
+services:
+  driver:
+    build: .
+    image: docker-archiving-driver
+    container_name: adv-conductor-faults-driver
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    shm_size: 1g
+    volumes:
+      - /dev/shm:/dev/shm
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-adv-conductor-faults
+        -Daeron.dir.delete.on.start=true
+        -Daeron.dir.delete.on.shutdown=true
+        -Daeron.client.liveness.timeout=2000000000
+        -Daeron.image.liveness.timeout=2000000000
+        -Daeron.publication.unblock.timeout=4000000000
+        -Daeron.publication.connection.timeout=1500000000
+        -Daeron.publication.linger.timeout=200000000
+        -Daeron.timer.interval=100000000
+        -Daeron.untethered.window.limit.timeout=1000000000
+        -Daeron.untethered.resting.timeout=1000000000
+        -Daeron.threading.mode=SHARED
+    command: ["io.aeron.driver.MediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-adv-conductor-faults/cnc.dat"]
+      interval: 1s
+      retries: 30
