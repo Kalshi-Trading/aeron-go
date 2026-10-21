@@ -109,7 +109,8 @@ type IdAndAvailableCounterHandler struct {
 	handler        AvailableCounterHandler
 }
 
-func newIDAndAvailablePair(registrationId int64, handler AvailableCounterHandler) *IdAndAvailableCounterHandler {
+// NewIdAndAvailablePair pairs a counter handler with its registration id.
+func NewIdAndAvailablePair(registrationId int64, handler AvailableCounterHandler) *IdAndAvailableCounterHandler {
 	return &IdAndAvailableCounterHandler{registrationId: registrationId, handler: handler}
 }
 
@@ -118,7 +119,8 @@ type IdAndUnavailableCounterHandler struct {
 	handler        UnavailableCounterHandler
 }
 
-func newIDAndUnavailablePair(registrationId int64, handler UnavailableCounterHandler) *IdAndUnavailableCounterHandler {
+// NewIdAndUnavailablePair pairs a counter handler with its registration id.
+func NewIdAndUnavailablePair(registrationId int64, handler UnavailableCounterHandler) *IdAndUnavailableCounterHandler {
 	return &IdAndUnavailableCounterHandler{registrationId: registrationId, handler: handler}
 }
 
@@ -1440,7 +1442,7 @@ func (cc *ClientConductor) AddAvailableCounterHandler(handler AvailableCounterHa
 	cc.adminLock.Lock()
 	defer cc.unlock()
 	id := cc.driverProxy.NextCorrelationID()
-	cc.availableCounterHandlers = append(cc.availableCounterHandlers, newIDAndAvailablePair(id, handler))
+	cc.availableCounterHandlers = append(cc.availableCounterHandlers, NewIdAndAvailablePair(id, handler))
 	return id
 }
 
@@ -1472,7 +1474,7 @@ func (cc *ClientConductor) AddUnavailableCounterHandler(handler UnavailableCount
 	cc.adminLock.Lock()
 	defer cc.unlock()
 	id := cc.driverProxy.NextCorrelationID()
-	cc.unavailableCounterHandlers = append(cc.unavailableCounterHandlers, newIDAndUnavailablePair(id, handler))
+	cc.unavailableCounterHandlers = append(cc.unavailableCounterHandlers, NewIdAndUnavailablePair(id, handler))
 	return id
 }
 

@@ -204,8 +204,13 @@ func (proxy *Proxy) MigrateSegmentsRequest(correlationID int64, srcRecordingID i
 	return proxy.offerPacket(codecs.MigrateSegmentsRequestPacket(proxy.marshaller, proxy.archive.Options.RangeChecking, proxy.archive.SessionID, correlationID, srcRecordingID, destRecordingID))
 }
 
-// AuthConnectRequest packet and offer. Normally sent by AsyncConnect.
-func (proxy *Proxy) AuthConnectRequest(correlationID int64, responseStream int32, responseChannel string, encodedCredentials []uint8, clientInfo string) error {
+// AuthConnectRequest packet and offer, with empty client info. Normally sent by AsyncConnect.
+func (proxy *Proxy) AuthConnectRequest(correlationID int64, responseStream int32, responseChannel string, encodedCredentials []uint8) error {
+	return proxy.AuthConnectRequestWithClientInfo(correlationID, responseStream, responseChannel, encodedCredentials, "")
+}
+
+// AuthConnectRequestWithClientInfo is AuthConnectRequest carrying the client info string of the 1.53.3 schema.
+func (proxy *Proxy) AuthConnectRequestWithClientInfo(correlationID int64, responseStream int32, responseChannel string, encodedCredentials []uint8, clientInfo string) error {
 	return proxy.offerPacket(codecs.AuthConnectRequestPacket(proxy.marshaller, proxy.archive.Options.RangeChecking, correlationID, responseStream, responseChannel, encodedCredentials, clientInfo))
 }
 

@@ -217,7 +217,7 @@ func TestControlledAssemblerAbortRedeliversReassembledMessage(t *testing.T) {
 	deliver(frames[1])
 	assert.Equal(t, term.ControlledPollActionAbort, deliver(frames[2]))
 	assert.Empty(t, got)
-	assert.Equal(t, term.ControlledPollActionContinue, deliver(frames[2]))
+	assert.Equal(t, term.ControlledPollAction(term.ControlledPollActionContinue), deliver(frames[2]))
 	require.Len(t, got, 1)
 	assert.Equal(t, msg, got[0])
 }

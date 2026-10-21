@@ -27,6 +27,19 @@ import (
 
 const controlFragmentLimit = 10
 
+// ControlState* were the states of the upstream lirm/aeron-go connect state machine.
+//
+// Deprecated: not used. Connection progress is tracked by AsyncConnect (see AsyncConnectState).
+const (
+	ControlStateError              = -1
+	ControlStateNew                = iota
+	ControlStateConnectRequestSent = iota
+	ControlStateChallenged         = iota
+	ControlStateConnectRequestOk   = iota
+	ControlStateConnected          = iota
+	ControlStateTimedOut           = iota
+)
+
 // Control contains everything required for the archive subscription/response side.
 //
 // All decoding state is owned by the Control, so separate Archive instances can be polled from separate

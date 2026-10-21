@@ -109,7 +109,7 @@ func TestArchiveDiskFull(t *testing.T) {
 	recs, err := arch.ListRecordingsForUri(0, 100, "aeron:ipc", stream)
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
-	_, err = arch.PurgeRecording(recs[0].RecordingId)
+	err = arch.PurgeRecording(recs[0].RecordingId)
 	require.NoError(t, err)
 
 	_, err = arch.StartRecording(channel, stream+1, true, false)

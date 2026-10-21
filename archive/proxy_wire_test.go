@@ -122,4 +122,4 @@ func TestListDescriptorsErrorIsArchiveException(t *testing.T) {
 	assert.Equal(t, ErrorCodeActiveListing, ae.ErrorCode)
 }
 
-var _ func(aeron.Publisher) error = (*Archive)(nil).StopRecordingByPublication
+var _ func(aeron.Publisher) error = (*Archive)(nil).StopRecordingByPublisher
