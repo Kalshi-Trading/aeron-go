@@ -68,11 +68,36 @@ may be easily wrapped in a goroutine if desired,
 
 ## Examples
 
-Examples are provided for a [basic_recording_publisher](examples/basic_recording_publisher/basic_recording_publisher.go) and [basic_replayed_subscriber](examples/basic_replayed_subscriber/basic_replayed_subscriber.go) that interoperate with the Java examples.
+Ports of the Java archive samples are in [examples/](examples/README.md):
+[basic_recording_publisher](examples/basic_recording_publisher/basic_recording_publisher.go),
+[basic_replayed_subscriber](examples/basic_replayed_subscriber/basic_replayed_subscriber.go),
+[basic_replay_merge](examples/basic_replay_merge/basic_replay_merge.go) (ReplayMerge),
+[persistent_subscriber](examples/persistent_subscriber/persistent_subscriber.go) (PersistentSubscription) and
+[replay_throughput](examples/replay_throughput/replay_throughput.go). They interoperate with the Java samples and
+run against the Java 1.53.3 archiving driver in [docker/](../docker/README.md).
+
+## ReplayMerge
+
+[`replaymerge.ReplayMerge`](replaymerge/replaymerge.go) (Java `ReplayMerge`) replays a recording into a
+`control-mode=manual` multi-destination subscription, adds the live destination once the replay is close to the
+live position and removes the replay once both are aligned, so the image continues on the live stream without a
+gap or duplicate. Call `Poll` in the duty cycle until `IsMerged()`, check `HasFailed()`; after merging keep polling
+`Image()` (or the ReplayMerge). `MergeProgressTimeoutDefaultMs` (5 s) bounds each step.
+
+## PersistentSubscription
+
+[`persistentsubscription.PersistentSubscription`](persistentsubscription/persistent_subscription.go) (Java
+`PersistentSubscription`) consumes a recorded stream from `StartPosition` (`FromStart`, `FromLive` or a position):
+it replays from the archive, joins the live channel when the replay catches up, and falls back to replay if the
+live image goes away. Configure it with `persistentsubscription.NewContext()` (`RecordingID`, `LiveChannel`,
+`LiveStreamID`, `ReplayChannel`, `ReplayStreamID`, optional `Listener` for live joined/left/errors) and drive it with
+`Poll`/`ControlledPoll` from a single goroutine; `HasFailed()`/`FailureReason()` report terminal errors.
 
 ## Security
 
-Enabling security is done via setting the various auth options. [config_test.go](config_test.go) and [archive_test.go](archive_test.go) provide an example.
+Set `Options.CredentialsSupplier` (Java `CredentialsSupplier`): `StaticCredentialsSupplier{Credentials, ChallengeResponse}`
+or `CredentialsSupplierFuncs` for dynamic challenge responses. The default `NullCredentialsSupplier` sends empty
+credentials. `make e2e` runs the authentication E2E tests against `docker/auth.compose.yml`.
 
 The actual semantics of the security are dependent upon which authenticator supplier you use and is tested against [secure-logging-archiving-media-driver](secure-logging-archiving-media-driver).
 
@@ -87,8 +112,6 @@ The actual semantics of the security are dependent upon which authenticator supp
    instances. Particularly noticeable when calling aeron.Close()
 
 # Bigger picture issues
- * Java and C++ poll the counters to determine when a recording has actually started but the counters are not
-   available in go. As a result we use delays and 'hope' which isn't ideal.
  * It would be nice to silence the OnAvailableCounter noise
  * Within aeron-go there are cases of Log.Fatalf(), see for example trying to add a publication on a "bogus" channel.
 

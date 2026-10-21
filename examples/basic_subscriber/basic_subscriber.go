@@ -36,7 +36,6 @@ func main() {
 	defer cancel()
 
 	channel, streamID := *examples.ExamplesConfig.Channel, int32(*examples.ExamplesConfig.StreamID)
-	fmt.Printf("Subscribing to %s on stream id %d\n", channel, streamID)
 
 	aeronCtx := examples.NewContext().
 		AvailableImageHandler(examples.PrintAvailableImage).
@@ -52,6 +51,8 @@ func main() {
 		log.Fatalf("Failed to add subscription: %v", err)
 	}
 	defer subscription.Close()
+	// Printed once registered so a publisher started after this line is not NotConnected.
+	fmt.Printf("Subscribing to %s on stream id %d\n", channel, streamID)
 
 	received := 0
 	print := examples.PrintStringMessage(streamID)
