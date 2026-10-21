@@ -125,7 +125,7 @@ func (pub *Publication) InitialTermID() int32 {
 
 // IsConnected returns whether this publication is connected to the driver (not whether it has any Subscriptions)
 func (pub *Publication) IsConnected() bool {
-	return !pub.IsClosed() && pub.metaData.IsConnected.Get() == 1
+	return !pub.IsClosed() && pub.metaData.IsConnected()
 }
 
 // IsClosed returns whether this Publication has been closed
@@ -286,7 +286,7 @@ func (pub *Publication) backPressureStatus(currentPosition int64, messageLength 
 		return MaxPositionExceeded
 	}
 
-	if pub.metaData.IsConnected.Get() == 1 {
+	if pub.metaData.IsConnected() {
 		return BackPressured
 	}
 

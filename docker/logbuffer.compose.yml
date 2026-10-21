@@ -1,0 +1,16 @@
+# Java 1.53.3 log buffer tools (LogInspector, LogMetaDump) reading log buffers created by the archiving-driver.
+#   docker compose -f docker/docker-compose.yml -f docker/logbuffer.compose.yml run --rm -T log-inspector \
+#     io.aeron.samples.LogInspector /dev/shm/aeron-compose/publications/<id>.logbuffer 64
+#   docker compose ... run --rm -T log-inspector /opt/aeron/LogMetaDump.java <logbuffer file>
+services:
+  log-inspector:
+    build:
+      context: .
+      dockerfile: logbuffer.Dockerfile
+    profiles: ["tools"]
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    volumes:
+      - /dev/shm:/dev/shm
+    command: ["io.aeron.samples.LogInspector"]
