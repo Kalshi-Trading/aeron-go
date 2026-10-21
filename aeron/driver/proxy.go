@@ -322,8 +322,13 @@ func (driver *Proxy) NextAvailableSessionID(streamID int32) (int64, error) {
 }
 
 // write claims space in the to-driver ring buffer, encodes the command in place and commits it (as Java's
-// tryClaim/commit), or returns an error when the ring buffer is full.
+// tryClaim/commit), or returns an error when the ring buffer is full or the command exceeds MaxMsgLength (where Java
+// throws IllegalArgumentException).
 func (driver *Proxy) write(msgTypeID int32, length int32, fill func(buffer *atomic.Buffer, index int32)) error {
+	if maxLength := driver.toDriverCommandBuffer.MaxMsgLength(); length > maxLength {
+		return fmt.Errorf("failed to write %s command to driver: encoded length=%d exceeds maxMsgLength=%d",
+			command.TypeName(msgTypeID), length, maxLength)
+	}
 	index := driver.toDriverCommandBuffer.TryClaim(msgTypeID, length)
 	if index < 0 {
 		return fmt.Errorf("failed to write %s command to driver", command.TypeName(msgTypeID))
