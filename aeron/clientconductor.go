@@ -129,11 +129,11 @@ type DriverProxy interface {
 	NextCorrelationID() int64
 
 	AddSubscription(channel string, streamID int32) (int64, error)
-	RemoveSubscription(registrationID int64) error
+	RemoveSubscription(registrationID int64) (int64, error)
 
 	AddPublication(channel string, streamID int32) (int64, error)
 	AddExclusivePublication(channel string, streamID int32) (int64, error)
-	RemovePublication(registrationID int64) error
+	RemovePublication(registrationID int64, revoke bool) (int64, error)
 
 	ClientClose() error
 
@@ -152,7 +152,7 @@ type DriverProxy interface {
 		labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32, registrationId int64) (int64, error)
 	AddStaticCounterByLabel(typeId int32, label string, registrationId int64) (int64, error)
 
-	GetNextAvailableSessionID(streamID int32) (int64, error)
+	NextAvailableSessionID(streamID int32) (int64, error)
 }
 
 // ImageFactory creates images on ON_AVAILABLE_IMAGE. It may panic if the log buffer cannot be mapped.
@@ -799,7 +799,8 @@ func (cc *ClientConductor) releasePublicationLocked(regID int64) error {
 	res.publication.isClosed.Set(true)
 	delete(cc.resources, regID)
 	cc.releaseLogBuffers(res.logBuffers, res.publication.originalRegID, explicitCloseLingerNs)
-	return cc.driverProxy.RemovePublication(regID)
+	_, err := cc.driverProxy.RemovePublication(regID, false)
+	return err
 }
 
 // AsyncRemovePublication closes the publication with the given registration id without blocking.
@@ -902,7 +903,8 @@ func (cc *ClientConductor) releaseSubscriptionLocked(regID int64, images []Image
 	}
 	delete(cc.resources, regID)
 	cc.closeImages(images, res.subscription.UnavailableImageHandler(), explicitCloseLingerNs)
-	return cc.driverProxy.RemoveSubscription(regID)
+	_, err := cc.driverProxy.RemoveSubscription(regID)
+	return err
 }
 
 // AsyncRemoveSubscription closes the subscription with the given registration id without blocking.
@@ -1176,7 +1178,7 @@ func (cc *ClientConductor) NextSessionID(streamID int32) (int32, error) {
 	if err := cc.ensureOpen(); err != nil {
 		return 0, err
 	}
-	corrID, err := cc.driverProxy.GetNextAvailableSessionID(streamID)
+	corrID, err := cc.driverProxy.NextAvailableSessionID(streamID)
 	if err != nil {
 		return 0, err
 	}

@@ -70,9 +70,8 @@ func (p *fakeDriverProxy) NextCorrelationID() int64 { c, _ := p.record("NextCorr
 func (p *fakeDriverProxy) AddSubscription(string, int32) (int64, error) {
 	return p.record("AddSubscription")
 }
-func (p *fakeDriverProxy) RemoveSubscription(int64) error {
-	_, err := p.record("RemoveSubscription")
-	return err
+func (p *fakeDriverProxy) RemoveSubscription(int64) (int64, error) {
+	return p.record("RemoveSubscription")
 }
 func (p *fakeDriverProxy) AddPublication(string, int32) (int64, error) {
 	return p.record("AddPublication")
@@ -80,9 +79,8 @@ func (p *fakeDriverProxy) AddPublication(string, int32) (int64, error) {
 func (p *fakeDriverProxy) AddExclusivePublication(string, int32) (int64, error) {
 	return p.record("AddExclusivePublication")
 }
-func (p *fakeDriverProxy) RemovePublication(int64) error {
-	_, err := p.record("RemovePublication")
-	return err
+func (p *fakeDriverProxy) RemovePublication(int64, bool) (int64, error) {
+	return p.record("RemovePublication")
 }
 func (p *fakeDriverProxy) ClientClose() error {
 	p.mu.Lock()
@@ -119,7 +117,7 @@ func (p *fakeDriverProxy) AddStaticCounter(int32, *atomic.Buffer, int32, int32, 
 	int64) (int64, error) {
 	return p.record("AddStaticCounter")
 }
-func (p *fakeDriverProxy) GetNextAvailableSessionID(int32) (int64, error) {
+func (p *fakeDriverProxy) NextAvailableSessionID(int32) (int64, error) {
 	return p.record("GetNextAvailableSessionID")
 }
 

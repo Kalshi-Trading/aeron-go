@@ -18,22 +18,32 @@ limitations under the License.
 package driver
 
 import (
-	"errors"
+	"fmt"
+
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/command"
 	rb "github.com/lirm/aeron-go/aeron/ringbuffer"
 )
 
-// Proxy is a media driver proxy class that is used to send commands
+// NullValue is used for unset ids (Aeron.NULL_VALUE in Java).
+const NullValue int64 = -1
+
+// Proxy sends commands to the media driver over the to-driver ring buffer (io.aeron.DriverProxy). Every method that
+// expects a response returns the correlation id the driver will echo back.
 type Proxy struct {
 	toDriverCommandBuffer *rb.ManyToOne
 	clientID              int64
 }
 
-// Init initializes media driver proxy class
+// Init initializes the proxy, allocating a new client id from the driver's correlation counter.
 func (driver *Proxy) Init(buffer *rb.ManyToOne) *Proxy {
+	return driver.InitWithClientID(buffer, buffer.NextCorrelationID())
+}
+
+// InitWithClientID initializes the proxy with an existing client id.
+func (driver *Proxy) InitWithClientID(buffer *rb.ManyToOne, clientID int64) *Proxy {
 	driver.toDriverCommandBuffer = buffer
-	driver.clientID = driver.toDriverCommandBuffer.NextCorrelationID()
+	driver.clientID = clientID
 	logger.Infof("aeron clientID:%d", driver.clientID)
 	return driver
 }
@@ -43,7 +53,7 @@ func (driver *Proxy) ClientID() int64 {
 	return driver.clientID
 }
 
-// TimeOfLastDriverKeepalive gets the time of the last keep alive update sent to media driver
+// TimeOfLastDriverKeepalive gets the time (ms since epoch) of the last driver keepalive (consumer heartbeat).
 func (driver *Proxy) TimeOfLastDriverKeepalive() int64 {
 	return driver.toDriverCommandBuffer.ConsumerHeartbeatTime()
 }
@@ -53,374 +63,279 @@ func (driver *Proxy) NextCorrelationID() int64 {
 	return driver.toDriverCommandBuffer.NextCorrelationID()
 }
 
-// AddSubscription sends driver command to add new subscription
-func (driver *Proxy) AddSubscription(channel string, streamID int32) (int64, error) {
-
-	correlationID := driver.toDriverCommandBuffer.NextCorrelationID()
-
-	logger.Debugf("driver.AddSubscription: correlationId=%d", correlationID)
-
-	filler := func(buffer *atomic.Buffer, length *int) int32 {
-
-		var message command.SubscriptionMessage
-		message.Wrap(buffer, 0)
-
-		message.ClientID.Set(driver.clientID)
-		message.CorrelationID.Set(correlationID)
-		message.RegistrationCorrelationID.Set(-1)
-		message.StreamID.Set(streamID)
-		message.Channel.Set(channel)
-
-		*length = message.Size()
-
-		return command.AddSubscription
-	}
-
-	if err := driver.writeCommandToDriver(filler); err == nil {
-		return correlationID, nil
-	} else {
-		return 0, err
-	}
-}
-
-// RemoveSubscription sends driver command to remove subscription
-func (driver *Proxy) RemoveSubscription(registrationID int64) error {
-	correlationID := driver.toDriverCommandBuffer.NextCorrelationID()
-
-	logger.Debugf("driver.RemoveSubscription: correlationId=%d (subId=%d)", correlationID, registrationID)
-
-	filler := func(buffer *atomic.Buffer, length *int) int32 {
-
-		var message command.RemoveMessage
-		message.Wrap(buffer, 0)
-
-		message.ClientID.Set(driver.clientID)
-		message.CorrelationID.Set(correlationID)
-		message.RegistrationID.Set(registrationID)
-
-		*length = message.Size()
-
-		return command.RemoveSubscription
-	}
-
-	return driver.writeCommandToDriver(filler)
-}
-
-// AddPublication sends driver command to add new publication
+// AddPublication sends ADD_PUBLICATION.
 func (driver *Proxy) AddPublication(channel string, streamID int32) (int64, error) {
-
-	correlationID := driver.toDriverCommandBuffer.NextCorrelationID()
-
-	logger.Debugf("driver.AddPublication: clientId=%d correlationId=%d",
-		driver.clientID, correlationID)
-
-	filler := func(buffer *atomic.Buffer, length *int) int32 {
-
-		var message command.PublicationMessage
-		message.Wrap(buffer, 0)
-		message.ClientID.Set(driver.clientID)
-		message.CorrelationID.Set(correlationID)
-		message.StreamID.Set(streamID)
-		message.Channel.Set(channel)
-
-		*length = message.Size()
-
-		return command.AddPublication
-	}
-
-	if err := driver.writeCommandToDriver(filler); err == nil {
-		return correlationID, nil
-	} else {
-		return 0, err
-	}
+	return driver.addPublication(command.AddPublication, channel, streamID)
 }
 
-// AddExclusivePublication sends driver command to add new publication
+// AddExclusivePublication sends ADD_EXCLUSIVE_PUBLICATION.
 func (driver *Proxy) AddExclusivePublication(channel string, streamID int32) (int64, error) {
-
-	correlationID := driver.toDriverCommandBuffer.NextCorrelationID()
-
-	logger.Debugf("driver.AddExclusivePublication: clientId=%d correlationId=%d",
-		driver.clientID, correlationID)
-
-	filler := func(buffer *atomic.Buffer, length *int) int32 {
-
-		var message command.PublicationMessage
-		message.Wrap(buffer, 0)
-		message.ClientID.Set(driver.clientID)
-		message.CorrelationID.Set(correlationID)
-		message.StreamID.Set(streamID)
-		message.Channel.Set(channel)
-
-		*length = message.Size()
-
-		return command.AddExclusivePublication
-	}
-
-	if err := driver.writeCommandToDriver(filler); err == nil {
-		return correlationID, nil
-	} else {
-		return 0, err
-	}
+	return driver.addPublication(command.AddExclusivePublication, channel, streamID)
 }
 
-// RemovePublication sends driver command to remove publication
-func (driver *Proxy) RemovePublication(registrationID int64) error {
-	correlationID := driver.toDriverCommandBuffer.NextCorrelationID()
-
-	logger.Debugf("driver.RemovePublication: clientId=%d correlationId=%d (regId=%d)",
-		driver.clientID, correlationID, registrationID)
-
-	filler := func(buffer *atomic.Buffer, length *int) int32 {
-
-		var message command.RemoveMessage
-		message.Wrap(buffer, 0)
-
-		message.ClientID.Set(driver.clientID)
-		message.CorrelationID.Set(correlationID)
-		message.RegistrationID.Set(registrationID)
-
-		*length = message.Size()
-
-		return command.RemovePublication
-	}
-
-	return driver.writeCommandToDriver(filler)
+func (driver *Proxy) addPublication(msgTypeID int32, channel string, streamID int32) (int64, error) {
+	correlationID := driver.NextCorrelationID()
+	logger.Debugf("driver.%s: clientId=%d correlationId=%d", command.TypeName(msgTypeID), driver.clientID,
+		correlationID)
+	return correlationID, driver.write(msgTypeID, command.ComputePublicationMessageLength(len(channel)),
+		func(buffer *atomic.Buffer, index int32) {
+			var m command.PublicationMessage
+			m.Wrap(buffer, index)
+			m.SetClientID(driver.clientID)
+			m.SetCorrelationID(correlationID)
+			m.SetStreamID(streamID)
+			m.SetChannel(channel)
+		})
 }
 
-// ClientClose sends a client close to the driver.
-func (driver *Proxy) ClientClose() error {
-	correlationID := driver.toDriverCommandBuffer.NextCorrelationID()
-
-	logger.Debugf("driver.ClientClose: clientId=%d correlationId=%d",
-		driver.clientID, correlationID)
-
-	filler := func(buffer *atomic.Buffer, length *int) int32 {
-
-		var message command.CorrelatedMessage
-		message.Wrap(buffer, 0)
-
-		message.ClientID.Set(driver.clientID)
-		message.CorrelationID.Set(correlationID)
-
-		*length = message.Size()
-
-		return command.ClientClose
-	}
-
-	return driver.writeCommandToDriver(filler)
+// RemovePublication sends REMOVE_PUBLICATION, optionally revoking the publication.
+func (driver *Proxy) RemovePublication(registrationID int64, revoke bool) (int64, error) {
+	correlationID := driver.NextCorrelationID()
+	logger.Debugf("driver.RemovePublication: clientId=%d correlationId=%d (regId=%d revoke=%v)",
+		driver.clientID, correlationID, registrationID, revoke)
+	return correlationID, driver.write(command.RemovePublication, command.RemovePublicationMessageLength,
+		func(buffer *atomic.Buffer, index int32) {
+			var m command.RemovePublicationMessage
+			m.Wrap(buffer, index)
+			m.SetClientID(driver.clientID)
+			m.SetCorrelationID(correlationID)
+			m.SetRegistrationID(registrationID)
+			m.SetRevoke(revoke)
+		})
 }
 
-// AddDestination sends driver command to add a destination to an existing Publication.
+// AddSubscription sends ADD_SUBSCRIPTION.
+func (driver *Proxy) AddSubscription(channel string, streamID int32) (int64, error) {
+	correlationID := driver.NextCorrelationID()
+	logger.Debugf("driver.AddSubscription: correlationId=%d", correlationID)
+	return correlationID, driver.write(command.AddSubscription, command.ComputeSubscriptionMessageLength(len(channel)),
+		func(buffer *atomic.Buffer, index int32) {
+			var m command.SubscriptionMessage
+			m.Wrap(buffer, index)
+			m.SetClientID(driver.clientID)
+			m.SetCorrelationID(correlationID)
+			m.SetRegistrationCorrelationID(NullValue)
+			m.SetStreamID(streamID)
+			m.SetChannel(channel)
+		})
+}
+
+// RemoveSubscription sends REMOVE_SUBSCRIPTION.
+func (driver *Proxy) RemoveSubscription(registrationID int64) (int64, error) {
+	logger.Debugf("driver.RemoveSubscription: subId=%d", registrationID)
+	return driver.remove(command.RemoveSubscription, registrationID)
+}
+
+// RemoveCounter sends REMOVE_COUNTER for a counter registration id.
+func (driver *Proxy) RemoveCounter(registrationID int64) (int64, error) {
+	logger.Debugf("driver.RemoveCounter: counter registrationId=%d", registrationID)
+	return driver.remove(command.RemoveCounter, registrationID)
+}
+
+func (driver *Proxy) remove(msgTypeID int32, registrationID int64) (int64, error) {
+	correlationID := driver.NextCorrelationID()
+	return correlationID, driver.write(msgTypeID, command.RemoveMessageLength, func(buffer *atomic.Buffer, index int32) {
+		var m command.RemoveMessage
+		m.Wrap(buffer, index)
+		m.SetClientID(driver.clientID)
+		m.SetCorrelationID(correlationID)
+		m.SetRegistrationID(registrationID)
+	})
+}
+
+// AddDestination sends ADD_DESTINATION to add a destination to an existing Publication.
 func (driver *Proxy) AddDestination(registrationID int64, channel string) (int64, error) {
-
-	correlationID := driver.toDriverCommandBuffer.NextCorrelationID()
-
-	logger.Debugf("driver.AddDestination: clientID=%d registrationID=%d correlationID=%d",
-		driver.clientID, registrationID, correlationID)
-
-	filler := func(buffer *atomic.Buffer, length *int) int32 {
-
-		var message command.DestinationMessage
-		message.Wrap(buffer, 0)
-		message.RegistrationCorrelationID.Set(registrationID)
-		message.Channel.Set(channel)
-		message.CorrelationID.Set(correlationID)
-		message.ClientID.Set(driver.clientID)
-
-		*length = message.Size()
-
-		return command.AddDestination
-	}
-
-	if err := driver.writeCommandToDriver(filler); err == nil {
-		return correlationID, nil
-	} else {
-		return 0, err
-	}
+	return driver.destination(command.AddDestination, registrationID, channel)
 }
 
-// RemoveDestination sends driver command to remove a destination from an existing Publication.
+// RemoveDestination sends REMOVE_DESTINATION to remove a destination from an existing Publication.
 func (driver *Proxy) RemoveDestination(registrationID int64, channel string) (int64, error) {
-
-	correlationID := driver.toDriverCommandBuffer.NextCorrelationID()
-
-	logger.Debugf("driver.RemoveDestination: clientID=%d registrationID=%d correlationID=%d",
-		driver.clientID, registrationID, correlationID)
-
-	filler := func(buffer *atomic.Buffer, length *int) int32 {
-
-		var message command.DestinationMessage
-		message.Wrap(buffer, 0)
-		message.RegistrationCorrelationID.Set(registrationID)
-		message.Channel.Set(channel)
-		message.CorrelationID.Set(correlationID)
-		message.ClientID.Set(driver.clientID)
-
-		*length = message.Size()
-
-		return command.RemoveDestination
-	}
-
-	if err := driver.writeCommandToDriver(filler); err == nil {
-		return correlationID, nil
-	} else {
-		return 0, err
-	}
+	return driver.destination(command.RemoveDestination, registrationID, channel)
 }
 
-// AddRcvDestination sends driver command to add a destination to the receive
-// channel of an existing MDS Subscription.
+// AddRcvDestination sends ADD_RCV_DESTINATION to add a destination to an existing MDS Subscription.
 func (driver *Proxy) AddRcvDestination(registrationID int64, channel string) (int64, error) {
-
-	correlationID := driver.toDriverCommandBuffer.NextCorrelationID()
-
-	logger.Debugf("driver.AddRcvDestination: clientID=%d registrationID=%d correlationID=%d channel=%s",
-		driver.clientID, registrationID, correlationID, channel)
-
-	filler := func(buffer *atomic.Buffer, length *int) int32 {
-
-		var message command.DestinationMessage
-		message.Wrap(buffer, 0)
-		message.RegistrationCorrelationID.Set(registrationID)
-		message.Channel.Set(channel)
-		message.CorrelationID.Set(correlationID)
-		message.ClientID.Set(driver.clientID)
-
-		*length = message.Size()
-
-		return command.AddRcvDestination
-	}
-
-	if err := driver.writeCommandToDriver(filler); err == nil {
-		return correlationID, nil
-	} else {
-		return 0, err
-	}
+	return driver.destination(command.AddRcvDestination, registrationID, channel)
 }
 
-// RemoveRcvDestination sends driver command to remove a destination from the
-// receive channel of an existing MDS Subscription.
+// RemoveRcvDestination sends REMOVE_RCV_DESTINATION to remove a destination from an existing MDS Subscription.
 func (driver *Proxy) RemoveRcvDestination(registrationID int64, channel string) (int64, error) {
-
-	correlationID := driver.toDriverCommandBuffer.NextCorrelationID()
-
-	logger.Debugf("driver.RemoveRcvDestination: clientID=%d registrationID=%d correlationID=%d",
-		driver.clientID, registrationID, correlationID)
-
-	filler := func(buffer *atomic.Buffer, length *int) int32 {
-
-		var message command.DestinationMessage
-		message.Wrap(buffer, 0)
-		message.RegistrationCorrelationID.Set(registrationID)
-		message.Channel.Set(channel)
-		message.CorrelationID.Set(correlationID)
-		message.ClientID.Set(driver.clientID)
-
-		*length = message.Size()
-
-		return command.RemoveRcvDestination
-	}
-
-	if err := driver.writeCommandToDriver(filler); err == nil {
-		return correlationID, nil
-	} else {
-		return 0, err
-	}
+	return driver.destination(command.RemoveRcvDestination, registrationID, channel)
 }
 
-// AddCounter adds a new counter with a type id plus the label and key are provided in buffers.
-func (driver *Proxy) AddCounter(typeId int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
+func (driver *Proxy) destination(msgTypeID int32, registrationID int64, channel string) (int64, error) {
+	correlationID := driver.NextCorrelationID()
+	logger.Debugf("driver.%s: clientID=%d registrationID=%d correlationID=%d channel=%s",
+		command.TypeName(msgTypeID), driver.clientID, registrationID, correlationID, channel)
+	return correlationID, driver.write(msgTypeID, command.ComputeDestinationMessageLength(len(channel)),
+		func(buffer *atomic.Buffer, index int32) {
+			var m command.DestinationMessage
+			m.Wrap(buffer, index)
+			m.SetClientID(driver.clientID)
+			m.SetCorrelationID(correlationID)
+			m.SetRegistrationCorrelationID(registrationID)
+			m.SetChannel(channel)
+		})
+}
+
+// RemoveDestinationByID sends REMOVE_DESTINATION_BY_ID to remove a destination from a Publication using the
+// destination's registration id (the correlation id returned by AddDestination).
+func (driver *Proxy) RemoveDestinationByID(publicationRegistrationID, destinationRegistrationID int64) (int64, error) {
+	correlationID := driver.NextCorrelationID()
+	return correlationID, driver.write(command.RemoveDestinationByID, command.DestinationByIDMessageLength,
+		func(buffer *atomic.Buffer, index int32) {
+			var m command.DestinationByIDMessage
+			m.Wrap(buffer, index)
+			m.SetClientID(driver.clientID)
+			m.SetCorrelationID(correlationID)
+			m.SetResourceRegistrationID(publicationRegistrationID)
+			m.SetDestinationRegistrationID(destinationRegistrationID)
+		})
+}
+
+// AddCounter sends ADD_COUNTER with the key and label copied from buffers (either may be nil when its length is 0).
+func (driver *Proxy) AddCounter(typeID int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
 	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32) (int64, error) {
-	correlationID := driver.toDriverCommandBuffer.NextCorrelationID()
-
-	filler := func(buffer *atomic.Buffer, length *int) int32 {
-		var message command.CounterMessage
-		message.Wrap(buffer, 0)
-		message.ClientID.Set(driver.clientID)
-		message.CorrelationID.Set(correlationID)
-		message.CounterTypeID.Set(typeId)
-		message.CopyKeyBuffer(keyBuffer, keyOffset, keyLength)
-		message.CopyLabelBuffer(labelBuffer, labelOffset, labelLength)
-
-		*length = message.Size()
-
-		return command.AddCounter
-	}
-
-	if err := driver.writeCommandToDriver(filler); err == nil {
-		return correlationID, nil
-	} else {
-		return 0, err
-	}
+	correlationID := driver.NextCorrelationID()
+	length := command.ComputeCounterMessageLength(int(keyLength), int(labelLength))
+	return correlationID, driver.write(command.AddCounter, length, func(buffer *atomic.Buffer, index int32) {
+		var m command.CounterMessage
+		m.Wrap(buffer, index)
+		m.SetClientID(driver.clientID)
+		m.SetCorrelationID(correlationID)
+		m.SetTypeID(typeID)
+		m.SetKeyBuffer(keyBuffer, keyOffset, keyLength)
+		m.SetLabelBuffer(labelBuffer, labelOffset, labelLength)
+	})
 }
 
-// AddCounterByLabel adds a new counter with a type id and label.  The key will be blank.
-func (driver *Proxy) AddCounterByLabel(typeId int32, label string) (int64, error) {
-	correlationID := driver.toDriverCommandBuffer.NextCorrelationID()
-
-	filler := func(buffer *atomic.Buffer, length *int) int32 {
-		var message command.CounterMessage
-		message.Wrap(buffer, 0)
-		message.ClientID.Set(driver.clientID)
-		message.CorrelationID.Set(correlationID)
-		message.CounterTypeID.Set(typeId)
-		message.CopyLabelString(label)
-
-		*length = message.Size()
-
-		return command.AddCounter
-	}
-
-	if err := driver.writeCommandToDriver(filler); err == nil {
-		return correlationID, nil
-	} else {
-		return 0, err
-	}
+// AddCounterByLabel sends ADD_COUNTER with an empty key and the given label.
+func (driver *Proxy) AddCounterByLabel(typeID int32, label string) (int64, error) {
+	correlationID := driver.NextCorrelationID()
+	return correlationID, driver.write(command.AddCounter, command.ComputeCounterMessageLength(0, len(label)),
+		func(buffer *atomic.Buffer, index int32) {
+			var m command.CounterMessage
+			m.Wrap(buffer, index)
+			m.SetClientID(driver.clientID)
+			m.SetCorrelationID(correlationID)
+			m.SetTypeID(typeID)
+			m.SetKey(nil)
+			m.SetLabel(label)
+		})
 }
 
-// RemoveCounter instructs the media driver to remove an existing counter by its registration id.  Returns the
-// correlation id for the command.
-
-// RemoveCounter instructs the media driver to remove an existing counter by its registration id.  Returns the
-// correlation id for the command.
-func (driver *Proxy) RemoveCounter(registrationId int64) (int64, error) {
-	correlationId := driver.toDriverCommandBuffer.NextCorrelationID()
-
-	logger.Debugf("driver.RemoveCounter: correlationId=%d (counter registrationId=%d)", correlationId, registrationId)
-
-	filler := func(buffer *atomic.Buffer, length *int) int32 {
-		var message command.RemoveMessage
-		message.Wrap(buffer, 0)
-
-		message.ClientID.Set(driver.clientID)
-		message.CorrelationID.Set(correlationId)
-		message.RegistrationID.Set(registrationId)
-
-		*length = message.Size()
-
-		return command.RemoveCounter
-	}
-
-	if err := driver.writeCommandToDriver(filler); err == nil {
-		return correlationId, nil
-	} else {
-		return 0, err
-	}
+// AddStaticCounter sends ADD_STATIC_COUNTER: a counter with a caller-chosen registration id that is not owned by
+// (and outlives) the client. The driver answers with ON_STATIC_COUNTER.
+func (driver *Proxy) AddStaticCounter(typeID int32, keyBuffer *atomic.Buffer, keyOffset int32, keyLength int32,
+	labelBuffer *atomic.Buffer, labelOffset int32, labelLength int32, registrationID int64) (int64, error) {
+	correlationID := driver.NextCorrelationID()
+	length := command.ComputeStaticCounterMessageLength(int(keyLength), int(labelLength))
+	return correlationID, driver.write(command.AddStaticCounter, length, func(buffer *atomic.Buffer, index int32) {
+		var m command.StaticCounterMessage
+		m.Wrap(buffer, index)
+		m.SetClientID(driver.clientID)
+		m.SetCorrelationID(correlationID)
+		m.SetRegistrationID(registrationID)
+		m.SetTypeID(typeID)
+		m.SetKeyBuffer(keyBuffer, keyOffset, keyLength)
+		m.SetLabelBuffer(labelBuffer, labelOffset, labelLength)
+	})
 }
 
-func (driver *Proxy) writeCommandToDriver(filler func(*atomic.Buffer, *int) int32) error {
-	messageBuffer := make([]byte, 512)
+// AddStaticCounterByLabel sends ADD_STATIC_COUNTER with an empty key and the given label.
+func (driver *Proxy) AddStaticCounterByLabel(typeID int32, label string, registrationID int64) (int64, error) {
+	correlationID := driver.NextCorrelationID()
+	length := command.ComputeStaticCounterMessageLength(0, len(label))
+	return correlationID, driver.write(command.AddStaticCounter, length, func(buffer *atomic.Buffer, index int32) {
+		var m command.StaticCounterMessage
+		m.Wrap(buffer, index)
+		m.SetClientID(driver.clientID)
+		m.SetCorrelationID(correlationID)
+		m.SetRegistrationID(registrationID)
+		m.SetTypeID(typeID)
+		m.SetKey(nil)
+		m.SetLabel(label)
+	})
+}
 
-	buffer := atomic.MakeBuffer(messageBuffer)
+// ClientKeepalive sends CLIENT_KEEPALIVE. Java clients keep alive by updating their heartbeat counter instead, but
+// the driver still accepts this command.
+func (driver *Proxy) ClientKeepalive() error {
+	return driver.correlated(command.ClientKeepalive)
+}
 
-	length := len(messageBuffer)
+// ClientClose sends CLIENT_CLOSE. As in Java the correlation id is NullValue and the driver does not respond.
+func (driver *Proxy) ClientClose() error {
+	logger.Debugf("driver.ClientClose: clientId=%d", driver.clientID)
+	return driver.correlated(command.ClientClose)
+}
 
-	msgTypeID := filler(buffer, &length)
+func (driver *Proxy) correlated(msgTypeID int32) error {
+	return driver.write(msgTypeID, command.CorrelatedMessageLength, func(buffer *atomic.Buffer, index int32) {
+		var m command.CorrelatedMessage
+		m.Wrap(buffer, index)
+		m.SetClientID(driver.clientID)
+		m.SetCorrelationID(NullValue)
+	})
+}
 
-	if driver.toDriverCommandBuffer.Write(int32(msgTypeID), buffer, 0, int32(length)) {
-		return nil
-	} else {
-		return errors.New("couldn't write command to driver")
+// TerminateDriver sends TERMINATE_DRIVER with an optional token, validated by the driver's termination validator.
+// The driver does not respond.
+func (driver *Proxy) TerminateDriver(token []byte) error {
+	return driver.write(command.TerminateDriver, command.ComputeTerminateDriverMessageLength(len(token)),
+		func(buffer *atomic.Buffer, index int32) {
+			var m command.TerminateDriverMessage
+			m.Wrap(buffer, index)
+			m.SetClientID(driver.clientID)
+			m.SetCorrelationID(NullValue)
+			m.SetToken(token)
+		})
+}
+
+// RejectImage sends REJECT_IMAGE for the image with the given correlation id at a position, with a reason.
+func (driver *Proxy) RejectImage(imageCorrelationID int64, position int64, reason string) (int64, error) {
+	correlationID := driver.NextCorrelationID()
+	return correlationID, driver.write(command.RejectImage, command.ComputeRejectImageMessageLength(len(reason)),
+		func(buffer *atomic.Buffer, index int32) {
+			var m command.RejectImageMessage
+			m.Wrap(buffer, index)
+			m.SetClientID(driver.clientID)
+			m.SetCorrelationID(correlationID)
+			m.SetImageCorrelationID(imageCorrelationID)
+			m.SetPosition(position)
+			m.SetReason(reason)
+		})
+}
+
+// NextAvailableSessionID sends GET_NEXT_AVAILABLE_SESSION_ID for a stream. The driver answers with
+// ON_NEXT_AVAILABLE_SESSION_ID (or ON_ERROR).
+func (driver *Proxy) NextAvailableSessionID(streamID int32) (int64, error) {
+	correlationID := driver.NextCorrelationID()
+	return correlationID, driver.write(command.GetNextAvailableSessionID,
+		command.GetNextAvailableSessionIDMessageLength, func(buffer *atomic.Buffer, index int32) {
+			var m command.GetNextAvailableSessionIDMessage
+			m.Wrap(buffer, index)
+			m.SetClientID(driver.clientID)
+			m.SetCorrelationID(correlationID)
+			m.SetStreamID(streamID)
+		})
+}
+
+// write claims space in the to-driver ring buffer, encodes the command in place and commits it (as Java's
+// tryClaim/commit), or returns an error when the ring buffer is full.
+func (driver *Proxy) write(msgTypeID int32, length int32, fill func(buffer *atomic.Buffer, index int32)) error {
+	index := driver.toDriverCommandBuffer.TryClaim(msgTypeID, length)
+	if index < 0 {
+		return fmt.Errorf("failed to write %s command to driver", command.TypeName(msgTypeID))
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			driver.toDriverCommandBuffer.Abort(index)
+		}
+	}()
+	fill(driver.toDriverCommandBuffer.Buffer(), index)
+	driver.toDriverCommandBuffer.Commit(index)
+	committed = true
+	return nil
 }
