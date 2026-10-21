@@ -19,6 +19,7 @@ package archive
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	stdatomic "sync/atomic"
 	"time"
@@ -46,9 +47,9 @@ type Archive struct {
 
 // Constant values used to control behaviour of StartReplay
 const (
-	RecordingPositionNull = int64(-1)        // Replay a stream from the start.
-	RecordingLengthNull   = int64(-1)        // Replay will follow a live recording
-	RecordingLengthMax    = int64(2<<31 - 1) // Replay the whole stream
+	RecordingPositionNull = int64(-1)            // Replay a stream from the start.
+	RecordingLengthNull   = int64(-1)            // Replay will follow a live recording
+	RecordingLengthMax    = int64(math.MaxInt64) // Replay the whole stream and follow a live recording
 )
 
 // replication flag used for duplication instead of extension, see Replicate and variants
@@ -430,14 +431,11 @@ func (archive *Archive) StopRecordingByIdentity(recordingID int64) (bool, error)
 		return false, err
 	}
 	res, err := archive.Control.PollForResponse(correlationID, archive.SessionID)
-	if res < 0 {
-		logger.Debugf("StopRecordingByIdentity result was %d", res)
-	}
-
 	if err != nil {
 		return false, err
 	}
-	return res >= 0, err
+	// Java semantics: relevantId is non-zero iff an active recording was stopped
+	return res != 0, nil
 }
 
 // StopRecordingBySubscriptionId as returned by StartRecording
