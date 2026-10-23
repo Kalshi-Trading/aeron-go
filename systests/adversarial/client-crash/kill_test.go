@@ -41,12 +41,15 @@ func pubKillCases() []pubKillCase {
 			pubDest: []string{"aeron:udp?endpoint=localhost:27105"}},
 		{name: "mdc-dynamic", pubChan: "aeron:udp?control=localhost:27106|control-mode=dynamic|alias=advk-mdc-dyn",
 			subChan: "aeron:udp?endpoint=localhost:27107|control=localhost:27106|control-mode=dynamic",
-			stream: 9108, kind: "exclusive", size: 64},
+			stream:  9108, kind: "exclusive", size: 64},
 		{name: "mds-subscription", pubChan: "aeron:udp?endpoint=localhost:27108|alias=advk-mds",
 			subChan: "aeron:udp?control-mode=manual", stream: 9109, kind: "tryclaim", size: 64,
 			subDest: []string{"aeron:udp?endpoint=localhost:27108"}},
 	}
 }
+
+// fragmented reports whether the case's messages are larger than one frame at the default MTU.
+func (c pubKillCase) fragmented() bool { return c.size > 1408-32 }
 
 func (c pubKillCase) args() []string {
 	args := []string{"-mode", "pub", "-channel", c.pubChan, "-stream", fmt.Sprint(c.stream), "-kind", c.kind,
@@ -60,7 +63,8 @@ func (c pubKillCase) args() []string {
 // TestKillPublisherProcess SIGKILLs a Go publisher process of every publication type mid-traffic. As in Java, the
 // driver must time the dead client out and drop its publication and counters, the surviving subscriber must get
 // every message the publisher committed (no gap, duplicate or corruption) and then an unavailable image, and a
-// replacement process on the same channel must be picked up as a new image starting at its first message.
+// replacement process on the same channel must be picked up as a new image starting at its first message. A
+// fragmented publisher killed part way through a message may leave its image stuck instead (see awaitPublisherGone).
 func TestKillPublisherProcess(t *testing.T) {
 	for _, c := range pubKillCases() {
 		t.Run(c.name, func(t *testing.T) {
@@ -78,11 +82,8 @@ func TestKillPublisherProcess(t *testing.T) {
 
 			p.kill()
 			sent := p.last("sent").int("seq")
-			reclaimed := awaitReclaimed(t, a, clientID, alias(c.pubChan))
-			s.awaitReceived(session, sent, 5*time.Second)
-			unavailable := s.awaitUnavailable(session, reclaimTO)
-			t.Logf("reclaimed after %v, unavailable after a further %v, %s", reclaimed, unavailable,
-				ptr(s.checker(session)))
+			s.awaitReceived(session, sent, reclaimTO)
+			awaitPublisherGone(t, a, s, c, session, clientID)
 
 			replacement := startPeer(t, "replacement", c.args()...)
 			r := replacement.await("ready", 10*time.Second)
@@ -91,9 +92,15 @@ func TestKillPublisherProcess(t *testing.T) {
 			s.awaitReceived(int32(r.int("sessionId")), 200, 20*time.Second)
 			require.NoError(t, ptr(s.checker(session)).Err())
 			replacement.kill()
-			awaitReclaimed(t, a, r.int("clientId"), alias(c.pubChan))
+			awaitPublisherGone(t, a, s, c, int32(r.int("sessionId")), r.int("clientId"))
 
 			s.close()
+			if c.fragmented() {
+				// As publisher-crash's awaitUnavailableOrStuck: a stuck publication goes once its subscription closes.
+				require.NoError(t, s.sub.Close())
+				awaitTrue(t, fmt.Sprintf("driver to free the %q publications", alias(c.pubChan)), 20*time.Second,
+					func() bool { return len(counterLabels(a, alias(c.pubChan))) == 0 })
+			}
 			require.NoError(t, a.Close())
 			leaks.requireNoLeaks(t)
 		})

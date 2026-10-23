@@ -33,8 +33,8 @@ import (
 
 	"github.com/lirm/aeron-go/aeron"
 	ab "github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/lirm/aeron-go/aeron/counters"
+	"github.com/lirm/aeron-go/aeron/logbuffer"
 	"github.com/lirm/aeron-go/archive"
 	"github.com/lirm/aeron-go/e2e"
 	"github.com/stretchr/testify/require"
@@ -195,9 +195,22 @@ func clientCounters(a *aeron.Aeron, clientID int64) []string {
 // awaitReclaimed waits for the driver to drop every counter of a dead client and every counter labelled with tag.
 func awaitReclaimed(t *testing.T, a *aeron.Aeron, clientID int64, tag string) time.Duration {
 	t.Helper()
-	return awaitTrue(t, fmt.Sprintf("driver to reclaim client %d / %q", clientID, tag), reclaimTO, func() bool {
-		return len(clientCounters(a, clientID)) == 0 && (tag == "" || len(counterLabels(a, tag)) == 0)
-	})
+	var left []string
+	start := time.Now()
+	for {
+		left = clientCounters(a, clientID)
+		if tag != "" {
+			left = append(left, counterLabels(a, tag)...)
+		}
+		if len(left) == 0 {
+			return time.Since(start)
+		}
+		if time.Since(start) > reclaimTO {
+			t.Fatalf("timed out after %v waiting for driver to reclaim client %d / %q, still allocated: %q",
+				reclaimTO, clientID, tag, left)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // --------------------------------------------------------------------------------------------------- process leaks
@@ -519,4 +532,37 @@ func (s *liveSub) awaitUnavailable(sessionID int32, timeout time.Duration) time.
 		_, u := s.counts(sessionID)
 		return u > 0
 	})
+}
+
+// awaitPublisherGone waits for the driver to drop a killed publisher's client and publication, and for its image to
+// go unavailable. Java 1.53.3 never unblocks a publication whose publisher died part way through a fragmented
+// message (see publisher-crash awaitUnavailableOrStuck): the driver keeps the publication and the image stays, stuck,
+// until the subscription closes. For a fragmented case that state is accepted once the client heartbeat is gone;
+// the caller checks the publication is freed after closing the subscription.
+func awaitPublisherGone(t *testing.T, a *aeron.Aeron, s *liveSub, c pubKillCase, session int32, clientID int64) {
+	t.Helper()
+	if !c.fragmented() {
+		reclaimed := awaitReclaimed(t, a, clientID, alias(c.pubChan))
+		unavailable := s.awaitUnavailable(session, reclaimTO)
+		t.Logf("session %d reclaimed after %v, unavailable after a further %v", session, reclaimed, unavailable)
+		return
+	}
+	reclaimed := awaitTrue(t, fmt.Sprintf("driver to time out client %d", clientID), reclaimTO, func() bool {
+		for _, l := range clientCounters(a, clientID) {
+			if strings.HasPrefix(l, "client-heartbeat") {
+				return false
+			}
+		}
+		return true
+	})
+	for start := time.Now(); time.Since(start) < reclaimTO; time.Sleep(5 * time.Millisecond) {
+		if _, u := s.counts(session); u > 0 {
+			t.Logf("session %d reclaimed after %v, unavailable after a further %v", session, reclaimed, time.Since(start))
+			return
+		}
+	}
+	require.NotEmpty(t, counterLabels(a, alias(c.pubChan)), "image of session %d stuck after its publication was freed",
+		session)
+	t.Logf("session %d died mid fragmented message: client reclaimed after %v, image stuck, as in Java", session,
+		reclaimed)
 }
