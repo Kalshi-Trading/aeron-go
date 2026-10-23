@@ -14,114 +14,84 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// pong is a port of io.aeron.samples.Pong: it echoes every ping message back on the pong channel.
 package main
 
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
-	"os/signal"
 	"runtime/pprof"
-	"syscall"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/idlestrategy"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
-	"github.com/lirm/aeron-go/aeron/logging"
 	"github.com/lirm/aeron-go/examples"
 )
 
-var logger = logging.MustGetLogger("examples")
-
 func main() {
-
 	flag.Parse()
+	examples.SetupLogging()
+	ctx, cancel := examples.SignalContext()
+	defer cancel()
 
-	if !*examples.ExamplesConfig.LoggingOn {
-		logging.SetLevel(logging.INFO, "aeron")
-		logging.SetLevel(logging.INFO, "memmap")
-		logging.SetLevel(logging.INFO, "driver")
-		logging.SetLevel(logging.INFO, "counters")
-		logging.SetLevel(logging.INFO, "logbuffers")
-		logging.SetLevel(logging.INFO, "buffer")
-		logging.SetLevel(logging.INFO, "examples")
+	if *examples.ExamplesConfig.ProfilerEnabled {
+		f, err := os.Create(fmt.Sprintf("pong-%d.pprof", time.Now().Unix()))
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := pprof.StartCPUProfile(f); err == nil {
+			defer pprof.StopCPUProfile()
+		}
 	}
 
-	to := time.Duration(time.Millisecond.Nanoseconds() * *examples.ExamplesConfig.DriverTo)
-	ctx := aeron.NewContext().AeronDir(*examples.ExamplesConfig.AeronPrefix).MediaDriverTimeout(to).
-		ErrorHandler(func(err error) {
-			logger.Fatalf("Received error: %v", err)
-		})
+	pingChannel, pingStream := *examples.PingPongConfig.PingChannel, int32(*examples.PingPongConfig.PingStreamID)
+	pongChannel, pongStream := *examples.PingPongConfig.PongChannel, int32(*examples.PingPongConfig.PongStreamID)
+	fmt.Printf("Subscribing Ping at %s on stream id %d\n", pingChannel, pingStream)
+	fmt.Printf("Publishing Pong at %s on stream id %d\n", pongChannel, pongStream)
 
-	a, err := aeron.Connect(ctx)
+	a, err := aeron.Connect(examples.NewContext())
 	if err != nil {
-		logger.Fatalf("Failed to connect to driver: %s\n", err.Error())
+		log.Fatalf("Failed to connect to media driver: %v", err)
 	}
 	defer a.Close()
 
-	subscription, err := a.AddSubscription(*examples.PingPongConfig.PingChannel, int32(*examples.PingPongConfig.PingStreamID))
+	sub, err := a.AddSubscription(pingChannel, pingStream)
 	if err != nil {
-		logger.Fatal(err)
+		log.Fatalf("Failed to add ping subscription: %v", err)
 	}
-	defer subscription.Close()
-	logger.Infof("Subscription found %v", subscription)
-
-	publication, err := a.AddPublication(*examples.PingPongConfig.PongChannel, int32(*examples.PingPongConfig.PongStreamID))
+	defer sub.Close()
+	var pub aeron.Publisher
+	if *examples.ExamplesConfig.Exclusive {
+		pub, err = a.AddExclusivePublication(pongChannel, pongStream)
+	} else {
+		pub, err = a.AddPublication(pongChannel, pongStream)
+	}
 	if err != nil {
-		logger.Fatal(err)
+		log.Fatalf("Failed to add pong publication: %v", err)
 	}
-	defer publication.Close()
-	logger.Infof("Publication found %v", publication)
+	defer pub.Close()
 
-	logger.Infof("ChannelStatusID: %v", publication.ChannelStatusID())
-
-	logger.Infof("%v", examples.ExamplesConfig)
-
-	if *examples.ExamplesConfig.ProfilerEnabled {
-		fname := fmt.Sprintf("pong-%d.pprof", time.Now().Unix())
-		logger.Infof("Profiling enabled. Will use: %s", fname)
-		f, err := os.Create(fname)
-		if err == nil {
-			pprof.StartCPUProfile(f)
-			defer pprof.StopCPUProfile()
-		} else {
-			logger.Infof("Failed to create profile file with %v", err)
-		}
-	}
-
-	sigs := make(chan os.Signal, 1)
-	done := make(chan bool, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigs
-		done <- true
-	}()
-
-	handler := func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
-		if logger.IsEnabledFor(logging.DEBUG) {
-			logger.Debugf("Received message at offset %d, length %d, position %d, termId %d, frame len %d",
-				offset, length, header.Offset(), header.TermId(), header.FrameLength())
-		}
-		for true {
-			ret := publication.Offer(buffer, offset, length, nil)
-			if ret >= 0 {
-				break
-				//} else {
-				//	panic(fmt.Sprintf("Failed to send message of %d bytes due to %d", length, ret))
+	idler := examples.NewIdleStrategy()
+	echoed := 0
+	handler := func(buffer *atomic.Buffer, offset int32, length int32, _ *logbuffer.Header) {
+		for ctx.Err() == nil {
+			result := pub.Offer(buffer, offset, length, nil)
+			if result > 0 {
+				echoed++
+				return
 			}
+			if examples.IsTerminalOfferResult(result) {
+				log.Fatal(examples.OfferResultString(result))
+			}
+			idler.Idle(0)
 		}
 	}
-
-	go func() {
-		idleStrategy := idlestrategy.Busy{}
-		for {
-			fragmentsRead := subscription.Poll(handler, 10)
-			idleStrategy.Idle(fragmentsRead)
-		}
-	}()
-
-	<-done
-	logger.Infof("Terminating")
+	exitAfter := *examples.ExamplesConfig.ExitAfterMessages
+	for ctx.Err() == nil && (exitAfter == 0 || echoed < exitAfter) {
+		idler.Idle(sub.Poll(handler, *examples.ExamplesConfig.FragmentLimit))
+	}
+	fmt.Printf("Shutting down... echoed %d messages\n", echoed)
 }

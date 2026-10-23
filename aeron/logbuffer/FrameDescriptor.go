@@ -45,8 +45,12 @@ func streamIdOffset(frameOffset int32) int32 {
 	return frameOffset + DataFrameHeader.StreamIDFieldOffset
 }
 
-func ComputeMaxMessageLength(capacity int32) int32 {
-	return capacity / 8
+// ComputeMaxMessageLength computes the max message length for a term length: min(termLength/8, MaxMessageLength).
+func ComputeMaxMessageLength(termLength int32) int32 {
+	if termLength/8 < MaxMessageLength {
+		return termLength / 8
+	}
+	return MaxMessageLength
 }
 
 func typeOffset(frameOffset int32) int32 {
@@ -62,17 +66,17 @@ func GetFlags(logBuffer *atomic.Buffer, frameOffset int32) uint8 {
 	return logBuffer.GetUInt8(offset)
 }
 
-func GetTermId(logBuffer *atomic.Buffer, frameOffset int32) int32 {
+func GetFrameTermID(logBuffer *atomic.Buffer, frameOffset int32) int32 {
 	offset := termIdOffset(frameOffset)
 	return logBuffer.GetInt32Volatile(offset)
 }
 
-func GetSessionId(logBuffer *atomic.Buffer, frameOffset int32) int32 {
+func GetFrameSessionID(logBuffer *atomic.Buffer, frameOffset int32) int32 {
 	offset := sessionIdOffset(frameOffset)
 	return logBuffer.GetInt32Volatile(offset)
 }
 
-func GetStreamId(logBuffer *atomic.Buffer, frameOffset int32) int32 {
+func GetFrameStreamID(logBuffer *atomic.Buffer, frameOffset int32) int32 {
 	offset := streamIdOffset(frameOffset)
 	return logBuffer.GetInt32Volatile(offset)
 }

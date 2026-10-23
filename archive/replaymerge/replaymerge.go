@@ -13,19 +13,45 @@
 package replaymerge
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/logbuffer/term"
 	"github.com/lirm/aeron-go/archive"
+	"github.com/lirm/aeron-go/archive/codecs"
 )
 
+// LiveAddMaxWindow is the maximum window at which a live destination should be added when trying to merge.
 const LiveAddMaxWindow = int32(32 * 1024 * 1024)
-const ReplayRemoveThreshold = int64(0)
-const MergeProgressTimeoutDefaultMs = int64(5 * time.Millisecond)
 
+// ReplayRemoveThreshold is the distance from the live recorded position at which the replay is stopped and removed.
+const ReplayRemoveThreshold = int64(0)
+
+// MergeProgressTimeoutDefaultMs is the default timeout in milliseconds for the merge to make progress.
+const MergeProgressTimeoutDefaultMs = int64(5 * time.Second / time.Millisecond)
+
+const (
+	initialGetMaxRecordedPositionBackoffMs = int64(8)
+	getMaxRecordedPositionBackoffMaxMs     = int64(500)
+	archivePollIntervalMs                  = int64(100)
+)
+
+// replayLength follows the live recording, like Java's Long.MAX_VALUE.
+const replayLength = int64(math.MaxInt64)
+
+// EpochClock returns the current time in milliseconds since the epoch.
+type EpochClock func() int64
+
+// SystemEpochClock is the EpochClock backed by time.Now.
+func SystemEpochClock() int64 {
+	return time.Now().UnixMilli()
+}
+
+// State of the ReplayMerge state machine.
 type State int
 
 const (
@@ -39,57 +65,96 @@ const (
 	StateClosed
 )
 
-func (s State) String() string {
-	return [...]string{"ResolveReplayPort", "GetRecordingPosition", "Replay", "Catchup", "AttemptLiveJoin", "Merged", "Failed", "Closed"}[s]
+var stateNames = [...]string{
+	"RESOLVE_REPLAY_PORT", "GET_RECORDING_POSITION", "REPLAY", "CATCHUP", "ATTEMPT_LIVE_JOIN", "MERGED", "FAILED",
+	"CLOSED",
 }
 
-// ReplayMerge replays a recorded stream from a starting position and merge with live stream for a full history of a stream.
+func (s State) String() string {
+	if s < 0 || int(s) >= len(stateNames) {
+		return fmt.Sprintf("State(%d)", int(s))
+	}
+	return stateNames[s]
+}
+
+// ErrNoProgress is wrapped by the error returned when the merge fails to make progress within the merge progress
+// timeout (Java's TimeoutException).
+var ErrNoProgress = errors.New("ReplayMerge no progress")
+
+// ErrImageClosed is returned when the replay image closes before the merge completes.
+var ErrImageClosed = errors.New("ReplayMerge Image closed unexpectedly")
+
+// ErrArchiveNotConnected is returned when the archive control response stream is no longer connected.
+var ErrArchiveNotConnected = errors.New("archive is not connected")
+
+// archiveNotConnectedError is ErrArchiveNotConnected as Java's ArchiveException("archive is not connected"):
+// errors.Is matches ErrArchiveNotConnected and errors.As yields an *ArchiveError with ErrorCodeGeneric.
+type archiveNotConnectedError struct{ cause *ArchiveError }
+
+func newArchiveNotConnectedError() error {
+	return &archiveNotConnectedError{archive.NewArchiveException(ErrArchiveNotConnected.Error(),
+		archive.ErrorCodeGeneric, aeron.NullValue)}
+}
+
+func (e *archiveNotConnectedError) Error() string   { return e.cause.Error() }
+func (e *archiveNotConnectedError) Unwrap() []error { return []error{ErrArchiveNotConnected, e.cause} }
+
+// ArchiveError is the error returned for an ERROR control response received for this control session. It is the
+// archive client's ArchiveException, as Java's ReplayMerge throws ArchiveException(message, errorCode, correlationId).
+type ArchiveError = archive.ArchiveException
+
+// ReplayMerge replays a recorded stream from a starting position and merges with the live stream for a full history
+// of a stream.
 //
-// Once constructed either of Poll or DoWork, interleaved with consumption
-// of the Image, should be called in a duty cycle loop until IsMerged is true.
-// After which the ReplayMerge can be closed and continued usage can be made of the Image or its
-// parent Subscription. If an exception occurs or progress stops, the merge will fail and
+// Once constructed either of Poll, ControlledPoll or DoWork, interleaved with consumption of the Image, should be
+// called in a duty cycle loop until IsMerged is true. After which the ReplayMerge can be closed and continued usage
+// can be made of the Image or its parent Subscription. If an error occurs or progress stops, the merge will fail and
 // HasFailed will be true.
 //
 // If the endpoint on the replay destination uses a port of 0, then the OS will assign a port from the ephemeral
 // range and this will be added to the replay channel for instructing the archive.
 //
 // NOTE: Merging is only supported with UDP streams.
+//
+// NOTE: ReplayMerge is not goroutine safe and should not be used with an Archive client that is used concurrently
+// by other goroutines, as it polls the archive control response stream directly.
 type ReplayMerge struct {
-	recordingId            int64
-	startPosition          int64
-	mergeProgressTimeoutMs int64
-	replaySessionId        int64
-	activeCorrelationId    int64
-	nextTargetPosition     int64
-	positionOfLastProgress int64
-	timeOfLastProgressMs   int64
-	isLiveAdded            bool
-	isReplayActive         bool
-	state                  State
-	image                  aeron.Image
+	recordingID                     int64
+	startPosition                   int64
+	mergeProgressTimeoutMs          int64
+	replaySessionID                 int64
+	activeCorrelationID             int64
+	nextTargetPosition              int64
+	positionOfLastProgress          int64
+	timeOfLastProgressMs            int64
+	timeOfNextGetMaxRecordedPosMs   int64
+	getMaxRecordedPositionBackoffMs int64
+	timeOfLastScheduledArchivePoll  int64
+	isLiveAdded                     bool
+	isReplayActive                  bool
+	state                           State
+	image                           aeron.Image
+	polledResponse                  *codecs.ControlResponse
 
-	archive           *archive.Archive
-	subscription      *aeron.Subscription
+	archive           mergeArchive
+	subscription      mergeSubscription
+	aeronSubscription *aeron.Subscription
+	epochClock        EpochClock
 	replayDestination string
 	liveDestination   string
-	replayEndpoint    string
-	replayChannelUri  aeron.ChannelUri
+	replayChannelURI  aeron.ChannelUri
 }
 
-// NewReplayMerge creates a ReplayMerge to manage the merging of a replayed stream and switching over to live stream as
-// appropriate.
-//
-// Parameters:
+// NewReplayMerge creates a ReplayMerge to manage the merging of a replayed stream and switching over to the live
+// stream as appropriate, using the system clock for progress checks.
 //
 // subscription           to use for the replay and live stream. Must be a multi-destination subscription.
 // archive                to use for the replay.
-// replayChannel          to as a template for what the archive will use.
+// replayChannel          to use as a template for what the archive will use.
 // replayDestination      to send the replay to and the destination added by the Subscription.
 // liveDestination        for the live stream and the destination added by the Subscription.
-// recordingId            for the replay.
+// recordingID            for the replay.
 // startPosition          for the replay.
-// epochClock             to use for progress checks.
 // mergeProgressTimeoutMs to use for progress checks.
 func NewReplayMerge(
 	subscription *aeron.Subscription,
@@ -97,278 +162,363 @@ func NewReplayMerge(
 	replayChannel string,
 	replayDestination string,
 	liveDestination string,
-	recordingId int64,
+	recordingID int64,
 	startPosition int64,
-	mergeProgressTimeoutMs int64) (rm *ReplayMerge, err error) {
+	mergeProgressTimeoutMs int64) (*ReplayMerge, error) {
+	return NewReplayMergeWithClock(subscription, archive, replayChannel, replayDestination, liveDestination,
+		recordingID, startPosition, SystemEpochClock, mergeProgressTimeoutMs)
+}
+
+// NewReplayMergeWithDefaults creates a ReplayMerge using the system clock and MergeProgressTimeoutDefaultMs.
+func NewReplayMergeWithDefaults(
+	subscription *aeron.Subscription,
+	archive *archive.Archive,
+	replayChannel string,
+	replayDestination string,
+	liveDestination string,
+	recordingID int64,
+	startPosition int64) (*ReplayMerge, error) {
+	return NewReplayMergeWithClock(subscription, archive, replayChannel, replayDestination, liveDestination,
+		recordingID, startPosition, SystemEpochClock, MergeProgressTimeoutDefaultMs)
+}
+
+// NewReplayMergeWithClock creates a ReplayMerge with an explicit epochClock used for progress checks.
+func NewReplayMergeWithClock(
+	subscription *aeron.Subscription,
+	archive *archive.Archive,
+	replayChannel string,
+	replayDestination string,
+	liveDestination string,
+	recordingID int64,
+	startPosition int64,
+	epochClock EpochClock,
+	mergeProgressTimeoutMs int64) (*ReplayMerge, error) {
+	if subscription == nil {
+		return nil, errors.New("subscription is nil")
+	}
+	if archive == nil {
+		return nil, errors.New("archive is nil")
+	}
+	rm, err := newReplayMerge(subscription, newArchiveClient(archive), replayChannel, replayDestination,
+		liveDestination, recordingID, startPosition, epochClock, mergeProgressTimeoutMs)
+	if err != nil {
+		return nil, err
+	}
+	rm.aeronSubscription = subscription
+	return rm, nil
+}
+
+func newReplayMerge(
+	subscription mergeSubscription,
+	archive mergeArchive,
+	replayChannel string,
+	replayDestination string,
+	liveDestination string,
+	recordingID int64,
+	startPosition int64,
+	epochClock EpochClock,
+	mergeProgressTimeoutMs int64) (*ReplayMerge, error) {
 	if strings.HasPrefix(subscription.Channel(), aeron.IpcChannel) ||
 		strings.HasPrefix(replayChannel, aeron.IpcChannel) ||
 		strings.HasPrefix(replayDestination, aeron.IpcChannel) ||
 		strings.HasPrefix(liveDestination, aeron.IpcChannel) {
-		err = fmt.Errorf("IPC merging is not supported")
-		return
+		return nil, errors.New("IPC merging is not supported")
 	}
 
 	if !strings.Contains(subscription.Channel(), "control-mode=manual") {
-		err = fmt.Errorf("Subscription URI must have 'control-mode=manual' uri=%s", subscription.Channel())
-		return
+		return nil, fmt.Errorf("Subscription URI must have 'control-mode=manual' uri=%s", subscription.Channel())
 	}
 
-	rm = &ReplayMerge{
-		archive:                archive,
-		subscription:           subscription,
-		replayDestination:      replayDestination,
-		liveDestination:        liveDestination,
-		recordingId:            recordingId,
-		startPosition:          startPosition,
-		mergeProgressTimeoutMs: mergeProgressTimeoutMs,
-		replaySessionId:        aeron.NullValue,
-		activeCorrelationId:    aeron.NullValue,
-		nextTargetPosition:     aeron.NullValue,
-		positionOfLastProgress: aeron.NullValue,
+	if epochClock == nil {
+		epochClock = SystemEpochClock
 	}
 
-	rm.replayChannelUri, err = aeron.ParseChannelUri(replayChannel)
+	replayChannelURI, err := aeron.ParseChannelUri(replayChannel)
 	if err != nil {
-		err = fmt.Errorf("Invalid replay channel '%s'", replayChannel)
-		return
+		return nil, fmt.Errorf("invalid replay channel '%s': %w", replayChannel, err)
 	}
+	replayChannelURI.Set(aeron.LingerParamName, "0")
+	replayChannelURI.Set(aeron.EosParamName, "false")
 
-	rm.replayChannelUri.Set(aeron.LingerParamName, "0")
-	rm.replayChannelUri.Set(aeron.EosParamName, "false")
-
-	var replayDestinationUri aeron.ChannelUri
-	replayDestinationUri, err = aeron.ParseChannelUri(replayDestination)
+	replayDestinationURI, err := aeron.ParseChannelUri(replayDestination)
 	if err != nil {
-		err = fmt.Errorf("Invalid replay destination '%s'", replayDestination)
-		return
+		return nil, fmt.Errorf("invalid replay destination '%s': %w", replayDestination, err)
 	}
-	rm.replayEndpoint = replayDestinationUri.Get(aeron.EndpointParamName)
-	if strings.HasSuffix(rm.replayEndpoint, ":0") {
+	replayEndpoint := replayDestinationURI.Get(aeron.EndpointParamName)
+	if replayEndpoint == "" {
+		return nil, fmt.Errorf("replay destination must have an endpoint: %s", replayDestination)
+	}
+
+	rm := &ReplayMerge{
+		archive:                         archive,
+		subscription:                    subscription,
+		epochClock:                      epochClock,
+		replayDestination:               replayDestination,
+		liveDestination:                 liveDestination,
+		recordingID:                     recordingID,
+		startPosition:                   startPosition,
+		mergeProgressTimeoutMs:          mergeProgressTimeoutMs,
+		replaySessionID:                 aeron.NullValue,
+		activeCorrelationID:             aeron.NullValue,
+		nextTargetPosition:              aeron.NullValue,
+		positionOfLastProgress:          aeron.NullValue,
+		getMaxRecordedPositionBackoffMs: initialGetMaxRecordedPositionBackoffMs,
+		replayChannelURI:                replayChannelURI,
+	}
+
+	if strings.HasSuffix(replayEndpoint, ":0") {
 		rm.state = StateResolveReplayPort
 	} else {
-		rm.replayChannelUri.Set(aeron.EndpointParamName, rm.replayEndpoint)
+		rm.replayChannelURI.Set(aeron.EndpointParamName, replayEndpoint)
 		rm.state = StateGetRecordingPosition
 	}
 
-	subscription.AddDestination(replayDestination)
-	rm.timeOfLastProgressMs = time.Now().UnixMilli()
-	return
+	if err := subscription.AddDestination(replayDestination); err != nil {
+		return nil, fmt.Errorf("failed to add replay destination '%s': %w", replayDestination, err)
+	}
+	nowMs := epochClock()
+	rm.timeOfLastProgressMs = nowMs
+	rm.timeOfNextGetMaxRecordedPosMs = nowMs
+	return rm, nil
 }
 
-// Close closes and stops any active replay. Will remove the replay destination from the subscription.
-// This operation Will NOT remove the live destination if it has been added, so it can be used for live consumption.
-func (rm *ReplayMerge) Close() {
+// Close stops any active replay and removes the replay destination from the subscription unless already merged.
+// This operation will NOT remove the live destination if it has been added, so it can be used for live consumption.
+// Like Java, the replay destination is removed asynchronously, so Close does not wait on the driver. Close is
+// idempotent; errors removing the destination or stopping the replay are returned but the ReplayMerge is closed
+// regardless.
+func (rm *ReplayMerge) Close() error {
 	state := rm.state
-	if StateClosed != state {
-		if !rm.archive.Aeron().IsClosed() {
-			if StateMerged != state {
-				rm.subscription.RemoveDestination(rm.replayDestination)
-			}
+	if StateClosed == state {
+		return nil
+	}
 
-			if rm.isReplayActive && rm.archive.Proxy.Publication.IsConnected() {
-				rm.stopReplay()
+	var errs []error
+	if !rm.archive.isAeronClosed() {
+		if StateMerged != state {
+			if _, err := rm.subscription.AsyncRemoveDestination(rm.replayDestination); err != nil {
+				errs = append(errs, err)
 			}
 		}
 
-		rm.setState(StateClosed)
+		if rm.isReplayActive && rm.archive.isRequestConnected() {
+			if err := rm.stopReplay(); err != nil {
+				errs = append(errs, err)
+			}
+		}
 	}
+
+	rm.setState(StateClosed)
+	return errors.Join(errs...)
 }
 
 // Subscription returns the Subscription used to consume the replayed and merged stream.
 func (rm *ReplayMerge) Subscription() *aeron.Subscription {
-	return rm.subscription
+	return rm.aeronSubscription
 }
 
-// DoWork performs the work of replaying and merging. Should only be used if polling the underlying Image directly.
-// Returns indication of work done processing the merge.
+// DoWork performs the work of replaying and merging. Should only be used if polling the underlying Image directly;
+// otherwise call Poll or ControlledPoll on this type.
+//
+// Returns an indication of work done processing the merge. If an error is returned the merge has transitioned to
+// StateFailed.
 func (rm *ReplayMerge) DoWork() (workCount int, err error) {
-	nowMs := time.Now().UnixMilli()
+	nowMs := rm.epochClock()
 
 	switch rm.state {
 	case StateResolveReplayPort:
 		workCount, err = rm.resolveReplayPort(nowMs)
-		if err != nil {
-			rm.setState(StateFailed)
-			return
-		}
-		if err = rm.checkProgress(nowMs); err != nil {
-			rm.setState(StateFailed)
-			return
-		}
 	case StateGetRecordingPosition:
 		workCount, err = rm.getRecordingPosition(nowMs)
-		if err != nil {
-			rm.setState(StateFailed)
-			return
-		}
-		if err = rm.checkProgress(nowMs); err != nil {
-			rm.setState(StateFailed)
-			return
-		}
 	case StateReplay:
 		workCount, err = rm.replay(nowMs)
-		if err != nil {
-			rm.setState(StateFailed)
-			return
-		}
-		if err = rm.checkProgress(nowMs); err != nil {
-			rm.setState(StateFailed)
-			return
-		}
 	case StateCatchup:
 		workCount, err = rm.catchup(nowMs)
-		if err != nil {
-			rm.setState(StateFailed)
-			return
-		}
-		if err = rm.checkProgress(nowMs); err != nil {
-			rm.setState(StateFailed)
-			return
-		}
 	case StateAttemptLiveJoin:
 		workCount, err = rm.attemptLiveJoin(nowMs)
-		if err != nil {
-			rm.setState(StateFailed)
-			return
-		}
-		if err = rm.checkProgress(nowMs); err != nil {
-			rm.setState(StateFailed)
-			return
-		}
+	default:
+		return 0, nil
 	}
-	return
+
+	if err == nil {
+		err = rm.checkProgress(nowMs)
+	}
+	if err != nil {
+		rm.setState(StateFailed)
+	}
+	return workCount, err
 }
 
-// Poll polls the Image used for replay and merging and live stream. The doWork method
-// will be called before the poll so that processing of the merge can be done.
+// Poll polls the Image used for replay and merging and live stream. DoWork is called before the poll so that
+// processing of the merge can be done.
 //
-// Returns number of fragments processed.
-func (rm *ReplayMerge) Poll(fragmentHandler term.FragmentHandler, fragmentLimit int) (workCount int, err error) {
-	workCount, err = rm.DoWork()
-	if err != nil {
-		return
+// Returns the number of fragments processed.
+func (rm *ReplayMerge) Poll(fragmentHandler term.FragmentHandler, fragmentLimit int) (int, error) {
+	if _, err := rm.DoWork(); err != nil {
+		return 0, err
 	}
 	if rm.image == nil {
-		return
+		return 0, nil
 	}
 	return rm.image.Poll(fragmentHandler, fragmentLimit), nil
 }
 
-// IsMerged returns if the live stream merged and the replay stopped?
+// ControlledPoll is the controlled fragment handler variant of Poll. DoWork is called before the poll so that
+// processing of the merge can be done.
+//
+// Returns the number of fragments processed.
+func (rm *ReplayMerge) ControlledPoll(fragmentHandler term.ControlledFragmentHandler, fragmentLimit int) (int, error) {
+	if _, err := rm.DoWork(); err != nil {
+		return 0, err
+	}
+	if rm.image == nil {
+		return 0, nil
+	}
+	return rm.image.ControlledPoll(fragmentHandler, fragmentLimit), nil
+}
+
+// IsMerged returns true if the live stream is merged and the replay stopped.
 func (rm *ReplayMerge) IsMerged() bool {
 	return rm.state == StateMerged
 }
 
-// HasFailed returns if the replay merge failed due to an error?
+// HasFailed returns true if the replay merge has failed due to an error.
 func (rm *ReplayMerge) HasFailed() bool {
 	return rm.state == StateFailed
 }
 
-// Image returns the image which is a merge of the replay and live stream.
+// IsClosed returns true if Close has been called.
+func (rm *ReplayMerge) IsClosed() bool {
+	return rm.state == StateClosed
+}
+
+// State returns the current state of the merge.
+func (rm *ReplayMerge) State() State {
+	return rm.state
+}
+
+// Image returns the Image which is a merge of the replay and live stream, or nil if not yet available.
 func (rm *ReplayMerge) Image() aeron.Image {
 	return rm.image
 }
 
-// IsLiveAdded returns if the live destination added to the subscription.
+// IsLiveAdded returns true if the live destination has been added to the Subscription.
 func (rm *ReplayMerge) IsLiveAdded() bool {
 	return rm.isLiveAdded
 }
 
-func (rm *ReplayMerge) resolveReplayPort(nowMs int64) (workCount int, err error) {
+// ReplayChannel returns the channel the archive is (or will be) instructed to replay to, including any resolved
+// ephemeral port.
+func (rm *ReplayMerge) ReplayChannel() string {
+	return rm.replayChannelURI.String()
+}
+
+func (rm *ReplayMerge) String() string {
+	transportCount := int32(0)
+	if rm.image != nil {
+		transportCount = rm.image.ActiveTransportCount()
+	}
+	return fmt.Sprintf("ReplayMerge{state=%s, nextTargetPosition=%d, timeOfLastProgressMs=%d, "+
+		"positionOfLastProgress=%d, isLiveAdded=%t, isReplayActive=%t, replayChannelUri=%s, "+
+		"activeTransportCount=%d}",
+		rm.state, rm.nextTargetPosition, rm.timeOfLastProgressMs, rm.positionOfLastProgress, rm.isLiveAdded,
+		rm.isReplayActive, rm.replayChannelURI.String(), transportCount)
+}
+
+func (rm *ReplayMerge) resolveReplayPort(nowMs int64) (int, error) {
 	resolvedEndpoint := rm.subscription.ResolvedEndpoint()
-	if resolvedEndpoint != "" {
-		i := strings.LastIndex(resolvedEndpoint, ":")
-		rm.replayChannelUri.Set(aeron.EndpointParamName,
-			rm.replayEndpoint[0:len(rm.replayEndpoint)-2]+resolvedEndpoint[i:])
-
-		rm.timeOfLastProgressMs = nowMs
-		rm.setState(StateGetRecordingPosition)
-		workCount += 1
+	if resolvedEndpoint == "" {
+		return 0, nil
 	}
-
-	return
+	if err := replaceEndpointWildcardPort(rm.replayChannelURI, resolvedEndpoint); err != nil {
+		return 0, err
+	}
+	rm.timeOfLastProgressMs = nowMs
+	rm.setState(StateGetRecordingPosition)
+	return 1, nil
 }
 
-func (rm *ReplayMerge) getRecordingPosition(nowMs int64) (workCount int, err error) {
-	if aeron.NullValue == rm.activeCorrelationId {
-		correlationId := rm.archive.Aeron().NextCorrelationID()
+func (rm *ReplayMerge) getRecordingPosition(nowMs int64) (int, error) {
+	workCount := 0
 
-		if rm.archive.Proxy.RecordingPositionRequest(correlationId, rm.recordingId) == nil {
-			rm.activeCorrelationId = correlationId
-			rm.timeOfLastProgressMs = nowMs
-			workCount += 1
+	if aeron.NullValue == rm.activeCorrelationID {
+		sent, err := rm.callGetMaxRecordedPosition(nowMs)
+		if err != nil {
+			return 0, err
 		}
-		return
-	}
+		if sent {
+			rm.timeOfLastProgressMs = nowMs
+			workCount++
+		}
+	} else {
+		ok, err := rm.pollForResponse(rm.activeCorrelationID)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
+			rm.nextTargetPosition = rm.polledRelevantID()
+			rm.activeCorrelationID = aeron.NullValue
 
-	var success bool
-	success, err = rm.pollForResponse()
-	if err != nil {
-		return
-	}
-	if success {
-		rm.nextTargetPosition = rm.polledRelevantId()
-		rm.activeCorrelationId = aeron.NullValue
-
-		if archive.RecordingPositionNull == rm.nextTargetPosition {
-			correlationId := rm.archive.Aeron().NextCorrelationID()
-
-			if rm.archive.Proxy.StopPositionRequest(correlationId, rm.recordingId) == nil {
-				rm.activeCorrelationId = correlationId
+			if archive.RecordingPositionNull != rm.nextTargetPosition {
 				rm.timeOfLastProgressMs = nowMs
-				workCount += 1
+				rm.setState(StateReplay)
 			}
-		} else {
-			rm.timeOfLastProgressMs = nowMs
-			rm.setState(StateReplay)
+			workCount++
 		}
 	}
 
-	workCount += 1
-
-	return
+	return workCount, nil
 }
 
-func (rm *ReplayMerge) replay(nowMs int64) (workCount int, err error) {
-	if aeron.NullValue == rm.activeCorrelationId {
-		correlationId := rm.archive.Aeron().NextCorrelationID()
-		if rm.archive.Proxy.ReplayRequest(
-			correlationId,
-			rm.recordingId,
-			rm.startPosition,
-			archive.RecordingLengthMax,
-			rm.replayChannelUri.String(),
-			rm.subscription.StreamID()) == nil {
-			rm.activeCorrelationId = correlationId
-			rm.timeOfLastProgressMs = nowMs
-			workCount += 1
+func (rm *ReplayMerge) replay(nowMs int64) (int, error) {
+	workCount := 0
+
+	if aeron.NullValue == rm.activeCorrelationID {
+		correlationID := rm.archive.nextCorrelationID()
+		sent, err := rm.archive.replay(correlationID, rm.recordingID, rm.startPosition, replayLength,
+			rm.replayChannelURI.String(), rm.subscription.StreamID())
+		if err != nil {
+			return 0, err
 		}
-		return
+		if sent {
+			rm.activeCorrelationID = correlationID
+			rm.timeOfLastProgressMs = nowMs
+			workCount++
+		}
+	} else {
+		ok, err := rm.pollForResponse(rm.activeCorrelationID)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
+			rm.isReplayActive = true
+			rm.replaySessionID = rm.polledRelevantID()
+			rm.timeOfLastProgressMs = nowMs
+			rm.activeCorrelationID = aeron.NullValue
+
+			rm.getMaxRecordedPositionBackoffMs = initialGetMaxRecordedPositionBackoffMs
+			rm.timeOfNextGetMaxRecordedPosMs = nowMs
+
+			rm.setState(StateCatchup)
+			workCount++
+		}
 	}
 
-	var success bool
-	success, err = rm.pollForResponse()
-	if err != nil {
-		return
-	}
-	if success {
-		rm.isReplayActive = true
-		rm.replaySessionId = rm.polledRelevantId()
-		rm.timeOfLastProgressMs = nowMs
-		rm.setState(StateCatchup)
-		workCount += 1
-	}
-	return
+	return workCount, nil
 }
 
-func (rm *ReplayMerge) catchup(nowMs int64) (workCount int, err error) {
+func (rm *ReplayMerge) catchup(nowMs int64) (int, error) {
+	workCount := 0
 
 	if rm.image == nil && rm.subscription.IsConnected() {
 		rm.timeOfLastProgressMs = nowMs
-		rm.image = rm.subscription.ImageBySessionID(int32(rm.replaySessionId))
-		rm.positionOfLastProgress = aeron.NullValue
-		if rm.image != nil {
-			rm.positionOfLastProgress = rm.image.Position()
+		// The replay session id is the low 32 bits of the replay session id returned by the archive.
+		image := rm.subscription.ImageBySessionID(int32(rm.replaySessionID))
+		if image != nil {
+			rm.image = image
+			rm.positionOfLastProgress = image.Position()
+		} else {
+			rm.positionOfLastProgress = aeron.NullValue
 		}
 	}
 
@@ -378,91 +528,116 @@ func (rm *ReplayMerge) catchup(nowMs int64) (workCount int, err error) {
 			rm.timeOfLastProgressMs = nowMs
 			rm.positionOfLastProgress = position
 			rm.setState(StateAttemptLiveJoin)
-			workCount += 1
+			workCount++
 		} else if position > rm.positionOfLastProgress {
 			rm.timeOfLastProgressMs = nowMs
 			rm.positionOfLastProgress = position
 		} else if rm.image.IsClosed() {
-			err = fmt.Errorf("ReplayMerge Image closed unexpectedly.")
-			return
+			return 0, ErrImageClosed
 		}
 	}
-	return
+
+	return workCount, nil
 }
 
-func (rm *ReplayMerge) attemptLiveJoin(nowMs int64) (workCount int, err error) {
+func (rm *ReplayMerge) attemptLiveJoin(nowMs int64) (int, error) {
+	workCount := 0
 
-	if aeron.NullValue == rm.activeCorrelationId {
-		correlationId := rm.archive.Aeron().NextCorrelationID()
-		if rm.archive.Proxy.RecordingPositionRequest(correlationId, rm.recordingId) == nil {
-			rm.activeCorrelationId = correlationId
-			workCount += 1
+	if aeron.NullValue == rm.activeCorrelationID {
+		sent, err := rm.callGetMaxRecordedPosition(nowMs)
+		if err != nil {
+			return 0, err
 		}
-		return
-	}
+		if sent {
+			rm.timeOfLastProgressMs = nowMs
+			workCount++
+		}
+	} else {
+		ok, err := rm.pollForResponse(rm.activeCorrelationID)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
+			rm.nextTargetPosition = rm.polledRelevantID()
+			rm.activeCorrelationID = aeron.NullValue
 
-	var success bool
-	success, err = rm.pollForResponse()
-	if err != nil {
-		return
-	}
-	if success {
-		rm.nextTargetPosition = rm.polledRelevantId()
-		rm.activeCorrelationId = aeron.NullValue
+			if archive.RecordingPositionNull != rm.nextTargetPosition {
+				nextState := StateCatchup
 
-		if archive.RecordingPositionNull == rm.nextTargetPosition {
-			correlationId := rm.archive.Aeron().NextCorrelationID()
-			if rm.archive.Proxy.RecordingPositionRequest(correlationId, rm.recordingId) == nil {
-				rm.activeCorrelationId = correlationId
-			}
-		} else {
-			nextState := StateCatchup
-
-			if rm.image != nil {
-				position := rm.image.Position()
-
-				if rm.shouldAddLiveDestination(position) {
-					rm.subscription.AddDestination(rm.liveDestination)
-					rm.timeOfLastProgressMs = nowMs
-					rm.positionOfLastProgress = position
-					rm.isLiveAdded = true
-				} else if rm.shouldStopAndRemoveReplay(position) {
-					rm.subscription.RemoveDestination(rm.replayDestination)
-					rm.stopReplay()
-					rm.timeOfLastProgressMs = nowMs
-					rm.positionOfLastProgress = position
-					nextState = StateMerged
+				if rm.image != nil {
+					position := rm.image.Position()
+					if rm.shouldAddLiveDestination(position) {
+						if _, err := rm.subscription.AsyncAddDestination(rm.liveDestination); err != nil {
+							return 0, fmt.Errorf("failed to add live destination '%s': %w", rm.liveDestination, err)
+						}
+						rm.timeOfLastProgressMs = nowMs
+						rm.positionOfLastProgress = position
+						rm.isLiveAdded = true
+					} else if rm.shouldStopAndRemoveReplay(position) {
+						if _, err := rm.subscription.AsyncRemoveDestination(rm.replayDestination); err != nil {
+							return 0, fmt.Errorf(
+								"failed to remove replay destination '%s': %w", rm.replayDestination, err)
+						}
+						if err := rm.stopReplay(); err != nil {
+							return 0, err
+						}
+						rm.timeOfLastProgressMs = nowMs
+						rm.positionOfLastProgress = position
+						nextState = StateMerged
+					}
 				}
+
+				rm.setState(nextState)
 			}
 
-			rm.setState(nextState)
+			workCount++
 		}
-
-		workCount += 1
 	}
 
-	return
+	return workCount, nil
 }
 
-func (rm *ReplayMerge) stopReplay() {
-	correlationId := rm.archive.Aeron().NextCorrelationID()
-	if rm.archive.Proxy.StopReplayRequest(correlationId, rm.replaySessionId) == nil {
+func (rm *ReplayMerge) callGetMaxRecordedPosition(nowMs int64) (bool, error) {
+	if nowMs < rm.timeOfNextGetMaxRecordedPosMs {
+		return false, nil
+	}
+
+	correlationID := rm.archive.nextCorrelationID()
+	sent, err := rm.archive.maxRecordedPosition(correlationID, rm.recordingID)
+	if err != nil {
+		return false, err
+	}
+	if sent {
+		rm.activeCorrelationID = correlationID
+	}
+
+	// increase backoff regardless of result
+	rm.getMaxRecordedPositionBackoffMs = minInt64(rm.getMaxRecordedPositionBackoffMs*2, getMaxRecordedPositionBackoffMaxMs)
+	rm.timeOfNextGetMaxRecordedPosMs = nowMs + rm.getMaxRecordedPositionBackoffMs
+
+	return sent, nil
+}
+
+func (rm *ReplayMerge) stopReplay() error {
+	correlationID := rm.archive.nextCorrelationID()
+	sent, err := rm.archive.stopReplay(correlationID, rm.replaySessionID)
+	if err != nil {
+		return err
+	}
+	if sent {
 		rm.isReplayActive = false
 	}
+	return nil
 }
 
 func (rm *ReplayMerge) setState(newState State) {
 	rm.state = newState
-	rm.activeCorrelationId = aeron.NullValue
+	rm.activeCorrelationID = aeron.NullValue
 }
 
 func (rm *ReplayMerge) shouldAddLiveDestination(position int64) bool {
-	mn := rm.image.TermBufferLength() >> 2
-	if mn > LiveAddMaxWindow {
-		mn = LiveAddMaxWindow
-	}
 	return !rm.isLiveAdded &&
-		(rm.nextTargetPosition-position) <= int64(mn)
+		(rm.nextTargetPosition-position) <= minInt64(int64(rm.image.TermBufferLength()>>2), int64(LiveAddMaxWindow))
 }
 
 func (rm *ReplayMerge) shouldStopAndRemoveReplay(position int64) bool {
@@ -472,36 +647,72 @@ func (rm *ReplayMerge) shouldStopAndRemoveReplay(position int64) bool {
 }
 
 func (rm *ReplayMerge) checkProgress(nowMs int64) error {
-	if nowMs > (rm.timeOfLastProgressMs + rm.mergeProgressTimeoutMs) {
-		return fmt.Errorf("ReplayMerge no progress: state=%s", rm.state)
+	if nowMs > rm.timeOfLastProgressMs+rm.mergeProgressTimeoutMs {
+		transportCount := int32(0)
+		if rm.image != nil {
+			transportCount = rm.image.ActiveTransportCount()
+		}
+		return fmt.Errorf("%w: state=%s, activeTransportCount=%d", ErrNoProgress, rm.state, transportCount)
+	}
+
+	if aeron.NullValue == rm.activeCorrelationID && nowMs > rm.timeOfLastScheduledArchivePoll+archivePollIntervalMs {
+		rm.timeOfLastScheduledArchivePoll = nowMs
+		if _, err := rm.pollForResponse(aeron.NullValue); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-// Returns whether this succeeded, and what the error is.
-func (rm *ReplayMerge) pollForResponse() (bool, error) {
-	correlationId := rm.activeCorrelationId
-	poller := rm.archive.Control
-
-	if poller.Poll() > 0 && poller.Results.IsPollComplete {
-		if poller.Results.ControlResponse.ControlSessionId == rm.archive.SessionID {
-			if poller.Results.ErrorResponse != nil {
-				err := fmt.Errorf(
-					"archive response for correlationId=%d, error=%s",
-					correlationId,
-					poller.Results.ErrorResponse,
-				)
-				return false, err
+// pollForResponse polls the archive control response stream once and returns true if a response for correlationID
+// was received. An ERROR response for this control session is returned as an *ArchiveError.
+func (rm *ReplayMerge) pollForResponse(correlationID int64) (bool, error) {
+	pollCount, response := rm.archive.pollResponse()
+	if response != nil {
+		rm.polledResponse = response
+		if response.ControlSessionId == rm.archive.controlSessionID() {
+			if response.Code == codecs.ControlResponseCode.ERROR {
+				return false, archive.NewArchiveException(
+					fmt.Sprintf("archive response for correlationId=%d, error: %s",
+						response.CorrelationId, response.ErrorMessage),
+					archive.ArchiveErrorCode(response.RelevantId),
+					response.CorrelationId)
 			}
+			return response.CorrelationId == correlationID, nil
 		}
-		return poller.Results.CorrelationId == correlationId, nil
+	} else if pollCount == 0 && !rm.archive.isResponseConnected() {
+		return false, newArchiveNotConnectedError()
 	}
-	// TODO: (false, nil) is what was here before, but I suspect that (true, nil) is more accurate?
-	// Check this when revamping archive code.
 	return false, nil
 }
 
-func (rm *ReplayMerge) polledRelevantId() int64 {
-	poller := rm.archive.Control
-	return poller.Results.ControlResponse.RelevantId
+func (rm *ReplayMerge) polledRelevantID() int64 {
+	return rm.polledResponse.RelevantId
+}
+
+// replaceEndpointWildcardPort mirrors Java's ChannelUri.replaceEndpointWildcardPort.
+func replaceEndpointWildcardPort(uri aeron.ChannelUri, resolvedEndpoint string) error {
+	portSeparatorIndex := strings.LastIndex(resolvedEndpoint, ":")
+	if portSeparatorIndex == -1 {
+		return fmt.Errorf("no port specified on resolvedEndpoint=%s", resolvedEndpoint)
+	}
+	if strings.HasSuffix(resolvedEndpoint, ":0") {
+		return fmt.Errorf("wildcard port specified on resolvedEndpoint=%s", resolvedEndpoint)
+	}
+
+	existingEndpoint := uri.Get(aeron.EndpointParamName)
+	if existingEndpoint == "" {
+		uri.Set(aeron.EndpointParamName, resolvedEndpoint)
+	} else if strings.HasSuffix(existingEndpoint, ":0") {
+		uri.Set(aeron.EndpointParamName,
+			existingEndpoint[:len(existingEndpoint)-2]+resolvedEndpoint[portSeparatorIndex:])
+	}
+	return nil
+}
+
+func minInt64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
 }

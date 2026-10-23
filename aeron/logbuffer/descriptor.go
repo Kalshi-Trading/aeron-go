@@ -30,12 +30,11 @@ const (
 	PartitionCount                = 3
 	LogMetaDataSectionIndex       = PartitionCount
 
-	TermMinLength        int32 = 64 * 1024
-	termMaxLength        int32 = 1024 * 1024 * 1024
-	pageMinSize          int32 = 4 * 1024
-	pageMaxSize          int32 = 1024 * 1024 * 1024
-	maxSingleMappingSize int64 = 0x7FFFFFFF
-	LogMetaDataLength          = pageMinSize
+	TermMinLength     int32 = 64 * 1024
+	TermMaxLength     int32 = 1024 * 1024 * 1024
+	PageMinSize       int32 = 4 * 1024
+	PageMaxSize       int32 = 1024 * 1024 * 1024
+	LogMetaDataLength       = PageMinSize
 )
 
 /* LogBufferMetaData is the flyweight for LogBuffer meta data
@@ -91,111 +90,102 @@ type LogBufferMetaData struct {
 
 	TailCounter             []flyweight.Int64Field // 0, 8, 16
 	ActiveTermCountOff      flyweight.Int32Field   // 24
-	padding0                flyweight.Padding      // 28
 	EndOfStreamPosOff       flyweight.Int64Field   // 128
-	IsConnected             flyweight.Int32Field   // 136
+	IsConnectedFld          flyweight.Int32Field   // 136
 	ActiveTransportCountOff flyweight.Int32Field   // 140
-	padding1                flyweight.Padding      // 144
 	CorrelationId           flyweight.Int64Field   // 256
 	InitTermID              flyweight.Int32Field   // 264
-	DefaultFrameHdrLen      flyweight.Int32Field   // 270
-	MTULen                  flyweight.Int32Field   // 274
-	TermLen                 flyweight.Int32Field   // 278
-	PageSize                flyweight.Int32Field   // 282
-	padding2                flyweight.Padding      // 286
-	DefaultFrameHeader      flyweight.RawDataField // 384
-	padding3                flyweight.Padding
+	DefaultFrameHdrLen      flyweight.Int32Field   // 268
+	MTULen                  flyweight.Int32Field   // 272
+	TermLen                 flyweight.Int32Field   // 276
+	PageSizeFld             flyweight.Int32Field   // 280
+	DefaultFrameHeader      flyweight.RawDataField // 320
+
+	buf    *atomic.Buffer
+	offset int32
 }
 
+// Wrap wraps the metadata flyweight around buf at offset. Fields are wrapped at the offsets defined by
+// io.aeron.logbuffer.LogBufferDescriptor (see the Log*Offset constants).
 func (m *LogBufferMetaData) Wrap(buf *atomic.Buffer, offset int) flyweight.Flyweight {
-	pos := offset
+	m.buf = buf
+	m.offset = int32(offset)
+	at := func(o int32) int { return offset + int(o) }
 	m.TailCounter = make([]flyweight.Int64Field, PartitionCount)
-	pos += m.TailCounter[0].Wrap(buf, pos)
-	pos += m.TailCounter[1].Wrap(buf, pos)
-	pos += m.TailCounter[2].Wrap(buf, pos)
-	pos += m.ActiveTermCountOff.Wrap(buf, pos)
-	pos += m.padding0.Wrap(buf, pos, util.CacheLineLength*2, util.CacheLineLength)
-	pos += m.EndOfStreamPosOff.Wrap(buf, pos)
-	pos += m.IsConnected.Wrap(buf, pos)
-	pos += m.ActiveTransportCountOff.Wrap(buf, pos)
-	pos += m.padding1.Wrap(buf, pos, util.CacheLineLength*2, util.CacheLineLength)
-	pos += m.CorrelationId.Wrap(buf, pos)
-	pos += m.InitTermID.Wrap(buf, pos)
-	pos += m.DefaultFrameHdrLen.Wrap(buf, pos)
-	pos += m.MTULen.Wrap(buf, pos)
-	pos += m.TermLen.Wrap(buf, pos)
-	pos += m.PageSize.Wrap(buf, pos)
-	pos += m.padding2.Wrap(buf, pos, util.CacheLineLength, util.CacheLineLength)
-	pos += m.DefaultFrameHeader.Wrap(buf, pos, DataFrameHeader.Length)
-	pos += m.padding3.Wrap(buf, pos, util.CacheLineLength*2, util.CacheLineLength)
+	for i := int32(0); i < PartitionCount; i++ {
+		m.TailCounter[i].Wrap(buf, at(tailOffset(i)))
+	}
+	m.ActiveTermCountOff.Wrap(buf, at(LogActiveTermCountOffset))
+	m.EndOfStreamPosOff.Wrap(buf, at(LogEndOfStreamPositionOffset))
+	m.IsConnectedFld.Wrap(buf, at(LogIsConnectedOffset))
+	m.ActiveTransportCountOff.Wrap(buf, at(LogActiveTransportCount))
+	m.CorrelationId.Wrap(buf, at(LogCorrelationIDOffset))
+	m.InitTermID.Wrap(buf, at(LogInitialTermIDOffset))
+	m.DefaultFrameHdrLen.Wrap(buf, at(LogDefaultFrameHeaderLengthOffset))
+	m.MTULen.Wrap(buf, at(LogMtuLengthOffset))
+	m.TermLen.Wrap(buf, at(LogTermLengthOffset))
+	m.PageSizeFld.Wrap(buf, at(LogPageSizeOffset))
+	m.DefaultFrameHeader.Wrap(buf, at(LogDefaultFrameHeaderOffset), DataFrameHeader.Length)
 
-	m.SetSize(pos - offset)
+	m.SetSize(int(LogMetaDataLength))
 	return m
 }
 
 // ActiveTransportCount returns the count of active transports for the Image.
 func (m *LogBufferMetaData) ActiveTransportCount() int32 {
-	return m.ActiveTransportCountOff.Get()
+	return m.buf.GetInt32Volatile(m.offset + LogActiveTransportCount)
 }
 
-func checkTermLength(termLength int32) {
+// CheckTermLength checks the term length is a power of two within [TermMinLength, TermMaxLength].
+func CheckTermLength(termLength int32) error {
 	if termLength < TermMinLength {
-		panic(fmt.Sprintf("Term length less than min size of %d, length=%d",
-			TermMinLength, termLength))
+		return fmt.Errorf("term length less than min length of %d: length=%d", TermMinLength, termLength)
 	}
-
-	if termLength > termMaxLength {
-		panic(fmt.Sprintf("Term length greater than max size of %d, length=%d",
-			termMaxLength, termLength))
+	if termLength > TermMaxLength {
+		return fmt.Errorf("term length more than max length of %d: length=%d", TermMaxLength, termLength)
 	}
-
 	if !util.IsPowerOfTwo(int64(termLength)) {
-		panic(fmt.Sprintf("Term length not a power of 2, length=%d", termLength))
+		return fmt.Errorf("term length not a power of 2: length=%d", termLength)
 	}
+	return nil
 }
 
-func computeTermLength(logLength int32) int32 {
-	return (logLength - LogMetaDataLength) / PartitionCount
-}
-
-func checkPageSize(pageSize int32) {
-	if pageSize < pageMinSize {
-		panic(fmt.Sprintf("Page size less than min size of %d, size=%d", pageMinSize, pageSize))
+// CheckPageSize checks the page size is a power of two within [PageMinSize, PageMaxSize].
+func CheckPageSize(pageSize int32) error {
+	if pageSize < PageMinSize {
+		return fmt.Errorf("page size less than min size of %d: page size=%d", PageMinSize, pageSize)
 	}
-
-	if pageSize > pageMaxSize {
-		panic(fmt.Sprintf("Page Size greater than max size of %d, size=%d", pageMaxSize, pageSize))
+	if pageSize > PageMaxSize {
+		return fmt.Errorf("page size more than max size of %d: page size=%d", PageMaxSize, pageSize)
 	}
-
 	if !util.IsPowerOfTwo(int64(pageSize)) {
-		panic(fmt.Sprintf("Page size not a power of 2, size=%d", pageSize))
+		return fmt.Errorf("page size not a power of 2: page size=%d", pageSize)
 	}
+	return nil
 }
 
+// TermID extracts the term id from a raw tail value.
 func TermID(rawTail int64) int32 {
 	return int32(rawTail >> 32)
 }
 
-func indexByTermCount(termCount int32) int32 {
-	return termCount % PartitionCount
-}
-
-func RotateLog(logMetaDataBuffer *LogBufferMetaData, currentTermCount int32, currentTermId int32) {
+// RotateLog rotates the log to the next term, initialising the tail of the next partition and incrementing the
+// active term count. Returns true if this caller won the CAS on the active term count.
+func RotateLog(logMetaDataBuffer *LogBufferMetaData, currentTermCount int32, currentTermId int32) bool {
 	nextTermId := currentTermId + 1
 	nextTermCount := currentTermCount + 1
-	nextIndex := indexByTermCount(nextTermCount)
+	nextIndex := IndexByTermCount(int64(nextTermCount))
 	expectedTermId := nextTermId - PartitionCount
-	newRawTail := int64(nextTermId) * (int64(1) << 32)
-	tail := logMetaDataBuffer.TailCounter[nextIndex]
+	newRawTail := PackTail(nextTermId, 0)
 
 	for {
-		rawTail := tail.Get()
+		rawTail := logMetaDataBuffer.RawTailVolatile(nextIndex)
 		if expectedTermId != TermID(rawTail) {
 			break
 		}
-		if tail.CAS(rawTail, newRawTail) {
+		if logMetaDataBuffer.CasRawTail(nextIndex, rawTail, newRawTail) {
 			break
 		}
 	}
-	logMetaDataBuffer.ActiveTermCountOff.CAS(currentTermCount, nextTermCount)
+	return logMetaDataBuffer.CasActiveTermCount(currentTermCount, nextTermCount)
 }

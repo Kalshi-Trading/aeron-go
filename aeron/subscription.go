@@ -60,9 +60,12 @@ const LocalSocketAddressStatusCounterTypeId = 14
 
 type ReceivingConductor interface {
 	CounterReader() *ctr.Reader
-	releaseSubscription(regID int64, images []Image) error
+	releaseSubscription(sub *Subscription) error
 	AddRcvDestination(registrationID int64, endpointChannel string) error
 	RemoveRcvDestination(registrationID int64, endpointChannel string) error
+	AsyncAddRcvDestination(registrationID int64, endpointChannel string) (int64, error)
+	AsyncRemoveRcvDestination(registrationID int64, endpointChannel string) (int64, error)
+	rejectImage(imageCorrelationID int64, position int64, reason string) error
 }
 
 // Subscription is the object responsible for receiving messages from media driver. It is specific to a channel and
@@ -125,26 +128,29 @@ func (sub *Subscription) ChannelStatus() int {
 	if sub.IsClosed() {
 		return ChannelStatusNoIdAllocated
 	}
-	if sub.channelStatusID == -1 { // IPC channels don't have a channel status counter
+	switch sub.channelStatusID {
+	case 0:
+		return ChannelStatusInitializing
+	case ChannelStatusNoIdAllocated: // IPC channels don't have a channel status counter
 		return ChannelStatusActive
+	default:
+		return int(sub.conductor.CounterReader().GetCounterValue(sub.channelStatusID))
 	}
-	return int(sub.conductor.CounterReader().GetCounterValue(sub.channelStatusID))
 }
 
-// ChannelStatusId returns the counter ID used to represent the channel status of this Subscription.
-func (sub *Subscription) ChannelStatusId() int32 {
+// ChannelStatusID returns the counter ID used to represent the channel status of this Subscription.
+func (sub *Subscription) ChannelStatusID() int32 {
 	return sub.channelStatusID
 }
 
-// Close will release all images in this subscription, send command to the driver and block waiting for response from
-// the media driver. Images will be lingered by the ClientConductor.
+// Close releases all images in this subscription and sends REMOVE_SUBSCRIPTION to the driver. As Java's
+// Subscription.close, the images are closed and lingered by the ClientConductor under its lock, so an image cannot
+// be added concurrently by the conductor after the list is emptied. A no-op if the client is closed.
 func (sub *Subscription) Close() error {
-	if sub.isClosed.CompareAndSet(false, true) {
-		images := sub.images.Empty()
-		return sub.conductor.releaseSubscription(sub.registrationID, images)
+	if sub.IsClosed() {
+		return nil
 	}
-
-	return nil
+	return sub.conductor.releaseSubscription(sub)
 }
 
 // AvailableImageHandler returns a callback used to indicate when an Image becomes available under this Subscription.
@@ -165,27 +171,24 @@ func (sub *Subscription) Poll(handler term.FragmentHandler, fragmentLimit int) i
 	length := len(img)
 	var fragmentsRead int
 
-	if length > 0 {
-		startingIndex := sub.roundRobinIndex
-		sub.roundRobinIndex++
-		if startingIndex >= length {
-			sub.roundRobinIndex = 0
-			startingIndex = 0
-		}
-
-		for i := startingIndex; i < length && fragmentsRead < fragmentLimit; i++ {
-			var newFrags int
-			newFrags = img[i].Poll(handler, fragmentLimit-fragmentsRead)
-			fragmentsRead += newFrags
-		}
-
-		for i := 0; i < startingIndex && fragmentsRead < fragmentLimit; i++ {
-			var newFrags int
-			newFrags = img[i].Poll(handler, fragmentLimit-fragmentsRead)
-			fragmentsRead += newFrags
-		}
+	startingIndex := sub.roundRobinIndex
+	sub.roundRobinIndex++
+	if startingIndex >= length {
+		startingIndex = 0
+		sub.roundRobinIndex = 1
 	}
 
+	for i := startingIndex; i < length && fragmentsRead < fragmentLimit; i++ {
+		var newFrags int
+		newFrags = img[i].Poll(handler, fragmentLimit-fragmentsRead)
+		fragmentsRead += newFrags
+	}
+
+	for i := 0; i < startingIndex && fragmentsRead < fragmentLimit; i++ {
+		var newFrags int
+		newFrags = img[i].Poll(handler, fragmentLimit-fragmentsRead)
+		fragmentsRead += newFrags
+	}
 	return fragmentsRead
 }
 
@@ -202,68 +205,52 @@ func (sub *Subscription) ControlledPoll(handler term.ControlledFragmentHandler, 
 	length := len(img)
 	var fragmentsRead int
 
-	if length > 0 {
-		startingIndex := sub.roundRobinIndex
-		sub.roundRobinIndex++
-		if startingIndex >= length {
-			sub.roundRobinIndex = 0
-			startingIndex = 0
-		}
-
-		for i := startingIndex; i < length && fragmentsRead < fragmentLimit; i++ {
-			var newFrags int
-			newFrags = img[i].ControlledPoll(handler, fragmentLimit-fragmentsRead)
-			fragmentsRead += newFrags
-		}
-
-		for i := 0; i < startingIndex && fragmentsRead < fragmentLimit; i++ {
-			var newFrags int
-			newFrags = img[i].ControlledPoll(handler, fragmentLimit-fragmentsRead)
-			fragmentsRead += newFrags
-		}
+	startingIndex := sub.roundRobinIndex
+	sub.roundRobinIndex++
+	if startingIndex >= length {
+		startingIndex = 0
+		sub.roundRobinIndex = 1
 	}
 
+	for i := startingIndex; i < length && fragmentsRead < fragmentLimit; i++ {
+		var newFrags int
+		newFrags = img[i].ControlledPoll(handler, fragmentLimit-fragmentsRead)
+		fragmentsRead += newFrags
+	}
+
+	for i := 0; i < startingIndex && fragmentsRead < fragmentLimit; i++ {
+		var newFrags int
+		newFrags = img[i].ControlledPoll(handler, fragmentLimit-fragmentsRead)
+		fragmentsRead += newFrags
+	}
 	return fragmentsRead
 }
 
-//go:norace
-func (sub *Subscription) hasImage(sessionID int32) bool {
-	img := sub.images.Get()
-	for _, image := range img {
-		if image.SessionID() == sessionID {
-			return true
-		}
+// addImage publishes a new copy of the image list with the image appended (copy-on-write) so that concurrent
+// pollers never observe a mutation of the array they are iterating. Returns the previous list.
+func (sub *Subscription) addImage(img Image) []Image {
+	if i, ok := img.(*image); ok {
+		i.subscription = sub
 	}
-	return false
+	return sub.images.add(img)
 }
 
-//go:norace
-func (sub *Subscription) addImage(image Image) *[]Image {
-
-	images := sub.images.Get()
-
-	sub.images.Set(append(images, image))
-
-	return &images
-}
-
-//go:norace
+// removeImage publishes a new copy of the image list without the image with the given correlation id
+// (copy-on-write), marks the removed image as closed and returns it, or nil if not found.
 func (sub *Subscription) removeImage(correlationID int64) Image {
-
-	img := sub.images.Get()
-	for ix, image := range img {
-		if image.CorrelationID() == correlationID {
-			logger.Debugf("Removing image %v for subscription %d", image, sub.registrationID)
-
-			img[ix] = img[len(img)-1]
-			img = img[:len(img)-1]
-
-			sub.images.Set(img)
-
-			return image
-		}
+	image := sub.images.remove(correlationID)
+	if image != nil {
+		logger.Debugf("Removing image %v for subscription %d", image, sub.registrationID)
+		closeImage(image)
 	}
-	return nil
+	return image
+}
+
+// closeImage marks an image closed without releasing its log buffers, which happens after lingering.
+func closeImage(image Image) {
+	if c, ok := image.(interface{ markClosed() }); ok {
+		c.markClosed()
+	}
 }
 
 // RegistrationID returns the registration id.
@@ -327,30 +314,28 @@ func (sub *Subscription) ResolvedEndpoint() string {
 }
 
 // TryResolveChannelEndpointPort resolves the channel endpoint and replaces it with the port from the
-// ephemeral range when 0 was provided. If there are no addresses, or if there is more than one, returned from
-// LocalSocketAddresses() then the original channel is returned.
-// If the channel is not ACTIVE, then empty string will be returned.
+// ephemeral range when 0 was provided, as Java's Subscription.tryResolveChannelEndpointPort. The original channel is
+// returned when there is no wildcard endpoint or the channel uses manual MDC control mode. If the endpoint has not
+// been resolved yet (channel not ACTIVE) then empty string is returned.
 func (sub *Subscription) TryResolveChannelEndpointPort() string {
-	if sub.ChannelStatus() != ChannelStatusActive {
-		return ""
-	}
-	localSocketAddresses := sub.LocalSocketAddresses()
-	if len(localSocketAddresses) != 1 {
-		return sub.channel
-	}
 	uri, err := ParseChannelUri(sub.channel)
 	if err != nil {
 		logger.Warningf("error parsing channel (%s): %v", sub.channel, err)
 		return sub.channel
 	}
-	endpoint := uri.Get("endpoint")
-	if strings.HasSuffix(endpoint, ":0") {
-		resolvedEndpoint := localSocketAddresses[0]
-		i := strings.LastIndex(resolvedEndpoint, ":")
-		uri.Set("endpoint", endpoint[:(len(endpoint)-2)]+resolvedEndpoint[i:])
-		return uri.String()
+	endpoint := uri.Get(EndpointParamName)
+	if endpoint == "" || !strings.HasSuffix(endpoint, ":0") || uri.Get(MdcControlModeParamName) == MdcControlModeManual {
+		return sub.channel
 	}
-	return sub.channel
+	resolvedEndpoint := sub.ResolvedEndpoint()
+	if resolvedEndpoint == "" {
+		return ""
+	}
+	if err := uri.ReplaceEndpointWildcardPort(resolvedEndpoint); err != nil {
+		logger.Warningf("error resolving channel (%s): %v", sub.channel, err)
+		return ""
+	}
+	return uri.String()
 }
 
 // LocalSocketAddresses fetches the local socket addresses for this subscription.
@@ -387,6 +372,28 @@ func (sub *Subscription) RemoveDestination(endpointChannel string) error {
 	}
 
 	return sub.conductor.RemoveRcvDestination(sub.registrationID, endpointChannel)
+}
+
+// AsyncAddDestination adds a destination manually to a multi-destination Subscription without waiting for the
+// driver. The returned correlation id can be checked with Aeron.IsCommandActive; driver errors go to the error
+// handler.
+func (sub *Subscription) AsyncAddDestination(endpointChannel string) (int64, error) {
+	if sub.IsClosed() {
+		return 0, errors.New("subscription is closed")
+	}
+
+	return sub.conductor.AsyncAddRcvDestination(sub.registrationID, endpointChannel)
+}
+
+// AsyncRemoveDestination removes a destination manually from a multi-destination Subscription without waiting for
+// the driver. The returned correlation id can be checked with Aeron.IsCommandActive; driver errors go to the error
+// handler.
+func (sub *Subscription) AsyncRemoveDestination(endpointChannel string) (int64, error) {
+	if sub.IsClosed() {
+		return 0, errors.New("subscription is closed")
+	}
+
+	return sub.conductor.AsyncRemoveRcvDestination(sub.registrationID, endpointChannel)
 }
 
 // IsConnectedTo is a helper function used primarily by tests, which is used within the same process to verify that

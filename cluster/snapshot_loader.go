@@ -19,6 +19,7 @@ import (
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
+	"github.com/lirm/aeron-go/aeron/logbuffer/term"
 	"github.com/lirm/aeron-go/cluster/codecs"
 )
 
@@ -31,17 +32,37 @@ type snapshotLoader struct {
 	appVersion int32
 	timeUnit   codecs.ClusterTimeUnitEnum
 	err        error
+	assembler  *aeron.ControlledFragmentAssembler
 }
 
 func newSnapshotLoader(agent *ClusteredServiceAgent, img aeron.Image) *snapshotLoader {
-	return &snapshotLoader{agent: agent, img: img, marshaller: codecs.NewSbeGoMarshaller()}
+	loader := &snapshotLoader{agent: agent, img: img, marshaller: codecs.NewSbeGoMarshaller()}
+	loader.assembler = aeron.NewControlledFragmentAssembler(loader.onControlledFragment, 0)
+	return loader
 }
+
+// onControlledFragment stops the poll once the end marker is reached so the image is positioned at the start of
+// the service's own snapshot state for ClusteredService.OnStart (Java ServiceSnapshotLoader returns BREAK).
+func (loader *snapshotLoader) onControlledFragment(
+	buffer *atomic.Buffer,
+	offset int32,
+	length int32,
+	header *logbuffer.Header,
+) term.ControlledPollAction {
+	loader.onFragment(buffer, offset, length, header)
+	if loader.isDone {
+		return term.ControlledPollActionBreak
+	}
+	return term.ControlledPollActionContinue
+}
+
+const snapshotLoaderFragmentLimit = 10
 
 func (loader *snapshotLoader) poll() int {
 	if loader.isDone {
 		return 0
 	}
-	return loader.img.Poll(loader.onFragment, 1)
+	return loader.img.ControlledPoll(loader.assembler.OnFragment, snapshotLoaderFragmentLimit)
 }
 
 func (loader *snapshotLoader) onFragment(
@@ -58,8 +79,9 @@ func (loader *snapshotLoader) onFragment(
 	schemaId := buffer.GetUInt16(offset + 4)
 	version := buffer.GetUInt16(offset + 6)
 	if schemaId != ClusterSchemaId {
-		logger.Errorf("SnapshotLoader: unexpected schemaId=%d templateId=%d blockLen=%d version=%d",
-			schemaId, templateId, blockLength, version)
+		loader.err = fmt.Errorf("snapshot: expected schemaId=%d, actual=%d (templateId=%d blockLen=%d version=%d)",
+			ClusterSchemaId, schemaId, templateId, blockLength, version)
+		loader.isDone = true
 		return
 	}
 	offset += SBEHeaderLength
@@ -76,6 +98,7 @@ func (loader *snapshotLoader) onFragment(
 			loader.isDone = true
 		} else if marker.TypeId != snapshotTypeId {
 			loader.err = fmt.Errorf("unexpected snapshot type: %d", marker.TypeId)
+			loader.isDone = true
 		} else if marker.Mark == codecs.SnapshotMark.BEGIN {
 			if loader.inSnapshot {
 				loader.err = fmt.Errorf("already in snapshot, pos=%d", header.Position())
@@ -93,6 +116,8 @@ func (loader *snapshotLoader) onFragment(
 				loader.inSnapshot = false
 				loader.isDone = true
 			}
+		} else if marker.Mark == codecs.SnapshotMark.SECTION || marker.Mark == codecs.SnapshotMark.NullValue {
+			// Java ServiceSnapshotLoader ignores SECTION and NULL_VAL marks.
 		} else {
 			loader.err = fmt.Errorf("unexpected snapshot mark, pos=%d inSnapshot=%v mark=%v", header.Position(), loader.inSnapshot, marker.Mark)
 			loader.isDone = true
@@ -103,14 +128,8 @@ func (loader *snapshotLoader) onFragment(
 			loader.err = err
 			loader.isDone = true
 		} else {
-			container, err := newContainerClientSession(
-				s.ClusterSessionId, s.ResponseStreamId, string(s.ResponseChannel), s.EncodedPrincipal, loader.agent)
-			if err == nil {
-				loader.agent.addSessionFromSnapshot(container)
-			} else {
-				loader.err = err
-				loader.isDone = true
-			}
+			loader.agent.addSessionFromSnapshot(newContainerClientSession(
+				s.ClusterSessionId, s.ResponseStreamId, string(s.ResponseChannel), s.EncodedPrincipal, loader.agent))
 		}
 	default:
 		logger.Debugf("SnapshotLoader: unknown templateId=%d at pos=%d", templateId, header.Position())

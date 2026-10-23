@@ -1,0 +1,95 @@
+# Java Aeron 1.53.3 stacks for the adversarial media-driver crash/restart suite in systests/adversarial/driver-crash
+# (AERON_E2E=1 AERON_ADVERSARIAL=1). The tests SIGKILL, SIGSTOP/SIGCONT and restart these containers, so they are
+# separate from every other stack. Both drivers use AERON_DIR=/dev/shm/aeron-adv-driver-crash; the tests run at most one
+# of them at a time.
+#
+#   driver            standalone MediaDriver (client liveness 2s, image liveness 2s, publication unblock 3s)
+#   archiving-driver  ArchivingMediaDriver: control localhost:27010 stream 10, events localhost:27030, archive id 90
+#   java-peer         Java 1.53.3 client (docker/adversarial-driver-crash/JavaPeer.java) driven by the tests through
+#                     `docker compose run`; it reports error/close/image events as JSON lines, like the Go crashpeer.
+#
+#   docker compose -f docker/adversarial-driver-crash.compose.yml build
+#   AERON_E2E=1 AERON_ADVERSARIAL=1 go test -count=1 -p 1 -v ./systests/adversarial/driver-crash/
+name: adv-driver-crash
+x-driver-props: &driver-props >-
+  -Daeron.dir=/dev/shm/aeron-adv-driver-crash
+  -Daeron.dir.delete.on.start=true
+  -Daeron.client.liveness.timeout=2000000000
+  -Daeron.image.liveness.timeout=2000000000
+  -Daeron.publication.unblock.timeout=3000000000
+  -Daeron.publication.connection.timeout=2000000000
+  -Daeron.timer.interval=100000000
+  -Daeron.untethered.window.limit.timeout=1000000000
+  -Daeron.untethered.resting.timeout=1000000000
+  -Daeron.threading.mode=SHARED
+services:
+  driver:
+    build:
+      context: .
+      args:
+        JAVA_IMAGE: ${JAVA_IMAGE:-eclipse-temurin:21-jre}
+    image: docker-archiving-driver
+    container_name: adv-driver-crash-driver
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    volumes:
+      - /dev/shm:/dev/shm
+    environment:
+      AERON_PROPS: *driver-props
+    command: ["io.aeron.driver.MediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-adv-driver-crash/cnc.dat"]
+      interval: 500ms
+      retries: 60
+
+  archiving-driver:
+    image: docker-archiving-driver
+    container_name: adv-driver-crash-archiving-driver
+    profiles: ["archive"]
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    volumes:
+      - /dev/shm:/dev/shm
+    tmpfs:
+      - /data/archive:uid=1000,gid=1000,size=512m
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-adv-driver-crash
+        -Daeron.dir.delete.on.start=true
+        -Daeron.client.liveness.timeout=2000000000
+        -Daeron.image.liveness.timeout=2000000000
+        -Daeron.publication.unblock.timeout=3000000000
+        -Daeron.publication.connection.timeout=2000000000
+        -Daeron.timer.interval=100000000
+        -Daeron.threading.mode=SHARED
+        -Daeron.archive.dir=/data/archive/rec
+        -Daeron.archive.dir.delete.on.start=true
+        -Daeron.archive.mark.file.dir=/data/archive/mark
+        -Daeron.archive.control.channel=aeron:udp?endpoint=localhost:27010
+        -Daeron.archive.control.stream.id=10
+        -Daeron.archive.replication.channel=aeron:udp?endpoint=localhost:0
+        -Daeron.archive.recording.events.enabled=true
+        -Daeron.archive.recording.events.channel=aeron:udp?control-mode=dynamic|control=localhost:27030
+        -Daeron.archive.id=90
+        -Daeron.archive.threading.mode=SHARED
+    command: ["io.aeron.archive.ArchivingMediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/data/archive/mark/archive-mark.dat"]
+      interval: 500ms
+      retries: 60
+
+  java-peer:
+    build:
+      context: adversarial-driver-crash
+      args:
+        JAVA_IMAGE: ${JAVA_JDK_IMAGE:-eclipse-temurin:21-jdk}
+    image: adv-driver-crash-java-peer:1.53.3
+    profiles: ["tools"]
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    init: true
+    volumes:
+      - /dev/shm:/dev/shm

@@ -82,11 +82,15 @@ func (*ClusterMembersQuery) SbeSchemaId() (schemaId uint16) {
 }
 
 func (*ClusterMembersQuery) SbeSchemaVersion() (schemaVersion uint16) {
-	return 8
+	return 17
 }
 
 func (*ClusterMembersQuery) SbeSemanticType() (semanticType []byte) {
 	return []byte("")
+}
+
+func (*ClusterMembersQuery) SbeSemanticVersion() (semanticVersion string) {
+	return "5.4"
 }
 
 func (*ClusterMembersQuery) CorrelationIdId() uint16 {

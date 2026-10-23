@@ -26,13 +26,13 @@ func TestEncoders(t *testing.T) {
 	marshaller := NewSbeGoMarshaller()
 	rangeChecking := true
 
-	packet, err := ConnectRequestPacket(marshaller, rangeChecking, 99, stream, channel)
+	packet, err := AuthConnectRequestPacket(marshaller, rangeChecking, 99, stream, channel, nil, "")
 	if err != nil {
-		t.Log("ConnectRequestPacket() failed")
+		t.Log("AuthConnectRequestPacket() failed")
 		t.Fail()
 	}
-	if len(packet) != 62 { // Look for unexepected change
-		t.Logf("ConnectRequestPacket failed length check: %d", len(packet))
+	if len(packet) != 70 { // Look for unexepected change
+		t.Logf("AuthConnectRequestPacket failed length check: %d", len(packet))
 		t.Fail()
 	}
 	packet, err = StartRecordingRequest2Packet(marshaller, rangeChecking, 1234, 5678, stream, true, true, channel)

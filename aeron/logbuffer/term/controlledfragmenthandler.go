@@ -43,3 +43,19 @@ const (
 	// fragments with position commit at end of poll as in onFragment
 	ControlledPollActionContinue = 4
 )
+
+// String returns the Java-style name of the action.
+func (a ControlledPollAction) String() string {
+	switch a {
+	case ControlledPollActionAbort:
+		return "ABORT"
+	case ControlledPollActionBreak:
+		return "BREAK"
+	case ControlledPollActionCommit:
+		return "COMMIT"
+	case ControlledPollActionContinue:
+		return "CONTINUE"
+	default:
+		return "UNKNOWN"
+	}
+}

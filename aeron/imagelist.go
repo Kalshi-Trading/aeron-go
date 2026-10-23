@@ -46,9 +46,36 @@ func (l *ImageList) Set(imgs []Image) {
 	atomic.StorePointer(&l.img, unsafe.Pointer(&imgs))
 }
 
-// Empty is a convenience method to reset the contents of the list
+// Empty is a convenience method to reset the contents of the list. The returned slice is never mutated afterwards.
 func (l *ImageList) Empty() (oldList []Image) {
 	oldList = l.Get()
 	l.Set(make([]Image, 0))
 	return
+}
+
+// add publishes a copy of the current list with image appended and returns the previous list. Must only be called
+// from the single writer (the client conductor).
+func (l *ImageList) add(image Image) []Image {
+	oldList := l.Get()
+	newList := make([]Image, len(oldList), len(oldList)+1)
+	copy(newList, oldList)
+	l.Set(append(newList, image))
+	return oldList
+}
+
+// remove publishes a copy of the current list without the image with the given correlation id and returns the
+// removed image, or nil if not present. Order of the remaining images is preserved. Must only be called from the
+// single writer (the client conductor).
+func (l *ImageList) remove(correlationID int64) Image {
+	oldList := l.Get()
+	for ix, image := range oldList {
+		if image.CorrelationID() == correlationID {
+			newList := make([]Image, 0, len(oldList)-1)
+			newList = append(newList, oldList[:ix]...)
+			newList = append(newList, oldList[ix+1:]...)
+			l.Set(newList)
+			return image
+		}
+	}
+	return nil
 }

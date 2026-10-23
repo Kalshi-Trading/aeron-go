@@ -14,68 +14,54 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// basic_subscriber is a port of io.aeron.samples.BasicSubscriber: it prints every message received
+// on the channel/stream. With -exit N it exits after N messages.
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/idlestrategy"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
-	"github.com/lirm/aeron-go/aeron/logging"
 	"github.com/lirm/aeron-go/examples"
 )
 
-var logger = logging.MustGetLogger("basic_subscriber")
-
 func main() {
 	flag.Parse()
+	examples.SetupLogging()
+	ctx, cancel := examples.SignalContext()
+	defer cancel()
 
-	if !*examples.ExamplesConfig.LoggingOn {
-		logging.SetLevel(logging.INFO, "aeron")
-		logging.SetLevel(logging.INFO, "memmap")
-		logging.SetLevel(logging.DEBUG, "driver")
-		logging.SetLevel(logging.INFO, "counters")
-		logging.SetLevel(logging.INFO, "logbuffers")
-		logging.SetLevel(logging.INFO, "buffer")
-	}
+	channel, streamID := *examples.ExamplesConfig.Channel, int32(*examples.ExamplesConfig.StreamID)
 
-	to := time.Duration(time.Millisecond.Nanoseconds() * *examples.ExamplesConfig.DriverTo)
-	ctx := aeron.NewContext().AeronDir(*examples.ExamplesConfig.AeronPrefix).MediaDriverTimeout(to)
-
-	a, err := aeron.Connect(ctx)
+	aeronCtx := examples.NewContext().
+		AvailableImageHandler(examples.PrintAvailableImage).
+		UnavailableImageHandler(examples.PrintUnavailableImage)
+	a, err := aeron.Connect(aeronCtx)
 	if err != nil {
-		logger.Fatalf("Failed to connect to media driver: %s\n", err.Error())
+		log.Fatalf("Failed to connect to media driver: %v", err)
 	}
 	defer a.Close()
 
-	subscription, err := a.AddSubscription(*examples.ExamplesConfig.Channel, int32(*examples.ExamplesConfig.StreamID))
+	subscription, err := a.AddSubscription(channel, streamID)
 	if err != nil {
-		logger.Fatal(err)
+		log.Fatalf("Failed to add subscription: %v", err)
 	}
 	defer subscription.Close()
-	log.Printf("Subscription found %v", subscription)
+	// Printed once registered so a publisher started after this line is not NotConnected.
+	fmt.Printf("Subscribing to %s on stream id %d\n", channel, streamID)
 
-	tmpBuf := &bytes.Buffer{}
-	counter := 1
+	received := 0
+	print := examples.PrintStringMessage(streamID)
 	handler := func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
-		bytes := buffer.GetBytesArray(offset, length)
-		tmpBuf.Reset()
-		buffer.WriteBytes(tmpBuf, offset, length)
-		fmt.Printf("%8.d: Gots me a fragment offset:%d length: %d payload: %s (buf:%s)\n", counter, offset, length, string(bytes), string(tmpBuf.Next(int(length))))
-
-		counter++
+		print(buffer, offset, length, header)
+		received++
 	}
-
-	idleStrategy := idlestrategy.Sleeping{SleepFor: time.Millisecond}
-
-	for {
-		fragmentsRead := subscription.Poll(handler, 10)
-		idleStrategy.Idle(fragmentsRead)
-	}
+	exitAfter := *examples.ExamplesConfig.ExitAfterMessages
+	examples.SubscriberLoop(ctx, subscription, handler, *examples.ExamplesConfig.FragmentLimit,
+		examples.NewIdleStrategy(), func() bool { return exitAfter > 0 && received >= exitAfter })
+	fmt.Printf("Shutting down... received %d messages\n", received)
 }

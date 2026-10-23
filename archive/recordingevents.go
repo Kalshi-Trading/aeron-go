@@ -1,4 +1,4 @@
-// Copyright (C) 2021-2022 Talos, Inc.
+// Copyright (C) 2026 Kalshi Trading
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,135 +15,177 @@
 package archive
 
 import (
-	"bytes"
-	"fmt"
-
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
-	"github.com/lirm/aeron-go/aeron/logbuffer/term"
 	"github.com/lirm/aeron-go/archive/codecs"
 )
 
-// RecordingEventsAdapter is used to poll for recording events on a subscription.
+// RecordingEventsAdapter is the Go port of io.aeron.archive.client.RecordingEventsAdapter: it polls the
+// archive recording events channel and dispatches started/progress/stopped events to a
+// RecordingEventsListener. The adapter owned by an Archive (Archive.Events) additionally invokes the
+// legacy ArchiveListeners.RecordingEvent*Listener callbacks. It is not safe for concurrent use.
 type RecordingEventsAdapter struct {
 	Subscription *aeron.Subscription
 	Enabled      bool
-	archive      *Archive // link to parent
+	archive      *Archive // link to parent, nil for standalone adapters
 
-	pollFunc              term.FragmentHandler
-	handlerWithListeners  FragmentHandlerWithListeners
-	reFragmentHandlerFunc FragmentHandlerWithListeners
-	buf                   *bytes.Buffer
-	marshaller            *codecs.SbeGoMarshaller
+	listener      RecordingEventsListener
+	fragmentLimit int
+	decoder       responseDecoder
+	err           error
+	handler       FragmentHandlerWithListeners
+	onFragmentFn  func(*atomic.Buffer, int32, int32, *logbuffer.Header)
+
+	started  codecs.RecordingStarted
+	progress codecs.RecordingProgress
+	stopped  codecs.RecordingStopped
 }
 
 // FragmentHandlerWithListeners provides a FragmentHandler with ArchiveListeners
 type FragmentHandlerWithListeners func(listeners *ArchiveListeners, buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header)
 
-// PollWithContext the aeron subscription handler.
-// If you pass it a nil handler it will use the builtin and call the Listeners
-// If you ask for 0 fragments it will only return one fragment (if available)
+// NewRecordingEventsAdapter creates a standalone adapter for a recording events subscription. A
+// fragmentLimit <= 0 uses the default of 10.
+func NewRecordingEventsAdapter(listener RecordingEventsListener, subscription *aeron.Subscription, fragmentLimit int) *RecordingEventsAdapter {
+	if fragmentLimit <= 0 {
+		fragmentLimit = defaultPollerFragmentLimit
+	}
+	return &RecordingEventsAdapter{
+		Subscription:  subscription,
+		Enabled:       subscription != nil,
+		listener:      listener,
+		fragmentLimit: fragmentLimit,
+		decoder:       newResponseDecoder(false),
+	}
+}
+
+// SetListener sets the RecordingEventsListener events are dispatched to.
+func (rea *RecordingEventsAdapter) SetListener(listener RecordingEventsListener) {
+	rea.listener = listener
+}
+
+// Poll the subscription and dispatch events to the listener. The error is the first decoding failure, if
+// any; dispatch continues past failures and unknown templates are skipped.
+func (rea *RecordingEventsAdapter) Poll() (int, error) {
+	limit := rea.fragmentLimit
+	if limit <= 0 {
+		limit = defaultPollerFragmentLimit
+	}
+	return rea.poll(nil, limit)
+}
+
+// PollWithContext polls the subscription. If handler is nil the builtin handler dispatches to the
+// RecordingEventsListener (if set) and the Archive's legacy listener callbacks; otherwise handler is called
+// with the Archive's listeners. A fragmentLimit of 0 polls a single fragment.
+//
+// Deprecated: use Poll or Archive.RecordingEventsPoll.
 func (rea *RecordingEventsAdapter) PollWithContext(handler FragmentHandlerWithListeners, fragmentLimit int) int {
-	if rea.pollFunc == nil {
-		rea.prealloc()
-	}
-
-	// Update our globals in case they've changed so we use the current state in our callback
-	rangeChecking = rea.archive.Options.RangeChecking
-
-	if handler != nil {
-		rea.handlerWithListeners = handler
-	} else {
-		rea.handlerWithListeners = rea.reFragmentHandlerFunc
-	}
 	if fragmentLimit == 0 {
 		fragmentLimit = 1
 	}
-	return rea.Subscription.Poll(rea.pollFunc, fragmentLimit)
+	n, err := rea.poll(handler, fragmentLimit)
+	if err != nil {
+		rea.onError(err)
+	}
+	return n
 }
 
-func (rea *RecordingEventsAdapter) prealloc() {
-	rea.pollFunc = func(buf *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
-		rea.handlerWithListeners(rea.archive.Listeners, buf, offset, length, header)
+func (rea *RecordingEventsAdapter) poll(handler FragmentHandlerWithListeners, fragmentLimit int) (int, error) {
+	if rea.onFragmentFn == nil {
+		rea.onFragmentFn = rea.onFragment
 	}
-	rea.reFragmentHandlerFunc = rea.reFragmentHandler
+	if rea.decoder.marshaller == nil {
+		rea.decoder = newResponseDecoder(false)
+	}
+	if rea.archive != nil && rea.archive.Options != nil {
+		rea.decoder.rangeChecking = rea.archive.Options.RangeChecking
+	}
+	if rea.Subscription == nil {
+		return 0, nil
+	}
+	rea.handler = handler
+	rea.err = nil
+	n := rea.Subscription.Poll(rea.onFragmentFn, fragmentLimit)
+	return n, rea.err
 }
 
-func (rea *RecordingEventsAdapter) reFragmentHandler(listeners *ArchiveListeners, buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
-	var hdr codecs.SbeGoMessageHeader
-
-	if rea.buf == nil {
-		rea.buf = new(bytes.Buffer)
+func (rea *RecordingEventsAdapter) onError(err error) {
+	if rea.archive != nil && rea.archive.Listeners != nil && rea.archive.Listeners.ErrorListener != nil {
+		rea.archive.Listeners.ErrorListener(err)
 	}
-	buf := rea.buf
-	rea.buf.Reset()
-	buffer.WriteBytes(rea.buf, offset, length)
+}
 
-	if rea.marshaller == nil {
-		rea.marshaller = codecs.NewSbeGoMarshaller()
+func (rea *RecordingEventsAdapter) legacyListeners() *ArchiveListeners {
+	if rea.archive == nil {
+		return nil
 	}
-	marshaller := rea.marshaller
+	return rea.archive.Listeners
+}
 
-	if err := hdr.Decode(marshaller, buf); err != nil {
-		// Not much to be done here as we can't correlate
-		err2 := fmt.Errorf("reFragmentHandler() failed to decode control message header: %w", err)
-		// Call the global error handler, ugly but it's all we've got
-		if listeners.ErrorListener != nil {
-			listeners.ErrorListener(err2)
-		}
+func (rea *RecordingEventsAdapter) setErr(err error) {
+	if rea.err == nil {
+		rea.err = err
 	}
+}
 
-	switch hdr.TemplateId {
+func (rea *RecordingEventsAdapter) onFragment(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
+	if rea.handler != nil {
+		rea.handler(rea.legacyListeners(), buffer, offset, length, header)
+		return
+	}
+	if err := rea.decoder.wrap(buffer, offset, length); err != nil {
+		rea.setErr(err)
+		return
+	}
+	legacy := rea.legacyListeners()
+
+	switch rea.decoder.templateId() {
 	case codecIds.recordingStarted:
-		var recordingStarted = new(codecs.RecordingStarted)
-		logger.Debugf("Received RecordingStarted: length %d", buf.Len())
-		if err := recordingStarted.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
-			err2 := fmt.Errorf("Decode() of RecordingStarted failed: %w", err)
-			if listeners.ErrorListener != nil {
-				listeners.ErrorListener(err2)
-			}
-		} else {
-			// logger.Debugf("RecordingStarted: %#v\n", recordingStarted)
-			// Call the Listener
-			if listeners.RecordingEventStartedListener != nil {
-				listeners.RecordingEventStartedListener(recordingStarted)
-			}
+		if err := rea.decoder.decode(&rea.started); err != nil {
+			rea.setErr(err)
+			return
+		}
+		e := &rea.started
+		if rea.listener != nil {
+			rea.listener.OnStart(e.RecordingId, e.StartPosition, e.SessionId, e.StreamId, string(e.Channel),
+				string(e.SourceIdentity))
+		}
+		if legacy != nil && legacy.RecordingEventStartedListener != nil {
+			legacy.RecordingEventStartedListener(&codecs.RecordingStarted{
+				RecordingId:    e.RecordingId,
+				StartPosition:  e.StartPosition,
+				SessionId:      e.SessionId,
+				StreamId:       e.StreamId,
+				Channel:        append([]uint8(nil), e.Channel...),
+				SourceIdentity: append([]uint8(nil), e.SourceIdentity...),
+			})
 		}
 
 	case codecIds.recordingProgress:
-		var recordingProgress = new(codecs.RecordingProgress)
-		logger.Debugf("Received RecordingProgress: length %d", buf.Len())
-		if err := recordingProgress.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
-			err2 := fmt.Errorf("Decode() of RecordingProgress failed: %w", err)
-			if listeners.ErrorListener != nil {
-				listeners.ErrorListener(err2)
-			}
-		} else {
-			logger.Debugf("RecordingProgress: %#v", recordingProgress)
-			// Call the Listener
-			if listeners.RecordingEventProgressListener != nil {
-				listeners.RecordingEventProgressListener(recordingProgress)
-			}
+		if err := rea.decoder.decode(&rea.progress); err != nil {
+			rea.setErr(err)
+			return
+		}
+		e := rea.progress
+		if rea.listener != nil {
+			rea.listener.OnProgress(e.RecordingId, e.StartPosition, e.Position)
+		}
+		if legacy != nil && legacy.RecordingEventProgressListener != nil {
+			legacy.RecordingEventProgressListener(&e)
 		}
 
 	case codecIds.recordingStopped:
-		var recordingStopped = new(codecs.RecordingStopped)
-		logger.Debugf("Received RecordingStopped: length %d", buf.Len())
-		if err := recordingStopped.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
-			err2 := fmt.Errorf("Decode() of RecordingStopped failed: %w", err)
-			if listeners.ErrorListener != nil {
-				listeners.ErrorListener(err2)
-			}
-		} else {
-			logger.Debugf("RecordingStopped: %#v", recordingStopped)
-			// Call the Listener
-			if listeners.RecordingEventStoppedListener != nil {
-				listeners.RecordingEventStoppedListener(recordingStopped)
-			}
+		if err := rea.decoder.decode(&rea.stopped); err != nil {
+			rea.setErr(err)
+			return
 		}
-
-	default:
-		logger.Errorf("Insert decoder for type: %d", hdr.TemplateId)
+		e := rea.stopped
+		if rea.listener != nil {
+			rea.listener.OnStop(e.RecordingId, e.StartPosition, e.StopPosition)
+		}
+		if legacy != nil && legacy.RecordingEventStoppedListener != nil {
+			legacy.RecordingEventStoppedListener(&e)
+		}
 	}
 }

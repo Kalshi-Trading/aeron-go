@@ -17,49 +17,43 @@ limitations under the License.
 package driver
 
 import (
-	"strings"
-
-	"github.com/lirm/aeron-go/aeron/logging"
-
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/broadcast"
 	"github.com/lirm/aeron-go/aeron/command"
+	"github.com/lirm/aeron-go/aeron/logging"
 )
 
 var logger = logging.MustGetLogger("driver")
 
+// Events are the media driver -> client message type ids. Prefer the command.On* constants.
 var Events = struct {
-	/** Error Response */
-	OnError int32
-	/** New subscription Buffer Notification */
-	OnAvailableImage int32
-	/** New publication Buffer Notification */
-	OnPublicationReady int32
-	/** Operation Succeeded */
-	OnOperationSuccess int32
-	/** Inform client of timeout and removal of inactive image */
-	OnUnavailableImage int32
-	/** New Exclusive Publication Buffer notification */
+	OnError                     int32
+	OnAvailableImage            int32
+	OnPublicationReady          int32
+	OnOperationSuccess          int32
+	OnUnavailableImage          int32
 	OnExclusivePublicationReady int32
-	/** New subscription notification */
-	OnSubscriptionReady int32
-	/** New counter notification */
-	OnCounterReady int32
-	/** inform clients of removal of counter */
-	OnUnavailableCounter int32
-	/** inform clients of client timeout */
-	OnClientTimeout int32
+	OnSubscriptionReady         int32
+	OnCounterReady              int32
+	OnUnavailableCounter        int32
+	OnClientTimeout             int32
+	OnStaticCounter             int32
+	OnPublicationError          int32
+	OnNextAvailableSessionID    int32
 }{
-	0x0F01,
-	0x0F02,
-	0x0F03,
-	0x0F04,
-	0x0F05,
-	0x0F06,
-	0x0F07,
-	0x0F08,
-	0x0F09,
-	0x0F0A,
+	OnError:                     command.OnError,
+	OnAvailableImage:            command.OnAvailableImage,
+	OnPublicationReady:          command.OnPublicationReady,
+	OnOperationSuccess:          command.OnOperationSuccess,
+	OnUnavailableImage:          command.OnUnavailableImage,
+	OnExclusivePublicationReady: command.OnExclusivePublicationReady,
+	OnSubscriptionReady:         command.OnSubscriptionReady,
+	OnCounterReady:              command.OnCounterReady,
+	OnUnavailableCounter:        command.OnUnavailableCounter,
+	OnClientTimeout:             command.OnClientTimeout,
+	OnStaticCounter:             command.OnStaticCounter,
+	OnPublicationError:          command.OnPublicationError,
+	OnNextAvailableSessionID:    command.OnNextAvailableSessionID,
 }
 
 type SubscriberPosition struct {
@@ -75,6 +69,11 @@ func (pos *SubscriberPosition) IndicatorID() int32 {
 	return pos.indicatorID
 }
 
+// Listener receives decoded driver responses. The adapter does no correlation filtering: every message on the
+// to-clients broadcast buffer is delivered, and the listener decides whether it concerns this client.
+//
+// A Listener may additionally implement NextAvailableSessionIDListener to receive ON_NEXT_AVAILABLE_SESSION_ID;
+// it is dropped otherwise.
 type Listener interface {
 	OnNewPublication(streamID int32, sessionID int32, positionLimitCounterID int32, channelStatusIndicatorID int32,
 		logFileName string, correlationID int64, registrationID int64)
@@ -90,11 +89,33 @@ type Listener interface {
 	OnAvailableCounter(correlationID int64, counterID int32)
 	OnUnavailableCounter(correlationID int64, counterID int32)
 	OnClientTimeout(clientID int64)
+	// OnStaticCounter receives ON_STATIC_COUNTER responses to AddStaticCounter.
+	OnStaticCounter(correlationID int64, counterID int32)
+	// OnPublicationError receives ON_PUBLICATION_ERROR (an error frame received by a publication). It is broadcast to
+	// all clients; decode with command.PublicationErrorFrame and filter on RegistrationID.
+	OnPublicationError(buffer *atomic.Buffer, offset int32, length int32)
 }
 
+// NextAvailableSessionIDListener receives ON_NEXT_AVAILABLE_SESSION_ID responses to NextAvailableSessionID.
+type NextAvailableSessionIDListener interface {
+	OnNextAvailableSessionID(correlationID int64, nextSessionID int32)
+}
+
+// ListenerAdapter decodes the to-clients broadcast buffer and dispatches to a Listener (io.aeron.DriverEventsAdapter).
 type ListenerAdapter struct {
 	listener          Listener
 	broadcastReceiver *broadcast.CopyReceiver
+
+	errorResponse     command.ErrorResponse
+	publicationReady  command.PublicationBuffersReady
+	subscriptionReady command.SubscriptionReady
+	imageReady        command.ImageBuffersReady
+	operationSuccess  command.OperationSucceeded
+	imageMessage      command.ImageMessage
+	counterUpdate     command.CounterUpdate
+	clientTimeout     command.ClientTimeout
+	staticCounter     command.StaticCounter
+	nextSessionID     command.NextAvailableSessionID
 }
 
 func NewAdapter(driverListener Listener, broadcastReceiver *broadcast.CopyReceiver) *ListenerAdapter {
@@ -105,129 +126,79 @@ func NewAdapter(driverListener Listener, broadcastReceiver *broadcast.CopyReceiv
 	return adapter
 }
 
+// ReceiveMessages polls the broadcast buffer, dispatching every available message, and returns the number received.
 func (adapter *ListenerAdapter) ReceiveMessages() int {
-	handler := func(msgTypeID int32, buffer *atomic.Buffer, offset int32, length int32) {
-		logger.Debugf("received %d", msgTypeID)
-		switch int32(msgTypeID) {
-		case Events.OnPublicationReady:
-			logger.Debugf("received ON_PUBLICATION_READY")
+	return adapter.broadcastReceiver.Receive(adapter.OnMessage)
+}
 
-			var msg publicationReady
-			msg.Wrap(buffer, int(offset))
-
-			streamID := msg.streamID.Get()
-			sessionID := msg.sessionID.Get()
-			positionLimitCounterID := msg.publicationLimitOffset.Get()
-			channelStatusIndicatorID := msg.channelStatusIndicatorID.Get()
-			correlationID := msg.correlationID.Get()
-			registrationID := msg.registrationID.Get()
-			logFileName := msg.logFileName.Get()
-
-			adapter.listener.OnNewPublication(streamID, sessionID, positionLimitCounterID, channelStatusIndicatorID,
-				logFileName, correlationID, registrationID)
-		case Events.OnExclusivePublicationReady:
-			logger.Debugf("received ON_EXCLUSIVE_PUBLICATION_READY")
-
-			var msg publicationReady
-			msg.Wrap(buffer, int(offset))
-
-			streamID := msg.streamID.Get()
-			sessionID := msg.sessionID.Get()
-			positionLimitCounterID := msg.publicationLimitOffset.Get()
-			channelStatusIndicatorID := msg.channelStatusIndicatorID.Get()
-			correlationID := msg.correlationID.Get()
-			registrationID := msg.registrationID.Get()
-			logFileName := msg.logFileName.Get()
-
-			adapter.listener.OnNewExclusivePublication(streamID, sessionID, positionLimitCounterID, channelStatusIndicatorID,
-				logFileName, correlationID, registrationID)
-		case Events.OnSubscriptionReady:
-			logger.Debugf("received ON_SUBSCRIPTION_READY")
-
-			var msg subscriptionReady
-			msg.Wrap(buffer, int(offset))
-
-			correlationID := msg.correlationID.Get()
-			channelStatusIndicatorID := msg.channelStatusIndicatorID.Get()
-
-			adapter.listener.OnSubscriptionReady(correlationID, channelStatusIndicatorID)
-		case Events.OnAvailableImage:
-			logger.Debugf("received ON_AVAILABLE_IMAGE")
-
-			var header imageReadyHeader
-			header.Wrap(buffer, int(offset))
-
-			streamID := header.streamID.Get()
-			sessionID := header.sessionID.Get()
-			logFileName := header.logFile.Get()
-			sourceIdentity := header.sourceIdentity.Get()
-			subsPosID := header.subsPosID.Get()
-			subsRegID := header.subsRegistrationID.Get()
-			correlationID := header.correlationID.Get()
-
-			logger.Debugf("logFileName: %v", logFileName)
-			logger.Debugf("sourceIdentity: %v", sourceIdentity)
-
-			adapter.listener.OnAvailableImage(streamID, sessionID, logFileName, sourceIdentity, subsPosID, subsRegID,
-				correlationID)
-		case Events.OnOperationSuccess:
-			logger.Debugf("received ON_OPERATION_SUCCESS")
-
-			var msg command.CorrelatedMessage
-			msg.Wrap(buffer, int(offset))
-
-			correlationID := msg.CorrelationID.Get()
-
-			adapter.listener.OnOperationSuccess(correlationID)
-		case Events.OnUnavailableImage:
-			logger.Debugf("received ON_UNAVAILABLE_IMAGE")
-
-			var msg command.ImageMessage
-			msg.Wrap(buffer, int(offset))
-
-			correlationID := msg.CorrelationID.Get()
-			subscriptionRegistrationID := msg.SubscriptionRegistrationID.Get()
-
-			adapter.listener.OnUnavailableImage(correlationID, subscriptionRegistrationID)
-		case Events.OnError:
-			logger.Debugf("received ON_ERROR")
-
-			var msg errorMessage
-			msg.Wrap(buffer, int(offset))
-
-			if msg.errorCode.Get() == command.ErrorCodeChannelEndpointError ||
-				strings.Contains(msg.errorMessage.Get(), "Address already in use") { // hack for c media driver
-				adapter.listener.OnChannelEndpointError(msg.offendingCommandCorrelationID.Get(), msg.errorMessage.Get())
-			} else {
-				adapter.listener.OnErrorResponse(msg.offendingCommandCorrelationID.Get(),
-					msg.errorCode.Get(), msg.errorMessage.Get())
-			}
-		case Events.OnCounterReady:
-			logger.Debugf("received ON_COUNTER_READY")
-
-			var msg counterUpdate
-			msg.Wrap(buffer, int(offset))
-
-			adapter.listener.OnAvailableCounter(msg.correlationID.Get(), msg.counterID.Get())
-		case Events.OnUnavailableCounter:
-			logger.Debugf("received ON_UNAVAILABLE_COUNTER")
-
-			var msg counterUpdate
-			msg.Wrap(buffer, int(offset))
-
-			adapter.listener.OnUnavailableCounter(msg.correlationID.Get(), msg.counterID.Get())
-		case Events.OnClientTimeout:
-			logger.Debugf("received ON_CLIENT_TIMEOUT")
-
-			var msg clientTimeout
-			msg.Wrap(buffer, int(offset))
-
-			adapter.listener.OnClientTimeout(msg.clientID.Get())
-		default:
-			// Note: Java silently ignores unhandled events
-			logger.Fatalf("received unhandled %d", msgTypeID)
-		}
+// OnMessage decodes and dispatches a single driver response. Unknown message types are ignored, as in Java.
+func (adapter *ListenerAdapter) OnMessage(msgTypeID int32, buffer *atomic.Buffer, offset int32, length int32) {
+	if logger.IsEnabledFor(logging.DEBUG) {
+		logger.Debugf("received %s", command.TypeName(msgTypeID))
 	}
+	listener := adapter.listener
+	switch msgTypeID {
+	case command.OnPublicationReady, command.OnExclusivePublicationReady:
+		msg := adapter.publicationReady.Wrap(buffer, offset)
+		onNew := listener.OnNewPublication
+		if msgTypeID == command.OnExclusivePublicationReady {
+			onNew = listener.OnNewExclusivePublication
+		}
+		onNew(msg.StreamID(), msg.SessionID(), msg.PublicationLimitCounterID(), msg.ChannelStatusIndicatorID(),
+			msg.LogFileName(), msg.CorrelationID(), msg.RegistrationID())
 
-	return adapter.broadcastReceiver.Receive(handler)
+	case command.OnSubscriptionReady:
+		msg := adapter.subscriptionReady.Wrap(buffer, offset)
+		listener.OnSubscriptionReady(msg.CorrelationID(), msg.ChannelStatusIndicatorID())
+
+	case command.OnAvailableImage:
+		msg := adapter.imageReady.Wrap(buffer, offset)
+		listener.OnAvailableImage(msg.StreamID(), msg.SessionID(), msg.LogFileName(), msg.SourceIdentity(),
+			msg.SubscriberPositionID(), msg.SubscriptionRegistrationID(), msg.CorrelationID())
+
+	case command.OnOperationSuccess:
+		msg := adapter.operationSuccess.Wrap(buffer, offset)
+		listener.OnOperationSuccess(msg.CorrelationID())
+
+	case command.OnUnavailableImage:
+		msg := adapter.imageMessage.Wrap(buffer, offset)
+		listener.OnUnavailableImage(msg.CorrelationID(), msg.SubscriptionRegistrationID())
+
+	case command.OnError:
+		msg := adapter.errorResponse.Wrap(buffer, offset)
+		errorMessage := msg.ErrorMessage()
+		if msg.ErrorCode() == command.ErrorCodeChannelEndpointError {
+			listener.OnChannelEndpointError(msg.OffendingCommandCorrelationID(), errorMessage)
+		} else {
+			listener.OnErrorResponse(msg.OffendingCommandCorrelationID(), msg.ErrorCode(), errorMessage)
+		}
+
+	case command.OnCounterReady:
+		msg := adapter.counterUpdate.Wrap(buffer, offset)
+		listener.OnAvailableCounter(msg.CorrelationID(), msg.CounterID())
+
+	case command.OnUnavailableCounter:
+		msg := adapter.counterUpdate.Wrap(buffer, offset)
+		listener.OnUnavailableCounter(msg.CorrelationID(), msg.CounterID())
+
+	case command.OnClientTimeout:
+		msg := adapter.clientTimeout.Wrap(buffer, offset)
+		listener.OnClientTimeout(msg.ClientID())
+
+	case command.OnStaticCounter:
+		msg := adapter.staticCounter.Wrap(buffer, offset)
+		listener.OnStaticCounter(msg.CorrelationID(), msg.CounterID())
+
+	case command.OnPublicationError:
+		listener.OnPublicationError(buffer, offset, length)
+
+	case command.OnNextAvailableSessionID:
+		if l, ok := listener.(NextAvailableSessionIDListener); ok {
+			msg := adapter.nextSessionID.Wrap(buffer, offset)
+			l.OnNextAvailableSessionID(msg.CorrelationID(), msg.NextSessionID())
+		}
+
+	default:
+		logger.Debugf("ignoring unknown driver message type %d", msgTypeID)
+	}
 }

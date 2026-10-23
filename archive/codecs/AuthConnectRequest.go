@@ -15,6 +15,7 @@ type AuthConnectRequest struct {
 	Version            int32
 	ResponseChannel    []uint8
 	EncodedCredentials []uint8
+	ClientInfo         []uint8
 }
 
 func (a *AuthConnectRequest) Encode(_m *SbeGoMarshaller, _w io.Writer, doRangeCheck bool) error {
@@ -42,6 +43,12 @@ func (a *AuthConnectRequest) Encode(_m *SbeGoMarshaller, _w io.Writer, doRangeCh
 		return err
 	}
 	if err := _m.WriteBytes(_w, a.EncodedCredentials); err != nil {
+		return err
+	}
+	if err := _m.WriteUint32(_w, uint32(len(a.ClientInfo))); err != nil {
+		return err
+	}
+	if err := _m.WriteBytes(_w, a.ClientInfo); err != nil {
 		return err
 	}
 	return nil
@@ -100,6 +107,20 @@ func (a *AuthConnectRequest) Decode(_m *SbeGoMarshaller, _r io.Reader, actingVer
 			return err
 		}
 	}
+
+	if a.ClientInfoInActingVersion(actingVersion) {
+		var ClientInfoLength uint32
+		if err := _m.ReadUint32(_r, &ClientInfoLength); err != nil {
+			return err
+		}
+		if cap(a.ClientInfo) < int(ClientInfoLength) {
+			a.ClientInfo = make([]uint8, ClientInfoLength)
+		}
+		a.ClientInfo = a.ClientInfo[:ClientInfoLength]
+		if err := _m.ReadBytes(_r, a.ClientInfo); err != nil {
+			return err
+		}
+	}
 	if doRangeCheck {
 		if err := a.RangeCheck(actingVersion, a.SbeSchemaVersion()); err != nil {
 			return err
@@ -124,6 +145,16 @@ func (a *AuthConnectRequest) RangeCheck(actingVersion uint16, schemaVersion uint
 			return fmt.Errorf("Range check failed on a.Version (%v < %v > %v)", a.VersionMinValue(), a.Version, a.VersionMaxValue())
 		}
 	}
+	for idx, ch := range a.ResponseChannel {
+		if ch > 127 {
+			return fmt.Errorf("a.ResponseChannel[%d]=%d failed ASCII validation", idx, ch)
+		}
+	}
+	for idx, ch := range a.ClientInfo {
+		if ch > 127 {
+			return fmt.Errorf("a.ClientInfo[%d]=%d failed ASCII validation", idx, ch)
+		}
+	}
 	return nil
 }
 
@@ -145,11 +176,15 @@ func (*AuthConnectRequest) SbeSchemaId() (schemaId uint16) {
 }
 
 func (*AuthConnectRequest) SbeSchemaVersion() (schemaVersion uint16) {
-	return 6
+	return 14
 }
 
 func (*AuthConnectRequest) SbeSemanticType() (semanticType []byte) {
 	return []byte("")
+}
+
+func (*AuthConnectRequest) SbeSemanticVersion() (semanticVersion string) {
+	return "5.2"
 }
 
 func (*AuthConnectRequest) CorrelationIdId() uint16 {
@@ -343,5 +378,39 @@ func (AuthConnectRequest) EncodedCredentialsCharacterEncoding() string {
 }
 
 func (AuthConnectRequest) EncodedCredentialsHeaderLength() uint64 {
+	return 4
+}
+
+func (*AuthConnectRequest) ClientInfoMetaAttribute(meta int) string {
+	switch meta {
+	case 1:
+		return ""
+	case 2:
+		return ""
+	case 3:
+		return ""
+	case 4:
+		return "required"
+	}
+	return ""
+}
+
+func (*AuthConnectRequest) ClientInfoSinceVersion() uint16 {
+	return 12
+}
+
+func (a *AuthConnectRequest) ClientInfoInActingVersion(actingVersion uint16) bool {
+	return actingVersion >= a.ClientInfoSinceVersion()
+}
+
+func (*AuthConnectRequest) ClientInfoDeprecated() uint16 {
+	return 0
+}
+
+func (AuthConnectRequest) ClientInfoCharacterEncoding() string {
+	return "US-ASCII"
+}
+
+func (AuthConnectRequest) ClientInfoHeaderLength() uint64 {
 	return 4
 }

@@ -16,6 +16,8 @@ package memmap
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
@@ -48,5 +50,84 @@ func TestMmapBasics(t *testing.T) {
 	t.Logf("2: Got %d stuff from file\n", num)
 	if num != expected {
 		t.Fail()
+	}
+}
+
+func isMapped(t *testing.T, name string) bool {
+	maps, err := os.ReadFile("/proc/self/maps")
+	if err != nil {
+		t.Skip("no /proc/self/maps")
+	}
+	return strings.Contains(string(maps), name)
+}
+
+// A second Close of an already unmapped File must not unmap whatever was later mapped at the same address.
+func TestCloseTwiceDoesNotUnmapReusedAddress(t *testing.T) {
+	dir := t.TempDir()
+	a, err := NewFile(dir+"/a.dat", 0, 1<<16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewFile(dir+"/b.dat", 0, 1<<16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if b.GetMemoryPtr() != a.GetMemoryPtr() {
+		t.Skip("kernel did not reuse the address")
+	}
+	_ = a.Close()
+	if !isMapped(t, dir+"/b.dat") {
+		t.Fatal("closing a stale File unmapped a newer mapping at the same address")
+	}
+}
+
+func TestCloseIsIdempotent(t *testing.T) {
+	f, err := NewFile(t.TempDir()+"/c.dat", 0, 1<<12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestNewFileInvalidLengthReturnsError(t *testing.T) {
+	name := t.TempDir() + "/zero.bin"
+	if _, err := NewFile(name, 0, 0); err == nil {
+		t.Fatal("expected error for zero length")
+	}
+}
+
+func TestMapExistingRegionBeyondFileReturnsError(t *testing.T) {
+	name := t.TempDir() + "/small.bin"
+	m, err := NewFile(name, 0, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MapExisting(name, 0, 8192); err == nil {
+		t.Fatal("expected error mapping past end of file")
+	}
+	if _, err := MapExisting(name, 4096, 0); err == nil {
+		t.Fatal("expected error for offset at end of file")
+	}
+	m2, err := MapExisting(name, 0, 0)
+	if err != nil || m2.GetMemorySize() != 4096 {
+		t.Fatalf("m2=%v err=%v", m2, err)
+	}
+	if err := m2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m2.Close(); err != nil {
+		t.Fatalf("second close: %v", err)
 	}
 }

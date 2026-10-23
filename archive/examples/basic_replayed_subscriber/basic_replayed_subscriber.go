@@ -19,6 +19,9 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
@@ -30,7 +33,9 @@ import (
 	"github.com/lirm/aeron-go/archive/examples"
 )
 
-var logID = "basic_recording_subscriber"
+var exitAfter = flag.Int("exit", 0, "exit after replaying this many messages (0 = run until interrupted)")
+
+var logID = "basic_replayed_subscriber"
 var logger = logging.MustGetLogger(logID)
 
 func main() {
@@ -71,10 +76,14 @@ func main() {
 	// Enable recording events although the defaults will only log in debug mode
 	arch.EnableRecordingEvents()
 
-	recordingID, err := FindLatestRecording(arch, sampleChannel, sampleStream)
+	descriptor, err := examples.FindLatestRecording(arch, sampleChannel, sampleStream)
 	if err != nil {
 		logger.Fatalf(err.Error())
 	}
+	if descriptor == nil {
+		logger.Fatalf("No recordings found for channel %s and stream id %d", sampleChannel, sampleStream)
+	}
+	recordingID := descriptor.RecordingId
 	var position int64
 	var length int64 = math.MaxInt64
 
@@ -100,37 +109,23 @@ func main() {
 
 	counter := 0
 	printHandler := func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
-		bytes := buffer.GetBytesArray(offset, length)
-		logger.Infof("%s", bytes)
+		fmt.Printf("Message to stream %d from session %d (%d@%d) <<%s>>\n",
+			replayStream, header.SessionID(), length, offset, string(buffer.GetBytesArray(offset, length)))
 		counter++
 	}
 
-	idleStrategy := idlestrategy.Sleeping{SleepFor: time.Millisecond * 1000}
-	for {
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	idleStrategy := idlestrategy.NewDefaultBackoffIdleStrategy()
+	for *exitAfter == 0 || counter < *exitAfter {
+		select {
+		case <-stop:
+			return
+		default:
+		}
 		fragmentsRead := subscription.Poll(printHandler, 10)
 		arch.RecordingEventsPoll()
-
 		idleStrategy.Idle(fragmentsRead)
 	}
-}
-
-// FindLatestRecording to lookup the last recording
-func FindLatestRecording(arch *archive.Archive, channel string, stream int32) (int64, error) {
-	descriptors, err := arch.ListRecordingsForUri(0, 100, channel, stream)
-
-	if err != nil {
-		return 0, err
-	}
-
-	if len(descriptors) == 0 {
-		return 0, fmt.Errorf("no recordings found")
-	}
-
-	descriptor := descriptors[len(descriptors)-1]
-	if descriptor.StopPosition == 0 {
-		return 0, fmt.Errorf("recording length zero")
-	}
-
-	// Return the last recordingID
-	return descriptor.RecordingId, nil
+	fmt.Printf("Replayed %d messages\n", counter)
 }

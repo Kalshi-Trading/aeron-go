@@ -17,9 +17,7 @@ package memmap
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os"
-	"sync"
 	"syscall"
 	"unsafe"
 
@@ -31,13 +29,10 @@ import (
 type File struct {
 	mmap unsafe.Pointer
 	size int
+	mm   mapper.MMap
 }
 
 var logger = logging.MustGetLogger("memmap")
-
-// We keep this map so that we can get back the original handle from the memory address.
-// map[unsafe.Pointer]mapper.MMap
-var memories = sync.Map{}
 
 // GetFileSize is a helper function to retrieve file size
 func GetFileSize(filename string) int64 {
@@ -73,15 +68,20 @@ func MapExisting(filename string, offset int64, length int) (*File, error) {
 	if size < 0 {
 		return nil, fmt.Errorf("mmap: stat %q returned %d", filename, size)
 	}
-	if size != int64(size) {
+	if size != int64(int(size)) {
 		return nil, fmt.Errorf("mmap: file %q is too large", filename)
 	}
+	if offset < 0 || offset >= size {
+		return nil, fmt.Errorf("mmap: offset %d outside file %q of size %d", offset, filename, size)
+	}
 
-	var mapSize int
+	mapSize := int(size - offset)
 	if length != 0 {
+		if length < 0 || int64(length) > size-offset {
+			return nil, fmt.Errorf("mmap: region offset=%d length=%d exceeds file %q of size %d",
+				offset, length, filename, size)
+		}
 		mapSize = length
-	} else {
-		mapSize = int(size)
 	}
 
 	logger.Debugf("Mapping existing file: fd: %d, size: %d, offset: %d", f.Fd(), size, offset)
@@ -105,13 +105,11 @@ func NewFile(filename string, offset int64, length int) (*File, error) {
 	}
 	defer f.Close()
 
-	_, err = f.Seek(int64(length-1), 0)
-	if err != nil {
-		log.Fatal(err)
+	if length <= 0 || offset < 0 {
+		return nil, fmt.Errorf("mmap: invalid region offset=%d length=%d for %q", offset, length, filename)
 	}
-	_, err = f.Write([]byte("\000"))
-	if err != nil {
-		log.Fatal(err)
+	if err = f.Truncate(offset + int64(length)); err != nil {
+		return nil, err
 	}
 
 	mmap, err := doMap(f, offset, length)
@@ -133,15 +131,21 @@ func (mmap *File) GetMemorySize() int {
 	return mmap.size
 }
 
-// Close attempts to unmap the mapped memory region
+// Close unmaps the mapped memory region. Closing an already closed File is a no-op, so it can never unmap a newer
+// mapping that the kernel placed at the same address.
 func (mmap *File) Close() (err error) {
-	mm, _ := memories.Load(mmap.mmap)
-	tomap := mm.(mapper.MMap)
-	return tomap.Unmap()
+	mm := mmap.mm
+	if mm == nil {
+		return nil
+	}
+	mmap.mm = nil
+	return mm.Unmap()
 }
 
 func doMap(f *os.File, offset int64, length int) (*File, error) {
-
+	if length <= 0 {
+		return nil, fmt.Errorf("mmap: invalid map length %d", length)
+	}
 	mm, err := mapper.MapRegion(f, length, mapper.RDWR, 0, offset)
 	if err != nil {
 		return nil, err
@@ -150,8 +154,7 @@ func doMap(f *os.File, offset int64, length int) (*File, error) {
 	mmap := new(File)
 	mmap.mmap = unsafe.Pointer(&mm[0])
 	mmap.size = length
-
-	memories.Store(mmap.mmap, mm)
+	mmap.mm = mm
 
 	return mmap, err
 }

@@ -16,6 +16,8 @@ package counters
 
 import (
 	"fmt"
+
+	"github.com/lirm/aeron-go/aeron/atomic"
 )
 
 // Aeron.NullValue, but using it directly creates a circular dependency
@@ -27,16 +29,20 @@ type ReadableCounter struct {
 	CounterId      int32
 	metaDataOffset int32
 	valueOffset    int32
-	isClosed       bool
+	isClosed       atomic.Bool
 }
 
 func NewReadableRegisteredCounter(reader *Reader, registrationId int64, counterId int32) (*ReadableCounter, error) {
-	if counterId < 0 || counterId >= int32(reader.maxCounterID) {
-		return nil, fmt.Errorf("counterId=%d maxCounterId=%d", counterId, reader.maxCounterID)
+	if err := reader.ValidateCounterID(counterId); err != nil {
+		return nil, err
+	}
+	if state := reader.GetCounterState(counterId); state != RecordAllocated {
+		return nil, fmt.Errorf("counter not allocated: id=%d state=%d", counterId, state)
 	}
 	metaDataOffset := counterId * MetadataLength
 	valueOffset := counterId * CounterLength
-	return &ReadableCounter{reader, registrationId, counterId, metaDataOffset, valueOffset, false}, nil
+	return &ReadableCounter{Reader: reader, RegistrationId: registrationId, CounterId: counterId,
+		metaDataOffset: metaDataOffset, valueOffset: valueOffset}, nil
 }
 
 func NewReadableCounter(reader *Reader, counterId int32) (*ReadableCounter, error) {
@@ -59,10 +65,15 @@ func (rc *ReadableCounter) GetWeak() int64 {
 	return rc.Reader.values.GetInt64(rc.valueOffset)
 }
 
+// GetPlain returns the value with a non-atomic read.
+func (rc *ReadableCounter) GetPlain() int64 {
+	return rc.GetWeak()
+}
+
 func (rc *ReadableCounter) Close() {
-	rc.isClosed = true
+	rc.isClosed.Set(true)
 }
 
 func (rc *ReadableCounter) IsClosed() bool {
-	return rc.isClosed
+	return rc.isClosed.Get()
 }

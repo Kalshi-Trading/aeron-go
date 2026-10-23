@@ -82,11 +82,15 @@ func (*RemoveMember) SbeSchemaId() (schemaId uint16) {
 }
 
 func (*RemoveMember) SbeSchemaVersion() (schemaVersion uint16) {
-	return 8
+	return 17
 }
 
 func (*RemoveMember) SbeSemanticType() (semanticType []byte) {
 	return []byte("")
+}
+
+func (*RemoveMember) SbeSemanticVersion() (semanticVersion string) {
+	return "5.4"
 }
 
 func (*RemoveMember) MemberIdId() uint16 {

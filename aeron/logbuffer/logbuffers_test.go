@@ -19,7 +19,6 @@ package logbuffer
 
 import (
 	"github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/util"
 	"github.com/lirm/aeron-go/aeron/util/memmap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,10 +81,10 @@ func TestHeader_ReservedValue(t *testing.T) {
 
 	var header Header
 	header.Wrap(buffer.Ptr(), 1000)
-	assert.Equal(t, header.GetReservedValue(), int64(0))
+	assert.Equal(t, header.ReservedValue(), int64(0))
 
 	header.SetReservedValue(123)
-	assert.Equal(t, header.GetReservedValue(), int64(123))
+	assert.Equal(t, header.ReservedValue(), int64(123))
 }
 
 func TestLogBuffers_Meta(t *testing.T) {
@@ -114,5 +113,5 @@ func TestLogBuffers_Meta(t *testing.T) {
 	//t.Logf("tailCounter2: %d", meta.TailCounter[2].Get())
 	//t.Logf("defaultFrameHdrLen: %d", meta.DefaultFrameHdrLen.Get())
 
-	assert.Equal(t, meta.Size(), int(util.CacheLineLength*7))
+	assert.Equal(t, int(LogMetaDataLength), meta.Size())
 }

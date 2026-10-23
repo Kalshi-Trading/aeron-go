@@ -20,15 +20,23 @@ import (
 	"unsafe"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
-	"github.com/lirm/aeron-go/aeron/util"
 )
 
+// Header is a flyweight over a data frame header in a term buffer, as passed to fragment handlers.
+// It also carries the stream context (initial term id, position bits to shift, an optional user context) and the
+// fragmented frame length set by fragment assemblers.
 type Header struct {
 	buffer              atomic.Buffer
 	offset              int32
 	initialTermID       int32
 	positionBitsToShift int32
+	// fragmentedFrameLength is the term occupancy of a reassembled message, 0 when not reassembled.
+	fragmentedFrameLength int32
+	context               interface{}
 }
+
+// NullValue is the value returned by FragmentedFrameLength when it has not been set.
+const NullValue int32 = -1
 
 //go:norace
 func (hdr *Header) Wrap(ptr unsafe.Pointer, length int32) *Header {
@@ -36,13 +44,19 @@ func (hdr *Header) Wrap(ptr unsafe.Pointer, length int32) *Header {
 	return hdr
 }
 
-// Position calculates the current position to which the image has advanced on
-// reading this message.
-func (hdr *Header) Position() int64 {
-	resultingOffset := util.AlignInt32(hdr.Offset()+hdr.FrameLength(), FrameAlignment)
-	return computePosition(hdr.TermId(), resultingOffset, hdr.positionBitsToShift, hdr.InitialTermId())
+// SetBuffer points the header at buffer (the term buffer containing the frame).
+func (hdr *Header) SetBuffer(buffer *atomic.Buffer) *Header {
+	hdr.buffer.Wrap(buffer.Ptr(), buffer.Capacity())
+	return hdr
 }
 
+// Position calculates the position the image will have advanced to on consuming this message, taking into account
+// the fragmented frame length when the message was reassembled.
+func (hdr *Header) Position() int64 {
+	return ComputePosition(hdr.TermID(), hdr.NextTermOffset(), hdr.positionBitsToShift, hdr.initialTermID)
+}
+
+// Offset is the offset of the frame header within the buffer.
 func (hdr *Header) Offset() int32 {
 	return hdr.offset
 }
@@ -55,20 +69,21 @@ func (hdr *Header) FrameLength() int32 {
 	return GetFrameLength(&hdr.buffer, hdr.offset)
 }
 
-func (hdr *Header) TermId() int32 {
-	return GetTermId(&hdr.buffer, hdr.offset)
+func (hdr *Header) TermID() int32 {
+	return GetFrameTermID(&hdr.buffer, hdr.offset)
 }
 
-func (hdr *Header) SessionId() int32 {
-	return GetSessionId(&hdr.buffer, hdr.offset)
+func (hdr *Header) SessionID() int32 {
+	return GetFrameSessionID(&hdr.buffer, hdr.offset)
 }
 
-func (hdr *Header) StreamId() int32 {
-	return GetStreamId(&hdr.buffer, hdr.offset)
+func (hdr *Header) StreamID() int32 {
+	return GetFrameStreamID(&hdr.buffer, hdr.offset)
 }
 
+// Deprecated: use ReservedValue.
 func (hdr *Header) GetReservedValue() int64 {
-	return GetReservedValue(&hdr.buffer, hdr.offset)
+	return hdr.ReservedValue()
 }
 
 func (hdr *Header) SetOffset(offset int32) *Header {
@@ -76,7 +91,7 @@ func (hdr *Header) SetOffset(offset int32) *Header {
 	return hdr
 }
 
-func (hdr *Header) InitialTermId() int32 {
+func (hdr *Header) InitialTermID() int32 {
 	return hdr.initialTermID
 }
 
@@ -95,13 +110,7 @@ func (hdr *Header) SetReservedValue(reservedValue int64) *Header {
 	return hdr
 }
 
-func (hdr *Header) SetSessionId(value int32) *Header {
+func (hdr *Header) SetSessionID(value int32) *Header {
 	hdr.buffer.PutInt32(sessionIdOffset(hdr.offset), value)
 	return hdr
-}
-
-// computePosition computes the current position in absolute number of bytes.
-func computePosition(activeTermId int32, termOffset int32, positionBitsToShift int32, initialTermId int32) int64 {
-	termCount := activeTermId - initialTermId // copes with negative activeTermId on rollover
-	return (int64(termCount) << uint32(positionBitsToShift)) + int64(termOffset)
 }

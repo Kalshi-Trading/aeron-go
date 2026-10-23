@@ -1,0 +1,63 @@
+# Java Aeron 1.53.3 stack for the adversarial mixed publisher/consumer matrix (systests/adversarial/mixed-matrix,
+# AERON_E2E=1 AERON_ADVERSARIAL=1). The tests SIGKILL/SIGSTOP and restart these containers, so the stack is private:
+#
+#   adv-mm-driver  ArchivingMediaDriver, AERON_DIR=/dev/shm/aeron-adv-mixed-matrix, archive control
+#                  localhost:27790 stream 10, recording events localhost:27791, archive id 97. The archive
+#                  directory is a tmpfs wiped on every (re)start.
+#   adv-mm-peer    (profile tools) image of the Java MatrixPeer publisher/subscriber that the tests run with
+#                  `docker run` and kill.
+#
+# Resources: UDP ports 27700-27799, stream ids 9700-9799.
+#
+#   docker compose -f docker/adversarial-mixed-matrix.compose.yml --profile tools build
+#   docker compose -f docker/adversarial-mixed-matrix.compose.yml up -d --wait adv-mm-driver
+name: adv-mixed-matrix
+services:
+  adv-mm-driver:
+    build: .
+    image: docker-archiving-driver
+    container_name: adv-mixed-matrix-driver
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    shm_size: 1g
+    volumes:
+      - /dev/shm:/dev/shm
+    tmpfs:
+      - /data/archive:uid=1000,gid=1000
+    environment:
+      AERON_PROPS: >-
+        -Daeron.dir=/dev/shm/aeron-adv-mixed-matrix
+        -Daeron.dir.delete.on.start=true
+        -Daeron.client.liveness.timeout=3000000000
+        -Daeron.image.liveness.timeout=3000000000
+        -Daeron.publication.unblock.timeout=4000000000
+        -Daeron.publication.connection.timeout=2000000000
+        -Daeron.publication.linger.timeout=1000000000
+        -Daeron.timer.interval=100000000
+        -Daeron.untethered.window.limit.timeout=1000000000
+        -Daeron.untethered.resting.timeout=1000000000
+        -Daeron.archive.dir=/data/archive/rec
+        -Daeron.archive.dir.delete.on.start=true
+        -Daeron.archive.control.channel=aeron:udp?endpoint=localhost:27790
+        -Daeron.archive.control.stream.id=10
+        -Daeron.archive.replication.channel=aeron:udp?endpoint=localhost:0
+        -Daeron.archive.recording.events.enabled=true
+        -Daeron.archive.recording.events.channel=aeron:udp?control-mode=dynamic|control=localhost:27791
+        -Daeron.archive.id=97
+        -Daeron.threading.mode=SHARED
+        -Daeron.archive.threading.mode=SHARED
+    command: ["io.aeron.archive.ArchivingMediaDriver"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/dev/shm/aeron-adv-mixed-matrix/cnc.dat"]
+      interval: 1s
+      retries: 30
+
+  adv-mm-peer:
+    build: adversarial-mixed-matrix
+    image: aeron-go-adv-mixed-matrix-java:1.53.3
+    profiles: ["tools"]
+    network_mode: host
+    ipc: host
+    volumes:
+      - /dev/shm:/dev/shm

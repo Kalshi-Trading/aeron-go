@@ -12,10 +12,11 @@ type RecordingStateEnum int32
 type RecordingStateValues struct {
 	INVALID   RecordingStateEnum
 	VALID     RecordingStateEnum
+	DELETED   RecordingStateEnum
 	NullValue RecordingStateEnum
 }
 
-var RecordingState = RecordingStateValues{0, 1, -2147483648}
+var RecordingState = RecordingStateValues{0, 1, 2, -2147483648}
 
 func (r RecordingStateEnum) Encode(_m *SbeGoMarshaller, _w io.Writer) error {
 	if err := _m.WriteInt32(_w, int32(r)); err != nil {
@@ -69,5 +70,17 @@ func (r *RecordingStateEnum) VALIDInActingVersion(actingVersion uint16) bool {
 }
 
 func (*RecordingStateEnum) VALIDDeprecated() uint16 {
+	return 0
+}
+
+func (*RecordingStateEnum) DELETEDSinceVersion() uint16 {
+	return 10
+}
+
+func (r *RecordingStateEnum) DELETEDInActingVersion(actingVersion uint16) bool {
+	return actingVersion >= r.DELETEDSinceVersion()
+}
+
+func (*RecordingStateEnum) DELETEDDeprecated() uint16 {
 	return 0
 }

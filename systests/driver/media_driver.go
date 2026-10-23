@@ -21,8 +21,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"syscall"
+	"testing"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,7 +48,17 @@ const aeronClientLivenessTimeoutNs = "aeron.client.liveness.timeout"
 // Must match Java's `PUBLICATION_UNBLOCK_TIMEOUT_PROP_NAME`, measured in nanos
 const aeronPublicationUnblockTimeoutNs = "aeron.publication.unblock.timeout"
 
-const jarName = "driver/aeron-all-1.43.0.jar"
+// AeronVersion is the Java Aeron release the systests run against.
+const AeronVersion = "1.53.3"
+
+// JarEnv overrides the location of the aeron-all jar used to launch the Java Media Driver.
+const JarEnv = "AERON_JAR"
+
+// RequiredEnv makes SkipIfUnavailable fail instead of skip when java or the jar is missing (set in CI).
+const RequiredEnv = "AERON_SYSTESTS_REQUIRED"
+
+// ErrUnavailable is returned by StartMediaDriver when java or the aeron-all jar cannot be found.
+var ErrUnavailable = errors.New("java media driver unavailable")
 
 const mediaDriverClassName = "io.aeron.driver.MediaDriver"
 
@@ -57,7 +70,53 @@ type MediaDriver struct {
 	cxn     *aeron.Aeron
 }
 
+// JarPath returns $AERON_JAR if set, otherwise systests/driver/aeron-all-<AeronVersion>.jar as fetched by
+// scripts/fetch-aeron-jar.sh.
+func JarPath() string {
+	if jar := os.Getenv(JarEnv); jar != "" {
+		return jar
+	}
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return fmt.Sprintf("aeron-all-%s.jar", AeronVersion)
+	}
+	return filepath.Join(filepath.Dir(file), fmt.Sprintf("aeron-all-%s.jar", AeronVersion))
+}
+
+func javaPath() string {
+	if home := os.Getenv("JAVA_HOME"); home != "" {
+		return filepath.Join(home, "bin", "java")
+	}
+	return "java"
+}
+
+// Available reports why the Java Media Driver cannot be started, or nil if it can.
+func Available() error {
+	if _, err := exec.LookPath(javaPath()); err != nil {
+		return fmt.Errorf("%w: java not found: %v", ErrUnavailable, err)
+	}
+	if _, err := os.Stat(JarPath()); err != nil {
+		return fmt.Errorf("%w: %v (run scripts/fetch-aeron-jar.sh or set %s)", ErrUnavailable, err, JarEnv)
+	}
+	return nil
+}
+
+// SkipIfUnavailable skips the test when the Java Media Driver cannot be started, unless
+// AERON_SYSTESTS_REQUIRED=1 in which case the test fails.
+func SkipIfUnavailable(t testing.TB) {
+	t.Helper()
+	if err := Available(); err != nil {
+		if os.Getenv(RequiredEnv) == "1" {
+			t.Fatal(err)
+		}
+		t.Skip(err)
+	}
+}
+
 func StartMediaDriver() (*MediaDriver, error) {
+	if err := Available(); err != nil {
+		return nil, err
+	}
 	tempDir := aeronUniqueTempDir()
 	cmd := setupCmd(tempDir)
 	setupPdeathsig(cmd)
@@ -93,6 +152,7 @@ func killMediaDriver(cmd *exec.Cmd) {
 	if err := cmd.Process.Kill(); err != nil {
 		logger.Error("Couldn't kill Media Driver:", err)
 	}
+	_ = cmd.Wait()
 }
 
 func aeronUniqueTempDir() string {
@@ -105,7 +165,8 @@ func aeronUniqueTempDir() string {
 
 func setupCmd(tempDir string) *exec.Cmd {
 	cmd := exec.Command(
-		"java",
+		javaPath(),
+		"--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED",
 		"--add-opens=java.base/sun.nio.ch=ALL-UNNAMED",
 		fmt.Sprintf("-D%s=%s", aeronDirPropName, tempDir),
 		fmt.Sprintf("-D%s=true", aeronDirDeleteStartPropName),
@@ -115,7 +176,7 @@ func setupCmd(tempDir string) *exec.Cmd {
 		"-XX:+UnlockDiagnosticVMOptions",
 		"-XX:GuaranteedSafepointInterval=300000",
 		"-cp",
-		jarName,
+		JarPath(),
 		mediaDriverClassName,
 	)
 	cmd.Stdout = os.Stdout
@@ -137,7 +198,7 @@ func setupPdeathsig(cmd *exec.Cmd) {
 }
 
 func waitForStartup(tempDir string) (*aeron.Aeron, error) {
-	timeout := time.Now().Add(5 * time.Second)
+	timeout := time.Now().Add(20 * time.Second)
 	sleepDuration := 50 * time.Millisecond
 	ctx := aeron.NewContext().AeronDir(tempDir).MediaDriverTimeout(10 * time.Second)
 	channel := "aeron:ipc"
