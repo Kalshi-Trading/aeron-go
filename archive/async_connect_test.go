@@ -11,6 +11,7 @@ import (
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/idlestrategy"
 	"github.com/lirm/aeron-go/aeron/logbuffer/term"
+	"github.com/lirm/aeron-go/aeron/util"
 	"github.com/lirm/aeron-go/archive/codecs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,7 +58,7 @@ func TestOptionsApplySessionIDOverwritesLikeJava(t *testing.T) {
 	o.RequestChannel = "aeron:udp?endpoint=localhost:8010|session-id=7"
 	require.NoError(t, o.conclude())
 	var stream int32
-	require.NoError(t, o.applySessionID(func(s int32) (int32, error) { stream = s; return -42, nil }))
+	require.NoError(t, o.applySessionID(func(s int32) (int32, error) { stream = s; return -42, nil }, v153))
 	assert.Equal(t, o.RequestStream, stream)
 	req, _ := aeron.ParseChannelUri(o.RequestChannel)
 	resp, _ := aeron.ParseChannelUri(o.ResponseChannel)
@@ -67,7 +68,20 @@ func TestOptionsApplySessionIDOverwritesLikeJava(t *testing.T) {
 	boom := errors.New("boom")
 	o = DefaultOptions()
 	require.NoError(t, o.conclude())
-	assert.ErrorIs(t, o.applySessionID(func(int32) (int32, error) { return 0, boom }), boom)
+	assert.ErrorIs(t, o.applySessionID(func(int32) (int32, error) { return 0, boom }, v153), boom)
+}
+
+var v153 = util.SemanticVersionCompose(1, 53, 3)
+
+func TestOptionsApplySessionIDSkipsOldOrUnknownDriver(t *testing.T) {
+	for _, v := range []uint32{0, util.SemanticVersionCompose(1, 43, 0)} {
+		o := DefaultOptions()
+		require.NoError(t, o.conclude())
+		req, resp := o.RequestChannel, o.ResponseChannel
+		require.NoError(t, o.applySessionID(func(int32) (int32, error) { panic("must not allocate") }, v))
+		assert.Equal(t, req, o.RequestChannel)
+		assert.Equal(t, resp, o.ResponseChannel)
+	}
 }
 
 func TestOptionsDefaultsMatchJava(t *testing.T) {
@@ -83,7 +97,7 @@ func TestOptionsConcludeResponseModeHasNoSessionID(t *testing.T) {
 	o := DefaultOptions()
 	o.ResponseChannel = "aeron:udp?control-mode=response|control=localhost:10002"
 	require.NoError(t, o.conclude())
-	require.NoError(t, o.applySessionID(func(int32) (int32, error) { panic("must not allocate") }))
+	require.NoError(t, o.applySessionID(func(int32) (int32, error) { panic("must not allocate") }, v153))
 	assert.NotContains(t, o.RequestChannel, "session-id")
 	assert.NotContains(t, o.ResponseChannel, "session-id")
 }

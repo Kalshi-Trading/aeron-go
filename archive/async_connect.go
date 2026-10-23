@@ -173,7 +173,7 @@ func NewAsyncConnect(options *Options, aeronCtx *aeron.Context) (*AsyncConnect, 
 	}
 	ac.aeron = opts.Aeron
 	ac.pendingArchive.aeron = opts.Aeron
-	if err := opts.applySessionID(ac.aeron.NextSessionID); err != nil {
+	if err := opts.applySessionID(ac.aeron.NextSessionID, ac.aeron.DriverVersion()); err != nil {
 		if opts.OwnsAeronClient {
 			err = errors.Join(err, ac.aeron.Close())
 		}
