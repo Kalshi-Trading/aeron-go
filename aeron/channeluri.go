@@ -14,6 +14,8 @@ package aeron
 
 import (
 	"fmt"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -460,7 +462,8 @@ func (uri ChannelUri) diff(that ChannelUri) map[string]string {
 	return d
 }
 
-// String renders the URI, with parameters in insertion order.
+// String renders the URI with parameters sorted by key, as upstream lirm/aeron-go did, so equal URIs render equally
+// whatever order their parameters were set in.
 func (uri ChannelUri) String() string {
 	var sb strings.Builder
 	sb.Grow(uri.params.len()*20 + 20)
@@ -472,18 +475,20 @@ func (uri ChannelUri) String() string {
 	}
 	sb.WriteString(AeronPrefix)
 	sb.WriteString(uri.media)
-	first := true
-	uri.ForEachParameter(func(k, v string) {
-		if first {
-			sb.WriteByte('?')
-			first = false
-		} else {
-			sb.WriteByte('|')
+	if uri.params.len() > 0 {
+		keys := slices.Clone(uri.params.keys)
+		sort.Strings(keys)
+		for i, k := range keys {
+			if i == 0 {
+				sb.WriteByte('?')
+			} else {
+				sb.WriteByte('|')
+			}
+			sb.WriteString(k)
+			sb.WriteByte('=')
+			sb.WriteString(uri.params.values[k])
 		}
-		sb.WriteString(k)
-		sb.WriteByte('=')
-		sb.WriteString(v)
-	})
+	}
 	return sb.String()
 }
 
