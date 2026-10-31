@@ -28,6 +28,8 @@ import (
 
 const controlFragmentLimit = 10
 
+const pingTemplateID uint16 = 106
+
 // Control contains everything required for the archive subscription/response side
 type Control struct {
 	Subscription *aeron.Subscription
@@ -205,10 +207,11 @@ func controlFragmentHandler(context interface{}, buffer *atomic.Buffer, offset i
 		logger.Debugf("controlFragmentHandler: ignoring RecordingDescriptor type %d", hdr.TemplateId)
 	case codecIds.recordingSubscriptionDescriptor:
 		logger.Debugf("controlFragmentHandler: ignoring RecordingSubscriptionDescriptor type %d", hdr.TemplateId)
+	case pingTemplateID:
 
 	default:
 		// This can happen when testing/adding new functionality
-		fmt.Printf("controlFragmentHandler: Unexpected message type %d\n", hdr.TemplateId)
+		logger.Debugf("controlFragmentHandler: Unexpected message type %d", hdr.TemplateId)
 	}
 	return
 }
@@ -337,9 +340,10 @@ func ConnectionControlFragmentHandler(context *PollContext, buffer *atomic.Buffe
 		logger.Debugf("connectionControlFragmentHandler: ignoring RecordingSubscriptionDescriptor type %d", hdr.TemplateId)
 	case codecIds.recordingSignalEvent:
 		logger.Debugf("connectionControlFragmentHandler: ignoring recordingSignalEvent type %d", hdr.TemplateId)
+	case pingTemplateID:
 
 	default:
-		fmt.Printf("ConnectionControlFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
+		logger.Debugf("ConnectionControlFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
 	}
 }
 
@@ -512,8 +516,10 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 			}
 		}
 
+	case pingTemplateID:
+
 	default:
-		fmt.Printf("errorResponseFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
+		logger.Debugf("errorResponseFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
 	}
 
 	return
@@ -598,8 +604,10 @@ func (control *Control) onFragment(
 			return term.ControlledPollActionContinue
 		}
 
+	case pingTemplateID:
+
 	default:
-		logger.Debug("descriptorFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
+		logger.Debugf("descriptorFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
 	}
 	return term.ControlledPollActionContinue
 }
@@ -790,8 +798,10 @@ func DescriptorFragmentHandler(context interface{}, buffer *atomic.Buffer, offse
 			pollContext.control.archive.Listeners.RecordingSignalListener(recordingSignalEvent)
 		}
 
+	case pingTemplateID:
+
 	default:
-		logger.Debug("descriptorFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
+		logger.Debugf("descriptorFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
 	}
 }
 
