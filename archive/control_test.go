@@ -2,7 +2,9 @@ package archive
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
+	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -16,6 +18,9 @@ import (
 	"github.com/lirm/aeron-go/archive/codecs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestControl_PollForResponse(t *testing.T) {
@@ -133,7 +138,137 @@ func TestControl_PollForErrorResponse(t *testing.T) {
 	})
 }
 
+func TestControl_SkipsPingAndLogsUnknownTemplatesAtDebug(t *testing.T) {
+	ping := rawMessage{templateID: 106, body: binary.LittleEndian.AppendUint64(nil, 7)}
+	unknown := rawMessage{templateID: 9999, body: make([]byte, 8)}
+
+	tests := []struct {
+		name      string
+		wantDebug string
+		run       func(t *testing.T, control *Control, image *aeron.MockImage)
+	}{
+		{
+			name:      "PollForResponse",
+			wantDebug: "controlFragmentHandler: Unexpected message type 9999",
+			run: func(t *testing.T, control *Control, image *aeron.MockImage) {
+				mockPollResponses(t, image, ping, unknown,
+					&codecs.ControlResponse{Code: codecs.ControlResponseCode.OK, CorrelationId: 1, RelevantId: 3})
+				correlations.Store(int64(1), control)
+				id, err := control.PollForResponse(1, 0)
+				assert.NoError(t, err)
+				assert.EqualValues(t, 3, id)
+			},
+		},
+		{
+			name:      "PollForErrorResponse",
+			wantDebug: "errorResponseFragmentHandler: Insert decoder for type: 9999",
+			run: func(t *testing.T, control *Control, image *aeron.MockImage) {
+				mockPollResponses(t, image, ping, unknown,
+					&codecs.ControlResponse{Code: codecs.ControlResponseCode.ERROR, ErrorMessage: []byte(`b0rk`)})
+				cnt, err := control.PollForErrorResponse()
+				assert.EqualValues(t, 3, cnt)
+				assert.EqualError(t, err, `PollForErrorResponse received a ControlResponse (correlationId:0 Code:ERROR error="b0rk"`)
+			},
+		},
+		{
+			name:      "PollForDescriptors",
+			wantDebug: "descriptorFragmentHandler: Insert decoder for type: 9999",
+			run: func(t *testing.T, control *Control, image *aeron.MockImage) {
+				mockPollResponses(t, image, ping, unknown,
+					&codecs.RecordingDescriptor{CorrelationId: 1, RecordingId: 5})
+				correlations.Store(int64(1), control)
+				assert.NoError(t, control.PollForDescriptors(1, 0, 1))
+				if assert.Len(t, control.Results.RecordingDescriptors, 1) {
+					assert.EqualValues(t, 5, control.Results.RecordingDescriptors[0].RecordingId)
+				}
+			},
+		},
+		{
+			name:      "Poll",
+			wantDebug: "descriptorFragmentHandler: Insert decoder for type: 9999",
+			run: func(t *testing.T, control *Control, image *aeron.MockImage) {
+				mockPollResponses(t, image, ping, unknown,
+					&codecs.ControlResponse{Code: codecs.ControlResponseCode.OK, CorrelationId: 1})
+				assert.EqualValues(t, 3, control.Poll())
+				assert.True(t, control.Results.IsPollComplete)
+				assert.EqualValues(t, 1, control.Results.CorrelationId)
+			},
+		},
+		{
+			name:      "ConnectionControlFragmentHandler",
+			wantDebug: "ConnectionControlFragmentHandler: Insert decoder for type: 9999",
+			run: func(t *testing.T, control *Control, _ *aeron.MockImage) {
+				correlations.Store(int64(1), control)
+				control.State.state = ControlStateConnectRequestSent
+				messages := []encodable{ping, unknown,
+					&codecs.ControlResponse{Code: codecs.ControlResponseCode.OK, CorrelationId: 1, ControlSessionId: 9}}
+				for _, m := range messages {
+					buffer := encode(t, m)
+					ConnectionControlFragmentHandler(&PollContext{control, 1}, buffer, 0, buffer.Capacity(), newTestHeader())
+				}
+				assert.Equal(t, ControlStateConnected, control.State.state)
+				assert.EqualValues(t, 9, control.archive.SessionID)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logs := observeLogs(t)
+			control, image := newTestControl(t)
+			stdout := captureStdout(t, func() { tt.run(t, control, image) })
+			assert.Empty(t, stdout)
+			templateLogs := logs.FilterMessageSnippet("type").All()
+			if assert.Len(t, templateLogs, 1) {
+				assert.Equal(t, zapcore.DebugLevel, templateLogs[0].Level)
+				assert.Equal(t, tt.wantDebug, templateLogs[0].Message)
+			}
+		})
+	}
+}
+
+type rawMessage struct {
+	templateID uint16
+	body       []byte
+}
+
+func (m rawMessage) SbeBlockLength() uint16 { return uint16(len(m.body)) }
+func (m rawMessage) SbeTemplateId() uint16  { return m.templateID }
+func (rawMessage) SbeSchemaId() uint16      { return 101 }
+func (rawMessage) SbeSchemaVersion() uint16 { return 14 }
+
+func (m rawMessage) Encode(_ *codecs.SbeGoMarshaller, w io.Writer, _ bool) error {
+	_, err := w.Write(m.body)
+	return err
+}
+
+func observeLogs(t *testing.T) *observer.ObservedLogs {
+	core, logs := observer.New(zapcore.DebugLevel)
+	sugar := logger.Sugar()
+	logger.SetSugar(zap.New(core).Sugar())
+	t.Cleanup(func() { logger.SetSugar(sugar) })
+	return logs
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	r, w, err := os.Pipe()
+	if !assert.NoError(t, err) {
+		return ""
+	}
+	stdout := os.Stdout
+	os.Stdout = w
+	func() {
+		defer func() { os.Stdout = stdout }()
+		fn()
+	}()
+	assert.NoError(t, w.Close())
+	out, err := io.ReadAll(r)
+	assert.NoError(t, err)
+	assert.NoError(t, r.Close())
+	return string(out)
+}
+
 func mockPollResponses(t *testing.T, image *aeron.MockImage, responses ...encodable) {
+	image.On("IsClosed").Return(false).Maybe()
 	poll := image.On("Poll", mock.Anything, mock.Anything)
 	poll.Maybe()
 	poll.Run(func(args mock.Arguments) {
@@ -209,6 +344,7 @@ func newTestControl(t *testing.T) (*Control, *aeron.MockImage) {
 	c.fragmentAssembler = aeron.NewControlledFragmentAssembler(
 		c.onFragment, aeron.DefaultFragmentAssemblyBufferLength,
 	)
+	c.errorFragmentHandler = c.errorResponseFragmentHandler
 	return c, image
 }
 
