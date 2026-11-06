@@ -259,17 +259,13 @@ func (cc *ClientConductor) Init(driverProxy DriverProxy, bcast *broadcast.CopyRe
 
 // Close will terminate the Run() goroutine body and close all active publications and subscription. Run() can
 // be restarted in a another goroutine.
+//
+// As in Java's ClientConductor.onClose, the conductor goroutine stops before the resources are closed: the
+// resource lists are shared with the driver event handlers that run on that goroutine.
 func (cc *ClientConductor) Close() (err error) {
 	logger.Debugf("Closing ClientConductor")
 
-	now := time.Now().UnixNano()
-
-	running := cc.running.Get()
-
-	cc.closeAllResources(now)
-	if running {
-		cc.driverProxy.ClientClose()
-	}
+	running := cc.running.CompareAndSet(true, false)
 
 	timeoutDuration := 5 * time.Second
 	timeout := time.Now().Add(timeoutDuration)
@@ -280,6 +276,12 @@ func (cc *ClientConductor) Close() (err error) {
 		msg := fmt.Sprintf("failed to stop conductor after %v", timeoutDuration)
 		logger.Warning(msg)
 		err = errors.New(msg)
+	}
+
+	if running {
+		cc.releaseAllResources()
+		cc.forceCloseResources()
+		cc.driverProxy.ClientClose()
 	}
 
 	logger.Debugf("Closed ClientConductor")
@@ -1167,38 +1169,50 @@ func (cc *ClientConductor) CounterReader() *ctr.Reader {
 }
 
 func (cc *ClientConductor) closeAllResources(now int64) {
-	var err error
 	if cc.running.CompareAndSet(true, false) {
-		for _, pub := range cc.pubs {
-			if pub != nil && pub.publication != nil {
-				err = pub.publication.Close()
-				if err != nil {
-					cc.onError(err)
-				}
-			}
-		}
-		cc.pubs = nil
-
-		for _, sub := range cc.subs {
-			if sub != nil && sub.subscription != nil {
-				err = sub.subscription.Close()
-				if err != nil {
-					cc.onError(err)
-				}
-			}
-		}
-		cc.subs = nil
-
-		for _, counterDef := range cc.counters {
-			if counterDef != nil && counterDef.counter != nil {
-				err = counterDef.counter.Close()
-				if err != nil {
-					cc.onError(err)
-				}
-			}
-		}
-		cc.counters = nil
+		cc.releaseAllResources()
 	}
+}
+
+func (cc *ClientConductor) releaseAllResources() {
+	cc.adminLock.Lock()
+	pubs := append([]*publicationStateDefn(nil), cc.pubs...)
+	subs := append([]*subscriptionStateDefn(nil), cc.subs...)
+	counters := make([]*counterStateDefn, 0, len(cc.counters))
+	for _, counterDef := range cc.counters {
+		counters = append(counters, counterDef)
+	}
+	cc.adminLock.Unlock()
+
+	for _, pub := range pubs {
+		if pub != nil && pub.publication != nil {
+			if err := pub.publication.Close(); err != nil {
+				cc.onError(err)
+			}
+		}
+	}
+
+	for _, sub := range subs {
+		if sub != nil && sub.subscription != nil {
+			if err := sub.subscription.Close(); err != nil {
+				cc.onError(err)
+			}
+		}
+	}
+
+	for _, counterDef := range counters {
+		if counterDef != nil && counterDef.counter != nil {
+			if err := counterDef.counter.Close(); err != nil {
+				cc.onError(err)
+			}
+		}
+	}
+
+	cc.adminLock.Lock()
+	cc.pubs = nil
+	cc.subs = nil
+	cc.counters = nil
+	cc.adminLock.Unlock()
 }
 
 func (cc *ClientConductor) onError(err error) {

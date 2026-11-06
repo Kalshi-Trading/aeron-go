@@ -409,6 +409,60 @@ func (c *ClientConductorTestSuite) TestShouldCallOnUnavailableCounter() {
 	c.cc.OnUnavailableCounter(id, CounterId)
 }
 
+// The driver answers RemoveSubscription with unavailable-image events, so the conductor goroutine can still be
+// handling one while Close releases the subscription. Close must not touch the resource lists until the conductor
+// goroutine has exited; under -race this test fails if it does.
+func (c *ClientConductorTestSuite) TestCloseWhileConductorHandlesUnavailableImage() {
+	c.driverProxy.On("AddSubscription", Channel, StreamId1).Return(CorrelationId1, nil)
+	_, err := c.cc.AddSubscription(Channel, StreamId1)
+	c.Require().NoError(err)
+	c.cc.OnSubscriptionReady(CorrelationId1, -1)
+	sub, err := c.cc.FindSubscription(CorrelationId1)
+	c.Require().NoError(err)
+	c.Require().NotNil(sub)
+
+	imageUnavailable := make(chan struct{})
+	c.driverProxy.On("RemoveSubscription", CorrelationId1).
+		Run(func(mock.Arguments) { close(imageUnavailable) }).
+		Return(nil)
+	c.driverProxy.On("ClientClose").Return(nil)
+
+	c.cc.conductorRunning.Set(true)
+	conductorWorking := make(chan struct{})
+	conductorDone := make(chan struct{})
+	go func() {
+		defer close(conductorDone)
+		defer c.cc.conductorRunning.Set(false)
+		unavailable := imageUnavailable
+		working := conductorWorking
+		for c.cc.running.Get() {
+			if working != nil {
+				close(working)
+				working = nil
+			}
+			select {
+			case <-unavailable:
+				c.cc.OnUnavailableImage(CorrelationId1, CorrelationId1)
+				unavailable = nil
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+	}()
+	<-conductorWorking
+
+	c.Require().NoError(c.cc.Close())
+	c.Assert().True(sub.IsClosed())
+	c.Assert().Empty(c.cc.subs)
+
+	select {
+	case <-conductorDone:
+	case <-time.After(5 * time.Second):
+		c.Fail("conductor goroutine did not exit")
+	}
+	c.driverProxy.AssertCalled(c.T(), "RemoveSubscription", CorrelationId1)
+	c.driverProxy.AssertCalled(c.T(), "ClientClose")
+}
+
 func TestClientConductor(t *testing.T) {
 	suite.Run(t, new(ClientConductorTestSuite))
 }
