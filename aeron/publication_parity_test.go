@@ -1,6 +1,7 @@
 package aeron
 
 import (
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -622,4 +623,50 @@ func BenchmarkPublicationTryClaim(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tryClaimCommit(pub, &claim)
 	}
+}
+
+func TestExclusivePositionIsSafeToReadWhileTheOwnerOffers(t *testing.T) {
+	l := newTestLog(t, logbuffer.TermMinLength, 10, 1408)
+	pub := newTestExclusivePublication(t, l, 1<<40)
+	start := pub.Position()
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	var readErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		last := start
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			pos := pub.Position()
+			if pos < last {
+				readErr = fmt.Errorf("position went back from %d to %d", last, pos)
+				return
+			}
+			last = pos
+			_ = pub.AvailableWindow()
+		}
+	}()
+	msg := bufOf(pattern(1000, 0))
+	var last int64
+	sawAdmin := false
+	for i := 0; i < 500; i++ {
+		pos := pub.Offer(msg, 0, 1000, nil)
+		if pos == AdminAction {
+			sawAdmin = true
+			pos = pub.Offer(msg, 0, 1000, nil)
+		}
+		require.Positive(t, pos)
+		last = pos
+	}
+	close(done)
+	wg.Wait()
+	require.NoError(t, readErr)
+	assert.True(t, sawAdmin)
+	assert.Equal(t, last, pub.Position())
+	assert.Equal(t, int64(1<<40)-last, pub.AvailableWindow())
 }

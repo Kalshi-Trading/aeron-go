@@ -74,7 +74,10 @@ func (pub *ExclusivePublication) Position() int64 {
 	if pub.IsClosed() {
 		return PublicationClosed
 	}
-	return pub.termBeginPosition + int64(pub.termOffset)
+	rawTail := pub.rawTailVolatile(pub.activeTermCount() % logbuffer.PartitionCount)
+	termOffset := termOffsetOf(rawTail, pub.termBufferLength)
+	return computeTermBeginPosition(logbuffer.TermID(rawTail), pub.positionBitsToShift, pub.initialTermID) +
+		int64(termOffset)
 }
 
 // AvailableWindow returns the number of bytes that can be offered before back pressure, or PublicationClosed.
@@ -82,7 +85,7 @@ func (pub *ExclusivePublication) AvailableWindow() int64 {
 	if pub.IsClosed() {
 		return PublicationClosed
 	}
-	return pub.pubLimit.get() - (pub.termBeginPosition + int64(pub.termOffset))
+	return pub.pubLimit.get() - pub.Position()
 }
 
 // RevokeOnClose marks the publication to be revoked when Close is called. See Revoke.
@@ -122,7 +125,7 @@ func (pub *ExclusivePublication) rotateTerm() {
 	pub.termID = nextTermID
 	pub.termBeginPosition += int64(pub.termBufferLength)
 
-	pub.logMetaData.PutInt64(termTailCountersOffset+nextIndex*8, int64(nextTermID)<<32)
+	pub.logMetaData.PutInt64Ordered(termTailCountersOffset+nextIndex*8, int64(nextTermID)<<32)
 	pub.logMetaData.PutInt32Ordered(logActiveTermCountOffset, nextTermCount)
 }
 
